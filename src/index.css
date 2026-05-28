@@ -1,0 +1,678 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  
+  --color-primary-green: #00ff00;
+  --color-primary-green-dim: #003300;
+  --color-brand-bg: #09090b;
+  --color-brand-border: #27272a;
+}
+
+@layer base {
+  body {
+    background-color: #09090b;
+    color: #f4f4f5;
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+  }
+  
+  /* Modern styling for sliders, search overlays, custom states */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #09090b;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #27272a;
+    border-radius: 3px;
+    border: 1px solid #18181b;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #00ff00;
+  }
+}
+
+/* Custom glow effects */
+.glow-green {
+  text-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+}
+
+.glow-box {
+  box-shadow: 0 0 15px rgba(0, 255, 0, 0.15);
+  border-color: #00ff00;
+}
+
+.glow-btn:hover {
+  box-shadow: 0 0 12px rgba(0, 255, 0, 0.4);
+}
+
+/* =========================================
+   LIGHT THEME (POLISHED HIGH-CONTRAST LIGHT MODE)
+   ========================================= */
+
+.light {
+  background-color: #f8fafc !important;
+  color: #0d121e !important;
+}
+
+/* Base Body when under light theme */
+.light body {
+  background-color: #f8fafc !important;
+  color: #0d121e !important;
+}
+
+/* Background overrides */
+.light .bg-black,
+.light .bg-\[\#09090b\] {
+  background-color: #ffffff !important;
+}
+
+.light .bg-\[\#070708\] {
+  background-color: #ffffff !important;
+}
+
+/* Clean, crisp stark-white right panel for Asset metadata/details sidebar */
+.light .bg-\[\#0a0a0c\] {
+  background-color: #ffffff !important;
+  border-left-color: #e2e8f0 !important;
+}
+
+/* Card container background - Stark white with crisp and flat border layout (no shadows) */
+.light .bg-\[\#0c0c0e\] {
+  background-color: #ffffff !important;
+  box-shadow: none !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Soft light gray filling containers inside cards (such as dropdown elements) */
+.light .bg-\[\#121214\] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .bg-\[\#18181b\] {
+  background-color: #e2e8f0 !important;
+}
+
+.light .bg-zinc-950 {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+}
+
+.light .bg-\[\#141416\],
+.light .bg-zinc-900 {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+.light .bg-zinc-800,
+.light .bg-\[\#27272a\] {
+  background-color: #e2e8f0 !important;
+  color: #1e293b !important;
+  border-color: #cbd5e1 !important;
+}
+
+.light .bg-black\/90 {
+  background-color: #f1f5f9 !important;
+  color: #047857 !important;
+  border-color: #cbd5e1 !important;
+}
+
+.light .bg-\[\#1c1c1f\] {
+  background-color: #e2e8f0 !important;
+  color: #334155 !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Translucent overlay adjustments for light mode elements */
+.light .bg-\[\#0c0c0e\]\/30 {
+  background-color: rgba(241, 245, 249, 0.55) !important;
+  border-color: #cbd5e1 !important;
+}
+
+.light .bg-\[\#0c0c0e\]\/10 {
+  background-color: rgba(241, 245, 249, 0.25) !important;
+}
+
+.light .bg-\[\#121214\]\/40 {
+  background-color: rgba(241, 245, 249, 0.35) !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Dropdown list overrides */
+.light .absolute.z-50.bg-\[\#121214\],
+.light .absolute.left-4.right-4.mt-1 {
+  background-color: #ffffff !important;
+  box-shadow: none !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Sidebar Hover Overrides */
+.light .hover\:bg-\[\#0c0c0e\]:hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+.light .hover\:bg-\[\#121214\]:hover {
+  background-color: #e2e8f0 !important;
+}
+
+.light .hover\:text-white:hover {
+  color: #0f172a !important;
+}
+
+.light .hover\:border-zinc-700:hover {
+  border-color: #64748b !important;
+}
+
+/* Red / Danger overrides for light mode readability */
+.light .bg-red-950\/40 {
+  background-color: #fee2e2 !important;
+  color: #b91c1c !important;
+  border-color: #fca5a5 !important;
+}
+
+.light .bg-\[\#1e0707\] {
+  background-color: #fee2e2 !important;
+  color: #b91c1c !important;
+  border-color: #fca5a5 !important;
+}
+
+.light .bg-\[\#1e0707\]:hover {
+  background-color: #fecaca !important;
+}
+
+/* Purple updating overrides */
+.light .bg-purple-900\/40 {
+  background-color: #f3e8ff !important;
+  color: #7e22ce !important;
+  border-color: #d8b4fe !important;
+}
+
+.light .text-purple-200 {
+  color: #6b21a8 !important;
+}
+
+/* Text Overrides - Clean deep charcoal grays for readability */
+.light .text-white {
+  color: #0f172a !important;
+}
+
+.light .text-zinc-200 {
+  color: #1e293b !important;
+}
+
+.light .text-zinc-300 {
+  color: #334155 !important;
+}
+
+.light .text-zinc-400 {
+  color: #475569 !important;
+}
+
+.light .text-zinc-450 {
+  color: #475569 !important;
+}
+
+.light .text-zinc-500 {
+  color: #64748b !important;
+}
+
+.light .text-zinc-650,
+.light .text-zinc-600 {
+  color: #475569 !important; /* Proper contrast for client status numbers */
+}
+
+/* Ensure hover text elements and interactive light containers don't wash out */
+.light .hover\:text-white:hover {
+  color: #0f172a !important;
+}
+.light .hover\:bg-zinc-700:hover,
+.light .hover\:bg-zinc-800:hover,
+.light .hover\:bg-zinc-900:hover,
+.light .hover\:bg-black:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+/* Border Overrides */
+.light .border-\[\#27272a\],
+.light .border-\[\#1c1c1f\],
+.light .border-\[\#18181a\],
+.light .border-\[\#232326\],
+.light .border-zinc-900,
+.light .border-zinc-850,
+.light .border-zinc-800,
+.light .divide-zinc-900 > * {
+  border-color: #e2e8f0 !important;
+}
+
+/* Modals */
+.light .fixed.inset-0 {
+  background-color: rgba(255, 255, 255, 0.6) !important;
+  backdrop-filter: blur(2px) !important;
+}
+
+.light .bg-\[\#0c0c0e\].border.border-\[\#27272a\] {
+  background-color: #ffffff !important;
+  box-shadow: none !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Active Indicator Overrides */
+.light .border-l-2.border-\[\#00ff00\] {
+  border-left-width: 4px !important;
+  border-left-color: #00C800 !important; /* Theme primary green in light mode */
+}
+
+.light .text-\[\#00ff00\] {
+  color: #00C800 !important; /* Brand signature theme green */
+}
+
+.light .bg-\[\#00ff00\]\/5 {
+  background-color: rgba(0, 200, 0, 0.05) !important;
+}
+
+.light .bg-\[\#00ff00\]\/10 {
+  background-color: rgba(0, 200, 0, 0.1) !important;
+}
+
+.light .bg-\[\#00ff00\]\/15 {
+  background-color: rgba(0, 200, 0, 0.12) !important;
+  color: #00C800 !important;
+}
+
+.light .border-\[\#00ff00\]\/20 {
+  border-color: rgba(0, 200, 0, 0.2) !important;
+}
+
+.light .border-\[\#00ff00\]\/40,
+.light .border-\[\#00ff00\]\/60 {
+  border-color: rgba(0, 200, 0, 0.3) !important;
+}
+
+.light .accent-\[\#00ff00\] {
+  accent-color: #00C800 !important;
+}
+
+.light ::-webkit-scrollbar-track {
+  background: #f3f4f6;
+}
+
+.light ::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border: 1px solid #e5e7eb;
+}
+
+.light ::-webkit-scrollbar-thumb:hover {
+  background: #00C800;
+}
+
+/* Pagination Light Mode Contrast & Readability Improvements */
+.light .bg-\[\#0c0c0e\]\/80 {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+  backdrop-filter: blur(8px) !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .hover\:bg-zinc-900:hover {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+.light .bg-\[\#0c0c0e\]:hover {
+  background-color: #f8fafc !important;
+}
+
+/* Version Indicators and Action Blocks Light Mode Overrides */
+.light .bg-amber-950\/20 {
+  background-color: #fffbeb !important;
+  color: #b45309 !important;
+  border-color: #fde68a !important;
+}
+
+.light .hover\:bg-\[\#78350f\]\/30:hover {
+  background-color: #fef3c7 !important;
+}
+
+.light .bg-purple-900\/40 .text-purple-300 {
+  color: #6b21a8 !important;
+}
+
+.light .text-purple-400 {
+  color: #7e22ce !important;
+}
+
+.light .bg-purple-500\/15 {
+  background-color: #f3e8ff !important;
+  color: #7e22ce !important;
+  border-color: #e9d5ff !important;
+}
+
+.light .text-amber-500,
+.light .text-amber-400 {
+  color: #d97706 !important;
+}
+
+.light .bg-amber-500\/15 {
+  background-color: #fef3c7 !important;
+  color: #d97706 !important;
+  border-color: #fde68a !important;
+}
+
+/* Button Style Standards for Dark and Light Themes */
+
+/* Default / Dark Mode Button Styles */
+.btn-primary {
+  background-color: #FFFFFF !important;
+  color: #000000 !important;
+  border-width: 1px !important;
+  border-color: #FFFFFF !important;
+  font-weight: 600 !important;
+}
+.btn-primary:hover {
+  background-color: #e4e4e7 !important;
+  border-color: #e4e4e7 !important;
+  color: #000000 !important;
+}
+
+.btn-secondary {
+  background-color: #121214 !important;
+  border-width: 1px !important;
+  border-color: #27272a !important;
+  color: #e4e4e7 !important;
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: #1c1c1f !important;
+  border-color: #71717a !important;
+  color: #ffffff !important;
+}
+
+.btn-special {
+  background-color: #00FF00 !important;
+  color: #000000 !important;
+  border-width: 1px !important;
+  border-color: #00FF00 !important;
+  font-weight: 600 !important;
+}
+.btn-special:hover:not(:disabled) {
+  background-color: #00dd00 !important;
+  border-color: #00dd00 !important;
+  color: #000000 !important;
+}
+
+.dcc-launch-btn {
+  background-color: transparent !important;
+  color: #00ff00 !important;
+  border: 1px solid #00ff00 !important;
+  transition: all 0.2s ease-in-out !important;
+}
+.dcc-launch-btn:hover:not(:disabled) {
+  background-color: #00ff00 !important;
+  color: #000000 !important;
+  border-color: #00ff00 !important;
+  box-shadow: 0 0 12px rgba(0, 255, 0, 0.4) !important;
+}
+
+/* Light Mode Button Styles */
+.light .btn-primary {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border-color: #000000 !important;
+}
+.light .btn-primary:hover {
+  background-color: #27272a !important;
+  border-color: #27272a !important;
+  color: #ffffff !important;
+}
+
+.light .btn-secondary {
+  background-color: #f1f5f9 !important;
+  border-width: 1px !important;
+  border-color: #cbd5e1 !important;
+  color: #1e293b !important;
+}
+.light .btn-secondary:hover:not(:disabled) {
+  background-color: #e2e8f0 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+.light .btn-special {
+  background-color: #00C800 !important;
+  color: #ffffff !important;
+  border-color: #00C800 !important;
+}
+.light .btn-special:hover:not(:disabled) {
+  background-color: #00a000 !important;
+  border-color: #00a000 !important;
+  color: #ffffff !important;
+}
+
+.light .dcc-launch-btn {
+  background-color: transparent !important;
+  color: #00C800 !important;
+  border: 1px solid #00C800 !important;
+}
+.light .dcc-launch-btn:hover:not(:disabled) {
+  background-color: #00C800 !important;
+  color: #ffffff !important;
+  border-color: #00C800 !important;
+  box-shadow: 0 0 12px rgba(0, 200, 0, 0.2) !important;
+}
+
+/* Disabled buttons override */
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-special:disabled {
+  background-color: #27272a !important;
+  border-color: #27272a !important;
+  color: #71717a !important;
+  cursor: not-allowed !important;
+}
+
+.light .btn-primary:disabled,
+.light .btn-secondary:disabled,
+.light .btn-special:disabled {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+  color: #cbd5e1 !important;
+  cursor: not-allowed !important;
+}
+
+/* Light Mode Override for App Deploy Button */
+.light .dcc-deploy-btn {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border-color: #000000 !important;
+}
+
+.light .dcc-deploy-btn:hover {
+  background-color: #27272a !important;
+  color: #ffffff !important;
+}
+
+/* Light Mode Project Space Dropdown Hover & Design Aesthetics */
+/* Override hover style for arbitrary background #1c1c1f inside dropdown */
+.light .hover\:bg-\[\#1c1c1f\]:hover {
+  background-color: #f1f5f9 !important;
+}
+
+/* Ensure selected projects are clearly visible and clean */
+.light .absolute.z-50.bg-\[\#121214\] {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Force group hover states not to turn text white on white backgrounds */
+.light .group:hover .group-hover\:text-white {
+  color: #0d121e !important;
+}
+
+/* Specific text color fixes for space list items inside light mode select panel */
+.light .absolute.z-50.bg-\[\#121214\] button span {
+  transition: color 0.15s ease;
+}
+.light .absolute.z-50.bg-\[\#121214\] button:hover span {
+  color: #00C800 !important; /* turns beautiful green to show interactive focus */
+}
+.light .absolute.z-50.bg-\[\#121214\] button:hover span.text-zinc-500 {
+  color: #64748b !important;
+}
+
+/* Light Mode System Feeds Drawer Overrides & High-Contrast Readability */
+/* Console drawer top-bar bg and hover settings */
+.light .bg-\[\#0a0a0c\] {
+  background-color: #f1f5f9 !important;
+}
+.light .console-header-bar {
+  border-bottom: 1px solid #cbd5e1 !important;
+}
+.light .console-header-bar:hover {
+  background-color: #e2e8f0 !important;
+}
+
+/* Console main terminal collapsible stream area bg and text contrast fixes */
+.light .bg-\[\#070708\] {
+  background-color: #f8fafc !important;
+}
+
+/* Crucial: 'CLIENT CONSOLE STREAM' text was blending in as paper-white (#f4f4f5). We map it to distinct heavy slate color */
+.light .text-\[\#f4f4f5\] {
+  color: #0f172a !important;
+}
+
+/* Lighten the dark borders of log status badges in light mode, giving a softer and flatter aesthetic */
+.light .border-black {
+  border-color: #cbd5e1 !important;
+}
+
+/* 1. Category tab selected state style should be solid elegant black in light mode */
+.light .cat-tab-btn.is-selected {
+  background-color: #0d121e !important;
+  color: #ffffff !important;
+  border-color: #0d121e !important;
+}
+
+/* 2. Asset details tagging colors and style for light mode */
+/* Category pill: standard Slate tag with crisp contrast */
+.light .bg-\[\#141416\].border-zinc-900,
+.light .bg-\[\#141416\] {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #334155 !important;
+}
+/* Hashta/Custom tag pills: soft mint green with beautiful dark-green text */
+.light .bg-\[\#00ff00\]\/5 {
+  background-color: #f0fdf4 !important;
+}
+.light .border-\[\#00ff00\]\/20 {
+  border-color: #86efac !important;
+}
+.light .text-\[\#00ff00\] {
+  color: #00c800 !important;
+}
+/* Prevent overlay badge text on image thumbnail from turning dark */
+.light .force-text-white {
+  color: #ffffff !important;
+}
+
+/* 3. Ensure card dividers (such as asset card top dividers and extension card dividers) are clean light grey */
+.light .border-zinc-900\/60,
+.light .border-t.border-zinc-900\/60,
+.light .border-t.border-zinc-900 {
+  border-color: #e2e8f0 !important;
+}
+
+/* 4. Dropdown select lists styling for Plugins/Extensions filter widgets and native dropdowns */
+select {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2371717a' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 10px center !important;
+  background-size: 12px !important;
+  padding-right: 30px !important;
+  transition: all 0.2s ease-in-out !important;
+}
+
+select:focus {
+  border-color: #00ff00 !important;
+  box-shadow: 0 0 0 1.5px rgba(0, 255, 0, 0.2) !important;
+}
+
+.light select {
+  background-color: #ffffff !important;
+  color: #1e293b !important;
+  border-color: #cbd5e1 !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23475569' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E") !important;
+}
+
+.light select option {
+  background-color: #ffffff !important;
+  color: #1e293b !important;
+}
+
+.light select:focus {
+  border-color: #00C800 !important;
+  outline: none !important;
+  box-shadow: 0 0 0 1.5px rgba(0, 200, 0, 0.25) !important;
+}
+
+/* 5. Active selected card selection state border and stylish outline under light mode */
+.border-\[\#00ff00\] {
+  border-color: #00ff00 !important;
+  outline: none !important;
+  box-shadow: 0 0 12px rgba(0, 255, 0, 0.12) !important;
+}
+
+.light .border-\[\#00ff00\] {
+  border-color: #00C800 !important;
+  outline: none !important;
+  box-shadow: 0 0 12px rgba(0, 200, 0, 0.12) !important;
+}
+
+/* 6. High-Contrast search input boxes focus state & outline feedback */
+input:focus {
+  border-color: #00ff00 !important;
+  outline: none !important;
+  box-shadow: 0 0 0 1.5px rgba(0, 255, 0, 0.15) !important;
+}
+
+.light input:focus {
+  border-color: #00C800 !important;
+  outline: none !important;
+  box-shadow: 0 0 0 1.5px rgba(0, 200, 0, 0.25) !important;
+}
+
+/* 7. Range input / slider background color in light mode to match the light divider color */
+.light input[type="range"] {
+  background-color: #e2e8f0 !important;
+}
+
+/* Globally cancel and disable all shadows, glow effects, and filter elevations in all states to enforce a clean, completely flat design - modified to allow focus and selected-card halo shadows */
+*,
+*::before,
+*::after {
+  box-shadow: none;
+  text-shadow: none !important;
+  filter: none !important;
+}
+
+*:hover,
+*:active {
+  text-shadow: none !important;
+  filter: none !important;
+}
+
+
+

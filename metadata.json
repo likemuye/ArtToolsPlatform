@@ -1,0 +1,6 @@
+{
+  "name": "Art Tools Platform",
+  "description": "游戏美术团队DCC工具、插件拓展与美术素材管理平台，提供安装、连接、启动监控以及共享项目空间素材功能。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
