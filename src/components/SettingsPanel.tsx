@@ -48,6 +48,8 @@ export default function SettingsPanel({
     .filter(a => downloadedAssetIds.has(a.id))
     .reduce((sum, a) => sum + a.sizeMB, 0);
 
+  const simulatedDiskRangeProgress = ((simulatedDiskGB - 2) / (100 - 2)) * 100;
+
   // Folder Open Trigger
   const handleOpenFolder = (categoryName: string, pathMock: string) => {
     addLog(`📁 在资源管理器中开启目录: ${pathMock}`, 'info');
@@ -240,7 +242,8 @@ export default function SettingsPanel({
                   step="0.5"
                   value={simulatedDiskGB}
                   onChange={(e) => setSimulatedDiskGB(parseFloat(e.target.value))}
-                  className="w-full accent-[#00ff00] bg-zinc-900 h-1 rounded-lg cursor-pointer"
+                  className="settings-range w-full accent-[#00ff00] h-1 rounded-lg cursor-pointer"
+                  style={{ '--range-progress': `${simulatedDiskRangeProgress}%` } as React.CSSProperties}
                 />
 
                 <div className="flex justify-between text-[9px] text-zinc-500">

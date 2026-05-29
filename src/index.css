@@ -654,9 +654,69 @@ input:focus {
   box-shadow: 0 0 0 1.5px rgba(0, 200, 0, 0.25) !important;
 }
 
-/* 7. Range input / slider background color in light mode to match the light divider color */
-.light input[type="range"] {
-  background-color: #e2e8f0 !important;
+/* 7. Settings range input: unselected track matches divider color, selected track keeps theme color */
+.settings-range {
+  --range-fill: #00ff00;
+  --range-track: #18181b;
+  --range-progress: 0%;
+  appearance: none;
+  background: linear-gradient(
+    to right,
+    var(--range-fill) 0%,
+    var(--range-fill) var(--range-progress),
+    var(--range-track) var(--range-progress),
+    var(--range-track) 100%
+  ) !important;
+}
+
+.light .settings-range {
+  --range-fill: #00C800;
+  --range-track: #e2e8f0;
+}
+
+.settings-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: transparent;
+}
+
+.settings-range::-webkit-slider-thumb {
+  width: 10px;
+  height: 10px;
+  margin-top: -3px;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 9999px;
+  background: var(--range-fill);
+  border: 2px solid #09090b;
+}
+
+.light .settings-range::-webkit-slider-thumb {
+  border-color: #ffffff;
+}
+
+.settings-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--range-track);
+}
+
+.settings-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--range-fill);
+}
+
+.settings-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: var(--range-fill);
+  border: 2px solid #09090b;
+}
+
+.light .settings-range::-moz-range-thumb {
+  border-color: #ffffff;
 }
 
 /* Globally cancel and disable all shadows, glow effects, and filter elevations in all states to enforce a clean, completely flat design - modified to allow focus and selected-card halo shadows */
@@ -673,6 +733,4 @@ input:focus {
   text-shadow: none !important;
   filter: none !important;
 }
-
-
 
