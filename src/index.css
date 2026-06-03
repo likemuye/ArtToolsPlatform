@@ -585,6 +585,80 @@
   color: #ffffff !important;
 }
 
+/* Asset preview source badge stays as a dark image overlay in light mode */
+.light .asset-source-badge {
+  background-color: rgba(0, 0, 0, 0.88) !important;
+  border-color: #334155 !important;
+  color: #cbd5e1 !important;
+}
+
+.light .asset-source-badge .force-text-white {
+  color: #ffffff !important;
+}
+
+.light .asset-detail-close {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #64748b !important;
+}
+
+.light .asset-detail-close:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #00C800 !important;
+  color: #0f172a !important;
+}
+
+.asset-card-info-switch {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 1px solid #3f3f46;
+  background-color: #18181b;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.asset-card-info-switch[aria-checked="true"] {
+  background-color: #00ff00;
+  border-color: #00ff00;
+}
+
+.asset-card-info-switch span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background-color: #f8fafc;
+  transition: transform 0.18s ease, background-color 0.18s ease;
+}
+
+.asset-card-info-switch[aria-checked="true"] span {
+  transform: translateX(16px);
+  background-color: #ffffff;
+}
+
+.light .asset-card-info-switch {
+  background-color: #e2e8f0;
+  border-color: #cbd5e1;
+}
+
+.light .asset-card-info-switch[aria-checked="true"] {
+  background-color: #00C800;
+  border-color: #00C800;
+}
+
+.light .asset-card-info-switch span {
+  background-color: #64748b;
+}
+
+.light .asset-card-info-switch[aria-checked="true"] span {
+  background-color: #ffffff;
+}
+
 /* 3. Ensure card dividers (such as asset card top dividers and extension card dividers) are clean light grey */
 .light .border-zinc-900\/60,
 .light .border-t.border-zinc-900\/60,
@@ -733,4 +807,3 @@ input:focus {
   text-shadow: none !important;
   filter: none !important;
 }
-

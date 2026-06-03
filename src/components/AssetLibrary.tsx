@@ -53,11 +53,16 @@ export default function AssetLibrary({
   const [keyword, setKeyword] = useState<string>('');
   const [selectedAsset, setSelectedAsset] = useState<ArtAsset | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [showAssetCardInfo, setShowAssetCardInfo] = useState<boolean>(true);
 
   // Reset page when filters or space change
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedCat, keyword, currentSpace]);
+
+  useEffect(() => {
+    setSelectedAsset(null);
+  }, [currentSpace]);
 
   // Download simulation engine states (queue F9 rule)
   const [activeDownloads, setActiveDownloads] = useState<ActiveDownload[]>([]);
@@ -79,13 +84,6 @@ export default function AssetLibrary({
     { id: AssetCategory.Video, name: '粒子视频' },
     { id: AssetCategory.GUI, name: 'GUI 切图' },
   ];
-
-  // Pick first asset as default on select or workspace switcher
-  useEffect(() => {
-    if (isProjectA && assets.length > 0 && !selectedAsset) {
-      setSelectedAsset(assets[0]);
-    }
-  }, [isProjectA, assets]);
 
   // Queue Concurrency Handler (Max 3 concurrent downloading)
   useEffect(() => {
@@ -433,23 +431,41 @@ export default function AssetLibrary({
 
         {/* Category Tabs inside Project Space A */}
         {isProjectA && (
-          <div className="flex items-center gap-1.5 mt-5 overflow-x-auto pb-2 scrollbar-none font-mono">
-            {categoryTabs.map((tab) => {
-              const isSelected = selectedCat === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setSelectedCat(tab.id)}
-                  className={`px-3 py-1 font-mono text-[10.5px] rounded whitespace-nowrap cursor-pointer transition-all border cat-tab-btn ${
-                    isSelected 
-                      ? 'bg-white text-black font-semibold border-white shadow is-selected' 
-                      : 'bg-transparent border-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700'
-                  }`}
-                >
-                  {tab.name}
-                </button>
-              );
-            })}
+          <div className="mt-5 flex items-center justify-between gap-4 pb-2 font-mono">
+            <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-none">
+              {categoryTabs.map((tab) => {
+                const isSelected = selectedCat === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setSelectedCat(tab.id)}
+                    className={`px-3 py-1 font-mono text-[10.5px] rounded whitespace-nowrap cursor-pointer transition-all border cat-tab-btn ${
+                      isSelected 
+                        ? 'bg-white text-black font-semibold border-white shadow is-selected' 
+                        : 'bg-transparent border-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700'
+                    }`}
+                  >
+                    {tab.name}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="asset-card-info-control flex shrink-0 items-center gap-2">
+              <span className="text-[10.5px] font-bold text-white whitespace-nowrap">
+                {showAssetCardInfo ? '显示素材信息' : '仅查看素材封面'}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={showAssetCardInfo}
+                aria-label="切换素材卡片信息显示"
+                onClick={() => setShowAssetCardInfo(prev => !prev)}
+                className="asset-card-info-switch"
+              >
+                <span />
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -479,7 +495,11 @@ export default function AssetLibrary({
                   没有找到匹配 “{keyword}” 描述的美术内容包。
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className={`grid gap-4 ${
+                  selectedAsset
+                    ? 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3'
+                    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'
+                }`}>
                   {paginatedAssets.map((asset) => {
                     const isCurSelected = selectedAsset?.id === asset.id;
                     const isDownloaded = downloadedAssetIds.has(asset.id);
@@ -538,27 +558,28 @@ export default function AssetLibrary({
                           )}
                         </div>
 
-                        {/* Info body */}
-                        <div className="p-3.5 flex-1 flex flex-col justify-between">
-                          <div>
-                            <h3 className="text-xs font-bold text-white tracking-wide font-sans line-clamp-1 truncate block group-hover/card:text-[#00ff00] transition-colors">
-                              {asset.name}
-                            </h3>
-                            <div className="flex items-center gap-2 mt-1 px-0.5">
-                              <span className="text-[9.2px] font-mono text-zinc-500 uppercase">
-                                CAT / {asset.category.replace('_', ' ')}
+                        {showAssetCardInfo && (
+                          <div className="p-3.5 flex-1 flex flex-col justify-between">
+                            <div>
+                              <h3 className="text-xs font-bold text-white tracking-wide font-sans line-clamp-1 truncate block group-hover/card:text-[#00ff00] transition-colors">
+                                {asset.name}
+                              </h3>
+                              <div className="flex items-center gap-2 mt-1 px-0.5">
+                                <span className="text-[9.2px] font-mono text-zinc-500 uppercase">
+                                  CAT / {asset.category.replace('_', ' ')}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="mt-3.5 pt-2 border-t border-zinc-900 flex justify-between items-center text-[10px] font-mono text-zinc-500">
+                              <span>大小: {asset.sizeMB} MB</span>
+                              <span className="text-zinc-400 text-[10.5px] group-hover/card:text-[#00ff00] flex items-center transition-colors">
+                                查看素材详情 
+                                <ChevronRight size={10} className="group-hover/card:translate-x-0.5 transition-transform ml-0.2" />
                               </span>
                             </div>
                           </div>
-
-                          <div className="mt-3.5 pt-2 border-t border-zinc-900 flex justify-between items-center text-[10px] font-mono text-zinc-500">
-                            <span>大小: {asset.sizeMB} MB</span>
-                            <span className="text-zinc-400 text-[10.5px] group-hover/card:text-[#00ff00] flex items-center transition-colors">
-                              查看素材详情 
-                              <ChevronRight size={10} className="group-hover/card:translate-x-0.5 transition-transform ml-0.2" />
-                            </span>
-                          </div>
-                        </div>
+                        )}
                       </div>
                     );
                   })}
@@ -633,6 +654,20 @@ export default function AssetLibrary({
           {/* RIGHT: Selected Asset Detail Side Panel */}
           {selectedAsset && (
             <div className="w-full lg:w-96 overflow-y-auto bg-[#0a0a0c] border-l border-[#27272a] p-4 shrink-0 flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-3 border-b border-zinc-900 pb-3">
+                <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">
+                  素材详情
+                </p>
+                <button
+                  type="button"
+                  aria-label="关闭素材详情"
+                  title="关闭素材详情"
+                  onClick={() => setSelectedAsset(null)}
+                  className="asset-detail-close flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-white"
+                >
+                  <X size={14} />
+                </button>
+              </div>
               
               <div>
                 <div className="aspect-video relative rounded border border-zinc-850 overflow-hidden bg-black select-none max-h-48">
@@ -642,7 +677,7 @@ export default function AssetLibrary({
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute bottom-2 right-2 flex bg-black/95 border border-zinc-800 rounded px-2 py-0.5 text-[9.5px] font-mono text-zinc-400 items-center gap-1">
+                  <div className="asset-source-badge absolute bottom-2 right-2 flex bg-black/95 border border-zinc-800 rounded px-2 py-0.5 text-[9.5px] font-mono text-zinc-400 items-center gap-1">
                     <span>来源:</span>
                     <span className="text-white font-bold force-text-white">{selectedAsset.platform}</span>
                   </div>
