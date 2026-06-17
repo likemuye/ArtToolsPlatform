@@ -251,16 +251,13 @@ export default function AppManager({
         <div>
           <h1 className="text-xl font-bold font-display tracking-tight text-white flex items-center gap-2">
             <Monitor size={22} className="text-[#00ff00]" />
-            DCC 应用管理 <span className="text-xs text-zinc-500 font-mono font-normal">Global Applications</span>
+            DCC 应用管理
           </h1>
-          <p className="text-xs text-zinc-400 mt-1">
-            IT 托管与自动监听本地 DCC 生态连接。ComfyUI 与 Blender 由平台管理并支持热拉取，Maya/PS/3ds Max 将被自动识别集成。
-          </p>
         </div>
         <div className="flex bg-[#0c0c0e] border border-[#27272a] rounded p-2 text-xs font-mono">
           <div className="flex items-center gap-1.5 text-zinc-400">
             <Server size={14} className="text-[#00ff00]" />
-            <span>IT Bridge:</span>
+            <span>桥接状态:</span>
             <span className="text-[#00ff00] font-bold">已连接</span>
           </div>
         </div>
@@ -565,7 +562,7 @@ export default function AppManager({
 
             <div className="border border-[#27272a] bg-zinc-950 rounded mb-5 p-3">
               <label className="text-[10.5px] font-mono text-zinc-500 uppercase tracking-wilder block mb-2">
-                Simulated Folder Path Selector / 可用注册目录发现 (模拟)
+                可用注册目录发现（模拟）
               </label>
               
               <div className="space-y-2">

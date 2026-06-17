@@ -87,11 +87,8 @@ export default function SettingsPanel({
       <div className="mb-6">
         <h1 className="text-xl font-bold font-display tracking-tight text-white flex items-center gap-2">
           <Settings size={22} className="text-[#00ff00]" />
-          本地缓存与平台设置 <span className="text-xs text-zinc-500 font-mono font-normal">Settings & Cache</span>
+          本地缓存与平台设置
         </h1>
-        <p className="text-xs text-zinc-400 mt-1">
-          管理客户端在 Windows 本地产生的应用、插件、缩略图临时缓存，并提供用于测试 PRD 异常分支的仿真管理器。
-        </p>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -181,7 +178,7 @@ export default function SettingsPanel({
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={`font-mono font-semibold ${tempCacheMB > 0 ? 'text-zinc-300' : 'text-zinc-650'}`}>
-                    {tempCacheMB > 0 ? `${(tempCacheMB / 1024).toFixed(1)} GB (${tempCacheMB} MB)` : '0.0 Bytes'}
+                    {tempCacheMB > 0 ? `${(tempCacheMB / 1024).toFixed(1)} GB (${tempCacheMB} MB)` : '0.0 字节'}
                   </span>
                   <div className="flex gap-2">
                     <button 

@@ -210,12 +210,8 @@ export default function ExtensionManager({
       <div className="mb-6">
         <h1 className="text-xl font-bold font-display tracking-tight text-white flex items-center gap-2">
           <Layers size={22} className="text-[#00ff00]" />
-          应用插件与拓展 <span className="text-xs text-zinc-500 font-mono font-normal">Extensions & Plugins</span>
+          应用插件与拓展
         </h1>
-        <p className="text-xs text-zinc-400 mt-1">
-          将专属优化扩展及常用自动化节点无缝装载至指定 DCC 软件中。
-          <span className="text-zinc-500 italic block mt-0.5">※ 拓展库数据跟随项目空间而变化。当前空间：{currentSpace.name}</span>
-        </p>
       </div>
 
       {!isProjectA ? (
@@ -491,7 +487,7 @@ export default function ExtensionManager({
                                 className="bg-white hover:bg-zinc-200 text-black font-semibold px-3 py-1 text-[10.5px] rounded transition-colors flex items-center gap-1 cursor-pointer btn-primary"
                               >
                                 <Download size={11} />
-                                写入宿主
+                                安装插件
                               </button>
                             )}
                           </div>

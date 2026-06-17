@@ -52,6 +52,36 @@
   box-shadow: 0 0 12px rgba(0, 255, 0, 0.4);
 }
 
+/* Sidebar collapsed navigation: hide scrollbar and use bottom fade hint */
+.sidebar-nav-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sidebar-nav-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.sidebar-scroll-fade {
+  background: linear-gradient(
+    to top,
+    rgba(12, 12, 14, 0.98) 0%,
+    rgba(12, 12, 14, 0.86) 46%,
+    rgba(12, 12, 14, 0) 100%
+  );
+}
+
+.light .sidebar-scroll-fade {
+  background: linear-gradient(
+    to top,
+    rgba(248, 250, 252, 0.98) 0%,
+    rgba(248, 250, 252, 0.86) 46%,
+    rgba(248, 250, 252, 0) 100%
+  );
+}
+
 /* =========================================
    LIGHT THEME (POLISHED HIGH-CONTRAST LIGHT MODE)
    ========================================= */

@@ -40,7 +40,9 @@ export default function App() {
 
   // Sidebar and space states - F7
   const [currentTab, setCurrentTab] = useState<string>('apps');
-  const [currentSpace, setCurrentSpace] = useState<ProjectSpace>(PROJECT_SPACES[0]); // Defaults to Project A
+  const [currentSpace, setCurrentSpace] = useState<ProjectSpace>(
+    PROJECT_SPACES.find((space) => space.id === SpaceId.ProjectA) ?? PROJECT_SPACES[0]
+  );
   const [isInitial, setIsInitial] = useState<boolean>(true);
   const [toast, setToast] = useState<{ id: number; message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
 
@@ -161,6 +163,8 @@ export default function App() {
             addLog={addLog}
           />
         );
+      case 'canvas':
+        return <div className="flex-1"></div>;
       default:
         return (
           <div className="flex-1 p-8 text-zinc-500 font-mono">
@@ -236,9 +240,9 @@ export default function App() {
           >
             <div className="flex items-center gap-2">
               <Terminal size={12} className="text-[#00ff00]" />
-              <span className="text-[#f4f4f5]">CLIENT CONSOLE STREAM / 运行日志与派发流</span>
+              <span className="text-[#f4f4f5]">运行日志与派发流</span>
               <span className="text-[9px] bg-zinc-900 border border-zinc-800 text-zinc-500 rounded px-1 min-w-[30px] text-center font-normal">
-                {logs.length} feeds
+                {logs.length} 条
               </span>
             </div>
             
@@ -256,7 +260,7 @@ export default function App() {
           {consoleExpanded && (
             <div className="h-32 p-3 overflow-y-auto text-[10.5px] leading-relaxed space-y-1 font-mono selection:bg-[#00ff00]/20 selection:text-white">
               {logs.length === 0 ? (
-                <div className="text-zinc-700 italic select-none">Waiting for client interaction...</div>
+                <div className="text-zinc-700 italic select-none">等待客户端交互...</div>
               ) : (
                 logs.map((log, index) => {
                   let badgeColor = 'text-zinc-500';

@@ -64,6 +64,19 @@ export default function AssetLibrary({
     setSelectedAsset(null);
   }, [currentSpace]);
 
+  useEffect(() => {
+    if (!selectedAsset) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedAsset(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [selectedAsset]);
+
   // Download simulation engine states (queue F9 rule)
   const [activeDownloads, setActiveDownloads] = useState<ActiveDownload[]>([]);
   
@@ -352,8 +365,8 @@ export default function AssetLibrary({
     let modeText = 'API数据直达';
     if (mode === 'layer') modeText = '智能多重蒙版图层置入';
     if (mode === 'artboard') modeText = '新建汉代UI独立画板排布';
-    if (mode === 'append') modeText = '网格树几何追加 (Append)';
-    if (mode === 'link') modeText = '场景外部网格关联引用 (Link)';
+    if (mode === 'append') modeText = '网格树几何追加';
+    if (mode === 'link') modeText = '场景外部网格关联引用';
     if (mode === 'importScene') modeText = '导入激活的 Dagger 大纲坐标组中';
     if (mode === 'newScene') modeText = '强制覆盖新建原始DCC大场景';
     if (mode === 'merge') modeText = '追加融合至选中多边形顶点';
@@ -397,6 +410,12 @@ export default function AssetLibrary({
   const totalPages = Math.ceil(filteredAssets.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const paginatedAssets = filteredAssets.slice(startIndex, startIndex + itemsPerPage);
+  const selectedAssetTask = selectedAsset
+    ? activeDownloads.find(task => task.assetId === selectedAsset.id)
+    : null;
+  const selectedAssetCategoryName = selectedAsset
+    ? categoryTabs.find(tab => tab.id === selectedAsset.category)?.name ?? selectedAsset.category
+    : '';
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col font-sans">
@@ -407,11 +426,8 @@ export default function AssetLibrary({
           <div>
             <h1 className="text-xl font-bold font-display tracking-tight text-white flex items-center gap-2">
               <FolderOpen size={22} className="text-[#00ff00]" />
-              项目美术素材库 <span className="text-xs text-zinc-500 font-mono font-normal">Space Assets</span>
+              项目美术素材库
             </h1>
-            <p className="text-xs text-zinc-400 mt-1">
-              由TA和美术项目总监统一分发的标准元数据资产。支持多格式、多软件智能热导入、并行排队高速下载。
-            </p>
           </div>
 
           {/* Keyword Search box */}
@@ -470,7 +486,7 @@ export default function AssetLibrary({
         )}
       </div>
 
-      {/* Main body split area: Left card grid, Right detail pane */}
+      {/* Main body content */}
       {!isProjectA ? (
         /* Empty status for space B, Shared, Personal */
         <div className="flex-1 overflow-y-auto p-12 flex flex-col items-center justify-center text-center select-none">
@@ -485,176 +501,199 @@ export default function AssetLibrary({
           </p>
         </div>
       ) : (
-        <div className="flex-1 overflow-hidden flex flex-col lg:flex-row min-h-0">
-          
-          {/* LEFT: Grid List */}
-          <div className="flex-1 flex flex-col min-h-0 border-r border-[#27272a]">
-            <div className="flex-1 overflow-y-auto p-6">
-              {filteredAssets.length === 0 ? (
-                <div className="h-64 border border-dashed border-[#27272a] rounded flex flex-col items-center justify-center p-8 text-center text-zinc-500 text-xs">
-                  没有找到匹配 “{keyword}” 描述的美术内容包。
-                </div>
-              ) : (
-                <div className={`grid gap-4 ${
-                  selectedAsset
-                    ? 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3'
-                    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'
-                }`}>
-                  {paginatedAssets.map((asset) => {
-                    const isCurSelected = selectedAsset?.id === asset.id;
-                    const isDownloaded = downloadedAssetIds.has(asset.id);
-                    
-                    // Check if currently downloading/queued
-                    const activeTask = activeDownloads.find(d => d.assetId === asset.id);
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+          <div className="flex-1 overflow-y-auto p-6">
+            {filteredAssets.length === 0 ? (
+              <div className="h-64 border border-dashed border-[#27272a] rounded flex flex-col items-center justify-center p-8 text-center text-zinc-500 text-xs">
+                没有找到匹配 “{keyword}” 描述的美术内容包。
+              </div>
+            ) : (
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                {paginatedAssets.map((asset) => {
+                  const isCurSelected = selectedAsset?.id === asset.id;
+                  const isDownloaded = downloadedAssetIds.has(asset.id);
 
-                    return (
-                      <div
-                        key={asset.id}
-                        onClick={() => setSelectedAsset(asset)}
-                        className={`group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
-                          isCurSelected 
-                            ? 'border-[#00ff00]' 
-                            : 'border-[#27272a] hover:border-zinc-700'
-                        }`}
-                      >
-                        {/* Thumbnail wrapper */}
-                        <div className="aspect-video relative overflow-hidden bg-black/60 shrink-0 select-none border-b border-[#18181b]">
-                          <img 
-                            src={asset.thumbnail} 
-                            alt={asset.name}
-                            className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
-                            referrerPolicy="no-referrer"
-                          />
-                          
-                          {/* Format sticker and category indicator */}
-                          <div className="absolute top-2 left-2 flex items-center gap-1">
-                            <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded uppercase">
-                              .{asset.format}
-                            </span>
-                          </div>
+                  // Check if currently downloading/queued
+                  const activeTask = activeDownloads.find(task => task.assetId === asset.id);
 
-                          {/* Status overlays (Download Status / Queued) */}
-                          {isDownloaded && (
-                            <div className="absolute top-2 right-2 bg-[#00ff00] text-black rounded-full p-1 shadow-lg">
-                              <CheckCircle size={12} fill="currentColor" className="text-black" />
-                            </div>
-                          )}
+                  return (
+                    <div
+                      key={asset.id}
+                      onClick={() => setSelectedAsset(asset)}
+                      className={`group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
+                        isCurSelected
+                          ? 'border-[#00ff00]'
+                          : 'border-[#27272a] hover:border-zinc-700'
+                      }`}
+                    >
+                      {/* Thumbnail wrapper */}
+                      <div className="aspect-video relative overflow-hidden bg-black/60 shrink-0 select-none border-b border-[#18181b]">
+                        <img
+                          src={asset.thumbnail}
+                          alt={asset.name}
+                          className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
+                          referrerPolicy="no-referrer"
+                        />
 
-                          {activeTask && (
-                            <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center p-3 text-center">
-                              {activeTask.status === 'queued' ? (
-                                <div className="flex flex-col items-center gap-1.5 animate-pulse">
-                                  <Clock size={16} className="text-amber-400" />
-                                  <span className="text-[10px] font-mono text-amber-400 font-bold">排队等候中...</span>
-                                </div>
-                              ) : (
-                                <div className="w-full px-4 flex flex-col items-center">
-                                  <div className="w-6 h-6 rounded-full border-2 border-t-transparent border-[#00ff00] animate-spin mb-1.5"></div>
-                                  <span className="text-[10px] font-mono text-zinc-300">后台高速并行拉取中</span>
-                                  <span className="text-[12px] font-mono text-[#00ff00] font-bold mt-0.5">{activeTask.progress}%</span>
-                                </div>
-                              )}
-                            </div>
-                          )}
+                        {/* Format sticker and category indicator */}
+                        <div className="absolute top-2 left-2 flex items-center gap-1">
+                          <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded uppercase">
+                            .{asset.format}
+                          </span>
                         </div>
 
-                        {showAssetCardInfo && (
-                          <div className="p-3.5 flex-1 flex flex-col justify-between">
-                            <div>
-                              <h3 className="text-xs font-bold text-white tracking-wide font-sans line-clamp-1 truncate block group-hover/card:text-[#00ff00] transition-colors">
-                                {asset.name}
-                              </h3>
-                              <div className="flex items-center gap-2 mt-1 px-0.5">
-                                <span className="text-[9.2px] font-mono text-zinc-500 uppercase">
-                                  CAT / {asset.category.replace('_', ' ')}
-                                </span>
-                              </div>
-                            </div>
+                        {/* Status overlays (Download Status / Queued) */}
+                        {isDownloaded && (
+                          <div className="absolute top-2 right-2 bg-[#00ff00] text-black rounded-full p-1 shadow-lg">
+                            <CheckCircle size={12} fill="currentColor" className="text-black" />
+                          </div>
+                        )}
 
-                            <div className="mt-3.5 pt-2 border-t border-zinc-900 flex justify-between items-center text-[10px] font-mono text-zinc-500">
-                              <span>大小: {asset.sizeMB} MB</span>
-                              <span className="text-zinc-400 text-[10.5px] group-hover/card:text-[#00ff00] flex items-center transition-colors">
-                                查看素材详情 
-                                <ChevronRight size={10} className="group-hover/card:translate-x-0.5 transition-transform ml-0.2" />
-                              </span>
-                            </div>
+                        {activeTask && (
+                          <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center p-3 text-center">
+                            {activeTask.status === 'queued' ? (
+                              <div className="flex flex-col items-center gap-1.5 animate-pulse">
+                                <Clock size={16} className="text-amber-400" />
+                                <span className="text-[10px] font-mono text-amber-400 font-bold">排队等候中...</span>
+                              </div>
+                            ) : (
+                              <div className="w-full px-4 flex flex-col items-center">
+                                <div className="w-6 h-6 rounded-full border-2 border-t-transparent border-[#00ff00] animate-spin mb-1.5"></div>
+                                <span className="text-[10px] font-mono text-zinc-300">后台高速并行拉取中</span>
+                                <span className="text-[12px] font-mono text-[#00ff00] font-bold mt-0.5">{activeTask.progress}%</span>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
 
-            {/* Pagination Controls */}
-            {totalPages > 1 && (
-              <div className="px-6 py-4 border-t border-[#27272a] bg-[#0c0c0e]/80 backdrop-blur-md flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0 font-mono text-xs text-zinc-400 select-none">
-                <div className="flex items-center gap-2">
-                  <span className="text-zinc-500">
-                    当前显示 <span className="text-[#00ff00] font-bold">{startIndex + 1} - {Math.min(startIndex + itemsPerPage, filteredAssets.length)}</span> / 共 <span className="text-white font-bold">{filteredAssets.length}</span> 项
-                  </span>
-                </div>
-                
-                <div className="flex items-center gap-1">
-                  {/* Previous Page Button */}
-                  <button
-                    disabled={currentPage === 1}
-                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                    className={`p-2 rounded border border-[#27272a] transition-all ${
-                      currentPage === 1
-                        ? 'text-zinc-700 bg-transparent cursor-not-allowed opacity-40'
-                        : 'text-zinc-300 hover:text-white hover:border-[#00ff00]/60 bg-[#0c0c0e] hover:bg-zinc-900 cursor-pointer'
-                    }`}
-                    title="上一页"
-                  >
-                    <ChevronLeft size={14} className="pointer-events-none" />
-                  </button>
+                      {showAssetCardInfo && (
+                        <div className="p-3.5 flex-1 flex flex-col justify-between">
+                          <div>
+                            <h3 className="text-xs font-bold text-white tracking-wide font-sans line-clamp-1 truncate block group-hover/card:text-[#00ff00] transition-colors">
+                              {asset.name}
+                            </h3>
+                            <div className="flex items-center gap-2 mt-1 px-0.5">
+                              <span className="text-[9.2px] font-mono text-zinc-500 uppercase">
+                                类别: {asset.category.replace('_', ' ')}
+                              </span>
+                            </div>
+                          </div>
 
-                  {/* Page numbers */}
-                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
-                    const isCurrent = page === currentPage;
-                    return (
-                      <button
-                        key={page}
-                        onClick={() => setCurrentPage(page)}
-                        className={`w-8 h-8 rounded border transition-all text-xs font-mono font-medium ${
-                          isCurrent
-                            ? 'bg-zinc-950 border-[#00ff00] text-[#00ff00] font-bold'
-                            : 'bg-transparent border-zinc-900 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-400 hover:text-white cursor-pointer'
-                        }`}
-                      >
-                        {page}
-                      </button>
-                    );
-                  })}
-
-                  {/* Next Page Button */}
-                  <button
-                    disabled={currentPage === totalPages}
-                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                    className={`p-2 rounded border border-[#27272a] transition-all ${
-                      currentPage === totalPages
-                        ? 'text-zinc-700 bg-transparent cursor-not-allowed opacity-40'
-                        : 'text-zinc-300 hover:text-white hover:border-[#00ff00]/60 bg-[#0c0c0e] hover:bg-zinc-900 cursor-pointer'
-                    }`}
-                    title="下一页"
-                  >
-                    <ChevronRight size={14} className="pointer-events-none" />
-                  </button>
-                </div>
-
-                <div className="hidden md:block text-zinc-500 text-[10px]">
-                  页码: {currentPage} / {totalPages}
-                </div>
+                          <div className="mt-3.5 pt-2 border-t border-zinc-900 flex justify-between items-center text-[10px] font-mono text-zinc-500">
+                            <span>大小: {asset.sizeMB} MB</span>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelectedAsset(asset);
+                              }}
+                              className="text-zinc-400 text-[10.5px] group-hover/card:text-[#00ff00] flex items-center transition-colors cursor-pointer"
+                            >
+                              查看素材详情
+                              <ExternalLink size={10} className="ml-1" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
 
-          {/* RIGHT: Selected Asset Detail Side Panel */}
-          {selectedAsset && (
-            <div className="w-full lg:w-96 overflow-y-auto bg-[#0a0a0c] border-l border-[#27272a] p-4 shrink-0 flex flex-col gap-4">
-              <div className="flex items-center justify-between gap-3 border-b border-zinc-900 pb-3">
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="px-6 py-4 border-t border-[#27272a] bg-[#0c0c0e]/80 backdrop-blur-md flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0 font-mono text-xs text-zinc-400 select-none">
+              <div className="flex items-center gap-2">
+                <span className="text-zinc-500">
+                  当前显示 <span className="text-[#00ff00] font-bold">{startIndex + 1} - {Math.min(startIndex + itemsPerPage, filteredAssets.length)}</span> / 共 <span className="text-white font-bold">{filteredAssets.length}</span> 项
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1">
+                {/* Previous Page Button */}
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  className={`p-2 rounded border border-[#27272a] transition-all ${
+                    currentPage === 1
+                      ? 'text-zinc-700 bg-transparent cursor-not-allowed opacity-40'
+                      : 'text-zinc-300 hover:text-white hover:border-[#00ff00]/60 bg-[#0c0c0e] hover:bg-zinc-900 cursor-pointer'
+                  }`}
+                  title="上一页"
+                >
+                  <ChevronLeft size={14} className="pointer-events-none" />
+                </button>
+
+                {/* Page numbers */}
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                  const isCurrent = page === currentPage;
+                  return (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={`w-8 h-8 rounded border transition-all text-xs font-mono font-medium ${
+                        isCurrent
+                          ? 'bg-zinc-950 border-[#00ff00] text-[#00ff00] font-bold'
+                          : 'bg-transparent border-zinc-900 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-400 hover:text-white cursor-pointer'
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  );
+                })}
+
+                {/* Next Page Button */}
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  className={`p-2 rounded border border-[#27272a] transition-all ${
+                    currentPage === totalPages
+                      ? 'text-zinc-700 bg-transparent cursor-not-allowed opacity-40'
+                      : 'text-zinc-300 hover:text-white hover:border-[#00ff00]/60 bg-[#0c0c0e] hover:bg-zinc-900 cursor-pointer'
+                  }`}
+                  title="下一页"
+                >
+                  <ChevronRight size={14} className="pointer-events-none" />
+                </button>
+              </div>
+
+              <div className="hidden md:block text-zinc-500 text-[10px]">
+                页码: {currentPage} / {totalPages}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Large asset detail modal */}
+      {selectedAsset && (
+        <div
+          className="fixed inset-0 z-40 bg-black/80 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center"
+          onClick={() => setSelectedAsset(null)}
+        >
+          <div
+            className="h-[min(88vh,760px)] w-full max-w-[1200px] bg-[#0c0c0e] border border-[#27272a] rounded-xl overflow-hidden flex flex-col lg:flex-row"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative flex-1 min-h-[280px] bg-black border-b lg:border-b-0 lg:border-r border-[#27272a]">
+              <img
+                src={selectedAsset.previewUrl}
+                alt={selectedAsset.name}
+                className="w-full h-full object-contain"
+                referrerPolicy="no-referrer"
+              />
+
+              <div className="asset-source-badge absolute bottom-4 right-4 flex bg-black/95 border border-zinc-800 rounded px-2 py-1 text-[10px] font-mono text-zinc-400 items-center gap-1">
+                <span>来源:</span>
+                <span className="text-white font-bold force-text-white">{selectedAsset.platform}</span>
+              </div>
+            </div>
+
+            <div className="w-full lg:w-[390px] xl:w-[420px] bg-[#0a0a0c] border-t lg:border-t-0 lg:border-l border-[#27272a] p-5 overflow-y-auto flex flex-col">
+              <div className="flex items-center justify-between gap-3 border-b border-zinc-900 pb-3 shrink-0">
                 <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">
                   素材详情
                 </p>
@@ -668,180 +707,156 @@ export default function AssetLibrary({
                   <X size={14} />
                 </button>
               </div>
-              
-              <div>
-                <div className="aspect-video relative rounded border border-zinc-850 overflow-hidden bg-black select-none max-h-48">
-                  <img 
-                    src={selectedAsset.previewUrl} 
-                    alt={selectedAsset.name} 
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="asset-source-badge absolute bottom-2 right-2 flex bg-black/95 border border-zinc-800 rounded px-2 py-0.5 text-[9.5px] font-mono text-zinc-400 items-center gap-1">
-                    <span>来源:</span>
-                    <span className="text-white font-bold force-text-white">{selectedAsset.platform}</span>
-                  </div>
-                </div>
 
-                <div className="mt-3">
-                  <h2 className="text-sm font-bold text-white leading-snug font-display">
+              <div className="mt-4 space-y-4">
+                <div>
+                  <h2 className="text-base font-bold text-white leading-snug font-display">
                     {selectedAsset.name}
                   </h2>
-                  
-                  {/* Category badge and Tags */}
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    <span className="text-[9px] font-mono bg-[#141416] border border-zinc-900 text-zinc-400 px-2 py-0.2 rounded-full uppercase">
-                      类 / {selectedAsset.category}
-                    </span>
-                    {selectedAsset.tags.map((tag) => (
-                      <span key={tag} className="text-[9.5px] font-mono bg-[#00ff00]/5 border border-[#00ff00]/20 text-[#00ff00] px-1.5 rounded">
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Substantive Specs list */}
-                <div className="mt-3.5 border-t border-zinc-900 pt-3 space-y-1.5 text-xs font-mono">
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">文件格式:</span>
-                    <span className="text-[#00ff00] font-bold">.{selectedAsset.format.toUpperCase()}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">资产大小:</span>
-                    <span className="text-zinc-300 font-bold">{selectedAsset.sizeMB} MB</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">分发创作者:</span>
-                    <span className="text-zinc-400 font-bold">{selectedAsset.author}</span>
-                  </div>
-                </div>
-
-                {/* Detailed Description */}
-                <div className="mt-3.5 pt-3 border-t border-zinc-900">
-                  <label className="text-[10px] uppercase text-zinc-500 tracking-wider font-mono">
-                    素材详细描述 / Description
-                  </label>
-                  <p className="text-xs text-zinc-400 leading-relaxed font-sans mt-1 bg-black p-2.5 border border-zinc-900 rounded select-text">
+                  <p className="mt-2 text-xs text-zinc-400 leading-relaxed font-sans bg-black p-2.5 border border-zinc-900 rounded select-text">
                     {selectedAsset.desc}
                   </p>
                 </div>
-              </div>
 
-              {/* ACTION BUTTONS (F9 Paths) */}
-              <div className="mt-1 pt-3.5 border-t border-zinc-900 space-y-3 shrink-0">
-                {/* Path A: Local high-speed download */}
-                <div>
-                  <h4 className="text-[10.2px] text-zinc-500 font-mono uppercase mb-1.5 tracking-wide">
-                    Path A — 本地磁盘离线提取
-                  </h4>
-                  
-                  {/* Check if active down contains selected */}
-                  {activeDownloads.some(d => d.assetId === selectedAsset.id) ? (
-                    <div className="w-full bg-[#121214] border border-dashed border-zinc-800 p-3.5 rounded text-center font-mono">
-                      {activeDownloads.find(d => d.assetId === selectedAsset.id)?.status === 'queued' ? (
-                        <div className="flex flex-col gap-1 items-center">
-                          <span className="text-xs text-amber-400 font-bold animate-pulse">等候下载空闲槽中 (Mutex Queue)</span>
-                          <span className="text-[9.5px] text-zinc-500 leading-tight">由于网络和并发限制，至多同时执行 3 个素材下载包。</span>
-                          <button 
-                            onClick={() => cancelActiveDownload(selectedAsset.id)}
-                            className="mt-2 text-red-500 hover:text-red-400 text-[10px] underline cursor-pointer"
-                          >
-                            移出缓冲区
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-1.5">
-                          <div className="flex justify-between text-xs text-zinc-400">
-                            <span>下载拉取中...</span>
-                            <span className="text-[#00ff00] font-bold">
-                              {activeDownloads.find(d => d.assetId === selectedAsset.id)?.progress}%
-                            </span>
-                          </div>
-                          <div className="w-full bg-zinc-800 rounded-full h-1 overflow-hidden">
-                            <div 
-                              className="bg-[#00ff00] h-full" 
-                              style={{ width: `${activeDownloads.find(d => d.assetId === selectedAsset.id)?.progress}%` }}
-                            ></div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => handleLocalDownload(selectedAsset)}
-                      className={`w-full py-2 px-4 text-xs font-semibold rounded flex items-center justify-center gap-1.5 transition-all text-center cursor-pointer ${
-                        downloadedAssetIds.has(selectedAsset.id)
-                          ? 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white btn-secondary'
-                          : 'bg-white hover:bg-zinc-150 text-black font-bold shadow-lg btn-primary'
-                      }`}
-                    >
-                      <Download size={13} />
-                      {downloadedAssetIds.has(selectedAsset.id) 
-                        ? '已下载 · 在资源管理器中打开文件夹' 
-                        : `下载到本地缓存 (${selectedAsset.sizeMB} MB)`
-                      }
-                    </button>
-                  )}
-                </div>
-
-                {/* Path B: Smart DCC hot import */}
-                <div>
-                  <h4 className="text-[10px] text-zinc-500 font-mono uppercase mb-1.5 tracking-wide">
-                    Path B — 专属通道智能热导入 DCC
-                  </h4>
-                  
-                  {/* Compatible DCC targets mapping matrix */}
-                  <div className="space-y-1.5">
-                    {[AppId.ComfyUI, AppId.Blender, AppId.Photoshop, AppId.Maya, AppId.Max3ds].map((appId) => {
-                      const dccApp = apps.find(a => a.id === appId);
-                      const isConnected = dccApp?.status === AppStatus.Connected;
-                      const { compatible, reason } = checkCompatibility(selectedAsset.format, appId);
-
-                      if (!compatible) {
-                        return (
-                          <div 
-                            key={appId}
-                            title={reason}
-                            className="w-full bg-[#121214]/40 border border-dashed border-zinc-900/60 p-2 text-zinc-650 rounded text-[10px] font-mono flex items-center gap-2 select-none cursor-not-allowed opacity-35"
-                          >
-                            <span className="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
-                            <span className="uppercase font-bold shrink-0">{appId === AppId.Max3ds ? '3DS MAX' : appId}:</span>
-                            <span className="truncate line-clamp-1">{reason}</span>
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <button
-                          key={appId}
-                          onClick={() => handleImportDccTrigger(selectedAsset, appId)}
-                          className={`w-full p-2.5 rounded text-left border text-[11px] font-mono flex items-center justify-between transition-all cursor-pointer ${
-                            isConnected 
-                              ? 'bg-black border-[#00ff00]/40 text-zinc-200 hover:bg-[#00ff00]/10 hover:border-[#00ff00] hover:text-white glow-btn group/btn' 
-                              : 'bg-[#121214] border-zinc-900 text-zinc-500 hover:border-zinc-800'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 overflow-hidden">
-                            <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-[#00ff00]' : 'bg-red-500'}`}></div>
-                            <span className={`uppercase font-bold ${isConnected ? 'text-[#00ff00]' : 'text-zinc-400'}`}>
-                              {appId === AppId.Max3ds ? '3D MAX' : appId}
-                            </span>
-                            <span className="text-[9.5px] text-zinc-500 shrink-0 select-none">|</span>
-                            <span className={`truncate text-[10px] ${isConnected ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                              {getImportActionLabel(selectedAsset.format, appId)}
-                            </span>
-                          </div>
-                          <CornerDownRight size={11} className={`shrink-0 ${isConnected ? 'text-[#00ff00] group-hover/btn:translate-x-0.5 transition-transform' : 'text-zinc-500'}`} />
-                        </button>
-                      );
-                    })}
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="bg-black border border-zinc-900 rounded p-2.5">
+                    <p className="text-zinc-500 text-[10px]">文件格式</p>
+                    <p className="mt-1 text-[#00ff00] font-bold">.{selectedAsset.format.toUpperCase()}</p>
+                  </div>
+                  <div className="bg-black border border-zinc-900 rounded p-2.5">
+                    <p className="text-zinc-500 text-[10px]">资产大小</p>
+                    <p className="mt-1 text-zinc-300 font-bold">{selectedAsset.sizeMB} MB</p>
+                  </div>
+                  <div className="bg-black border border-zinc-900 rounded p-2.5">
+                    <p className="text-zinc-500 text-[10px]">分类</p>
+                    <p className="mt-1 text-zinc-300 font-bold">{selectedAssetCategoryName}</p>
+                  </div>
+                  <div className="bg-black border border-zinc-900 rounded p-2.5">
+                    <p className="text-zinc-500 text-[10px]">分发创作者</p>
+                    <p className="mt-1 text-zinc-300 font-bold truncate" title={selectedAsset.author}>{selectedAsset.author}</p>
                   </div>
                 </div>
 
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedAsset.tags.map((tag) => (
+                    <span key={tag} className="text-[10px] font-mono bg-[#00ff00]/5 border border-[#00ff00]/20 text-[#00ff00] px-2 py-0.5 rounded">
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+
+                {/* ACTION BUTTONS (F9 Paths) */}
+                <div className="pt-3.5 border-t border-zinc-900 space-y-3">
+                  {/* Path A: Local high-speed download */}
+                  <div>
+                    <h4 className="text-[10.2px] text-zinc-500 font-mono uppercase mb-1.5 tracking-wide">
+                      本地磁盘离线提取
+                    </h4>
+
+                    {selectedAssetTask ? (
+                      <div className="w-full bg-[#121214] border border-dashed border-zinc-800 p-3.5 rounded text-center font-mono">
+                        {selectedAssetTask.status === 'queued' ? (
+                          <div className="flex flex-col gap-1 items-center">
+                            <span className="text-xs text-amber-400 font-bold animate-pulse">等候下载空闲槽中</span>
+                            <span className="text-[9.5px] text-zinc-500 leading-tight">由于网络和并发限制，至多同时执行 3 个素材下载包。</span>
+                            <button
+                              onClick={() => cancelActiveDownload(selectedAsset.id)}
+                              className="mt-2 text-red-500 hover:text-red-400 text-[10px] underline cursor-pointer"
+                            >
+                              移出缓冲区
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex justify-between text-xs text-zinc-400">
+                              <span>下载拉取中...</span>
+                              <span className="text-[#00ff00] font-bold">{selectedAssetTask.progress}%</span>
+                            </div>
+                            <div className="w-full bg-zinc-800 rounded-full h-1 overflow-hidden">
+                              <div
+                                className="bg-[#00ff00] h-full"
+                                style={{ width: `${selectedAssetTask.progress}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleLocalDownload(selectedAsset)}
+                        className={`w-full py-2 px-4 text-xs font-semibold rounded flex items-center justify-center gap-1.5 transition-all text-center cursor-pointer ${
+                          downloadedAssetIds.has(selectedAsset.id)
+                            ? 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white btn-secondary'
+                            : 'bg-white hover:bg-zinc-150 text-black font-bold shadow-lg btn-primary'
+                        }`}
+                      >
+                        <Download size={13} />
+                        {downloadedAssetIds.has(selectedAsset.id)
+                          ? '已下载 · 在资源管理器中打开文件夹'
+                          : `下载到本地缓存 (${selectedAsset.sizeMB} MB)`
+                        }
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Path B: Smart DCC hot import */}
+                  <div>
+                    <h4 className="text-[10px] text-zinc-500 font-mono uppercase mb-1.5 tracking-wide">
+                      专属通道智能热导入 DCC
+                    </h4>
+
+                    {/* Compatible DCC targets mapping matrix */}
+                    <div className="space-y-1.5">
+                      {[AppId.ComfyUI, AppId.Blender, AppId.Photoshop, AppId.Maya, AppId.Max3ds].map((appId) => {
+                        const dccApp = apps.find(app => app.id === appId);
+                        const isConnected = dccApp?.status === AppStatus.Connected;
+                        const { compatible, reason } = checkCompatibility(selectedAsset.format, appId);
+
+                        if (!compatible) {
+                          return (
+                            <div
+                              key={appId}
+                              title={reason}
+                              className="w-full bg-[#121214]/40 border border-dashed border-zinc-900/60 p-2 text-zinc-650 rounded text-[10px] font-mono flex items-center gap-2 select-none cursor-not-allowed opacity-35"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
+                              <span className="uppercase font-bold shrink-0">{appId === AppId.Max3ds ? '3DS MAX' : appId}:</span>
+                              <span className="truncate line-clamp-1">{reason}</span>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <button
+                            key={appId}
+                            onClick={() => handleImportDccTrigger(selectedAsset, appId)}
+                            className={`w-full p-2.5 rounded text-left border text-[11px] font-mono flex items-center justify-between transition-all cursor-pointer ${
+                              isConnected
+                                ? 'bg-black border-[#00ff00]/40 text-zinc-200 hover:bg-[#00ff00]/10 hover:border-[#00ff00] hover:text-white glow-btn group/btn'
+                                : 'bg-[#121214] border-zinc-900 text-zinc-500 hover:border-zinc-800'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-[#00ff00]' : 'bg-red-500'}`}></div>
+                              <span className={`uppercase font-bold ${isConnected ? 'text-[#00ff00]' : 'text-zinc-400'}`}>
+                                {appId === AppId.Max3ds ? '3D MAX' : appId}
+                              </span>
+                              <span className="text-[9.5px] text-zinc-500 shrink-0 select-none">|</span>
+                              <span className={`truncate text-[10px] ${isConnected ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                                {getImportActionLabel(selectedAsset.format, appId)}
+                              </span>
+                            </div>
+                            <CornerDownRight size={11} className={`shrink-0 ${isConnected ? 'text-[#00ff00] group-hover/btn:translate-x-0.5 transition-transform' : 'text-zinc-500'}`} />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                </div>
               </div>
             </div>
-          )}
+          </div>
         </div>
       )}
 
@@ -916,7 +931,7 @@ export default function AssetLibrary({
                     }`}
                   >
                     <div className="flex justify-between">
-                      <span>方式一：直接本体追加导入 (Append)</span>
+                      <span>方式一：直接本体追加导入</span>
                       {selectedImportMode === 'append' && <CheckCircle size={13} className="text-[#00ff00]" />}
                     </div>
                     <p className="text-[10px] text-zinc-500 mt-1 font-normal leading-normal">
@@ -933,11 +948,11 @@ export default function AssetLibrary({
                     }`}
                   >
                     <div className="flex justify-between">
-                      <span>方式二：外部资源轻量引用 (Link)</span>
+                      <span>方式二：外部资源轻量引用</span>
                       {selectedImportMode === 'link' && <CheckCircle size={13} className="text-[#00ff00]" />}
                     </div>
                     <p className="text-[10px] text-zinc-500 mt-1 font-normal leading-normal">
-                      建立场景对外部下载目录的单向只读软关联（Link），仅投射几何虚影。工程轻量且当服务器源文件更新时可自动同频。
+                      建立场景对外部下载目录的单向只读软关联，仅投射几何虚影。工程轻量且当服务器源文件更新时可自动同频。
                     </p>
                   </button>
                 </div>
@@ -955,7 +970,7 @@ export default function AssetLibrary({
                     }`}
                   >
                     <div className="flex justify-between">
-                      <span>方式一：导入并入当前层 (Import to Active)</span>
+                      <span>方式一：导入并入当前层</span>
                       {selectedImportMode === 'importScene' && <CheckCircle size={13} className="text-[#00ff00]" />}
                     </div>
                     <p className="text-[10px] text-zinc-500 mt-1 font-normal leading-normal">
@@ -972,7 +987,7 @@ export default function AssetLibrary({
                     }`}
                   >
                     <div className="flex justify-between">
-                      <span>方式二：强制新建场景加载 (New Scene)</span>
+                      <span>方式二：强制新建场景加载</span>
                       {selectedImportMode === 'newScene' && <CheckCircle size={13} className="text-[#00ff00]" />}
                     </div>
                     <p className="text-[10px] text-zinc-500 mt-1 font-normal leading-normal">
@@ -994,7 +1009,7 @@ export default function AssetLibrary({
                     }`}
                   >
                     <div className="flex justify-between">
-                      <span>方式一：场景追加合并 (Merge Scene)</span>
+                      <span>方式一：场景追加合并</span>
                       {selectedImportMode === 'merge' && <CheckCircle size={13} className="text-[#00ff00]" />}
                     </div>
                     <p className="text-[10px] text-zinc-500 mt-1 font-normal leading-normal">
@@ -1011,7 +1026,7 @@ export default function AssetLibrary({
                     }`}
                   >
                     <div className="flex justify-between">
-                      <span>方式二：作为新项目文件打开 (Open File)</span>
+                      <span>方式二：作为新项目文件打开</span>
                       {selectedImportMode === 'newScene' && <CheckCircle size={13} className="text-[#00ff00]" />}
                     </div>
                     <p className="text-[10px] text-zinc-500 mt-1 font-normal leading-normal">
