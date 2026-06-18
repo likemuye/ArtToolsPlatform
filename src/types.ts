@@ -79,6 +79,20 @@ export interface ArtAsset {
   tags: string[];
 }
 
+export type PersonalUploadType = 'image' | 'gif' | 'video';
+
+export interface PersonalUploadedAsset extends ArtAsset {
+  uploadType: PersonalUploadType;
+  sourceFileName: string;
+  uploadedAt: string;
+}
+
+export interface AssetFolder {
+  id: string;
+  name: string;
+  parentId: string | null;
+}
+
 export interface DownloadTask {
   assetId: string;
   progress: number; // 0-100

@@ -689,6 +689,34 @@
   background-color: #ffffff;
 }
 
+.light .asset-content-toolbar {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .asset-content-toolbar .bg-black {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+}
+
+.light .asset-content-toolbar .text-white {
+  color: #0f172a !important;
+}
+
+.light .asset-content-toolbar .text-zinc-500 {
+  color: #64748b !important;
+}
+
+.light .asset-content-toolbar input {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.light .asset-content-toolbar input::placeholder {
+  color: #94a3b8 !important;
+}
+
 /* 3. Ensure card dividers (such as asset card top dividers and extension card dividers) are clean light grey */
 .light .border-zinc-900\/60,
 .light .border-t.border-zinc-900\/60,

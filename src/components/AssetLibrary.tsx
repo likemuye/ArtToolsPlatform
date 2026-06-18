@@ -1,33 +1,63 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
+  Archive,
+  Check,
+  Upload,
+  Sparkles,
+  Tag,
+  Loader2,
   FolderOpen, 
+  Folder,
+  FolderPlus,
   Search, 
   Download, 
   CornerDownRight, 
   CheckCircle, 
-  AlertCircle,
   Clock,
   FolderDot,
-  FileVideo,
-  FileImage,
-  Box,
   Shuffle,
   X,
   ExternalLink,
   ChevronRight,
-  ChevronLeft
+  ChevronLeft,
+  ChevronDown,
+  Pencil,
+  Trash2,
+  Plus,
+  Files
 } from 'lucide-react';
-import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace } from '../types';
+import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType } from '../types';
+import { INITIAL_ASSET_FOLDERS_PROJECT_A, INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A } from '../data';
 
 interface AssetLibraryProps {
   currentSpace: ProjectSpace;
   apps: AppConfig[];
   assets: ArtAsset[];
+  personalAssets: PersonalUploadedAsset[];
+  setPersonalAssets: React.Dispatch<React.SetStateAction<PersonalUploadedAsset[]>>;
   downloadedAssetIds: Set<string>;
   setDownloadedAssetIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   simulatedDiskGB: number;
   setSimulatedDiskGB: React.Dispatch<React.SetStateAction<number>>;
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error') => void;
+}
+
+interface PendingPersonalUploadItem {
+  id: string;
+  fileName: string;
+  sourceFileName: string;
+  sizeBytes: number;
+  format: string;
+  uploadType: PersonalUploadType;
+  previewUrl: string;
+  tags: string[];
+  status: 'tagging' | 'ready';
+}
+
+interface PersonalUploadDraft {
+  items: PendingPersonalUploadItem[];
+  totalBytes: number;
+  isTagging: boolean;
 }
 
 // Simulated active download task structure for queue management
@@ -38,10 +68,185 @@ interface ActiveDownload {
   targetDccImportAfterDownload?: AppId; // If triggered by import click, remembers DCC target
 }
 
+const ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v1';
+const ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY = 'art-launcher-asset-folder-assignments-v1';
+const ASSET_FOLDER_PANE_WIDTH_STORAGE_KEY = 'art-launcher-folder-pane-width-v1';
+const REMOVED_DEFAULT_FOLDER_IDS = new Set(['folder-browser', 'folder-cloud-local']);
+const DEFAULT_ASSET_FOLDER_ID = 'folder-primary';
+const CREATED_FOLDER_ID_PATTERN = /^folder-(\d{10,})$/;
+const PERSONAL_UPLOAD_MAX_COUNT = 500;
+const PERSONAL_UPLOAD_MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024;
+const BYTES_IN_MB = 1024 * 1024;
+const DEFAULT_FOLDER_PANE_WIDTH = 304;
+const MIN_FOLDER_PANE_WIDTH = 240;
+const MAX_FOLDER_PANE_WIDTH = 520;
+
+const personalTypeLabel: Record<PersonalUploadType, string> = {
+  image: '图片',
+  gif: '动图',
+  video: '视频'
+};
+
+const normalizeTag = (tag: string) => tag.trim().replace(/^#+/, '');
+
+const dedupeTags = (tags: string[]) => {
+  const seen = new Set<string>();
+  const next: string[] = [];
+
+  tags.forEach((tag) => {
+    const cleaned = normalizeTag(tag);
+    if (!cleaned) return;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    next.push(cleaned);
+  });
+
+  return next;
+};
+
+const getFileExtension = (fileName: string) => {
+  const ext = fileName.split('.').pop();
+  return ext ? ext.toLowerCase() : '';
+};
+
+const getFileBaseName = (fileName: string) => {
+  return fileName.replace(/\.[^/.]+$/, '');
+};
+
+const toDisplayMB = (bytes: number) => {
+  return Math.max(0.1, Number((bytes / BYTES_IN_MB).toFixed(1)));
+};
+
+const formatUploadTotal = (bytes: number) => {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const inferUploadType = (file: File): PersonalUploadType | null => {
+  const ext = getFileExtension(file.name);
+
+  if (file.type.startsWith('video/')) return 'video';
+  if (file.type === 'image/gif' || ext === 'gif') return 'gif';
+  if (file.type.startsWith('image/')) return 'image';
+
+  return null;
+};
+
+const readImageDimensions = (file: File): Promise<{ width: number; height: number } | null> => {
+  return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(null);
+    };
+    img.src = objectUrl;
+  });
+};
+
+const readVideoMetadata = (file: File): Promise<{ width: number; height: number; duration: number } | null> => {
+  return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
+    const video = document.createElement('video');
+
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve({
+        width: video.videoWidth,
+        height: video.videoHeight,
+        duration: video.duration
+      });
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(null);
+    };
+    video.src = objectUrl;
+  });
+};
+
+const extractNameTags = (fileName: string) => {
+  const baseName = getFileBaseName(fileName);
+  const zhSegments = baseName.match(/[\u4e00-\u9fa5]{2,}/g) ?? [];
+  const enSegments = baseName
+    .split(/[\s_\-.()[\]{}]+/)
+    .map(token => token.trim())
+    .filter(token => token.length >= 2 && !/^\d+$/.test(token));
+
+  return [...zhSegments, ...enSegments].slice(0, 4);
+};
+
+const normalizeFolders = (folders: AssetFolder[]) => {
+  return folders.filter(folder => !REMOVED_DEFAULT_FOLDER_IDS.has(folder.id));
+};
+
+const normalizeFolderAssignments = (assignments: Record<string, string>) => {
+  return Object.fromEntries(
+    Object.entries(assignments).map(([assetId, folderId]) => [
+      assetId,
+      REMOVED_DEFAULT_FOLDER_IDS.has(folderId) ? DEFAULT_ASSET_FOLDER_ID : folderId
+    ])
+  );
+};
+
+const getInitialFolders = () => {
+  try {
+    const stored = localStorage.getItem(ASSET_FOLDER_STORAGE_KEY);
+    if (!stored) return INITIAL_ASSET_FOLDERS_PROJECT_A;
+
+    const parsed = JSON.parse(stored) as AssetFolder[];
+    if (!Array.isArray(parsed) || parsed.length === 0) return INITIAL_ASSET_FOLDERS_PROJECT_A;
+    return normalizeFolders(parsed);
+  } catch {
+    return INITIAL_ASSET_FOLDERS_PROJECT_A;
+  }
+};
+
+const getInitialFolderAssignments = () => {
+  try {
+    const stored = localStorage.getItem(ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY);
+    if (!stored) return INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A;
+
+    const parsed = JSON.parse(stored) as Record<string, string>;
+    if (!parsed || typeof parsed !== 'object') return INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A;
+    return normalizeFolderAssignments({ ...INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A, ...parsed });
+  } catch {
+    return INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A;
+  }
+};
+
+const clampFolderPaneWidth = (width: number) => {
+  return Math.max(MIN_FOLDER_PANE_WIDTH, Math.min(MAX_FOLDER_PANE_WIDTH, width));
+};
+
+const getInitialFolderPaneWidth = () => {
+  try {
+    const stored = localStorage.getItem(ASSET_FOLDER_PANE_WIDTH_STORAGE_KEY);
+    if (!stored) return DEFAULT_FOLDER_PANE_WIDTH;
+
+    const parsed = Number(stored);
+    if (!Number.isFinite(parsed)) return DEFAULT_FOLDER_PANE_WIDTH;
+    return clampFolderPaneWidth(parsed);
+  } catch {
+    return DEFAULT_FOLDER_PANE_WIDTH;
+  }
+};
+
 export default function AssetLibrary({
   currentSpace,
   apps,
   assets,
+  personalAssets,
+  setPersonalAssets,
   downloadedAssetIds,
   setDownloadedAssetIds,
   simulatedDiskGB,
@@ -53,16 +258,141 @@ export default function AssetLibrary({
   const [keyword, setKeyword] = useState<string>('');
   const [selectedAsset, setSelectedAsset] = useState<ArtAsset | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
+  // Temporarily keep card metadata visible while the view-mode toggle is hidden.
+  const showAssetCardInfo = true;
+  /*
   const [showAssetCardInfo, setShowAssetCardInfo] = useState<boolean>(true);
+  */
+  const [folderKeyword, setFolderKeyword] = useState<string>('');
+  const [isFolderSearchActive, setIsFolderSearchActive] = useState<boolean>(false);
+  const [folders, setFolders] = useState<AssetFolder[]>(getInitialFolders);
+  const [folderAssignments, setFolderAssignments] = useState<Record<string, string>>(getInitialFolderAssignments);
+  const [selectedFolderId, setSelectedFolderId] = useState<string>('folder-primary');
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(
+    () => new Set(['folder-primary', 'folder-character', 'folder-scene'])
+  );
+  const [includeSubfolderAssets, setIncludeSubfolderAssets] = useState<boolean>(true);
+  const [folderEditor, setFolderEditor] = useState<{
+    mode: 'create' | 'rename';
+    parentId: string | null;
+    folderId?: string;
+    name: string;
+  } | null>(null);
+  const [folderContextMenu, setFolderContextMenu] = useState<{
+    folderId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [isPersonalUploadInfoOpen, setIsPersonalUploadInfoOpen] = useState<boolean>(false);
+  const [personalUploadDraft, setPersonalUploadDraft] = useState<PersonalUploadDraft | null>(null);
+  const [pendingTagInputs, setPendingTagInputs] = useState<Record<string, string>>({});
+  const [folderPaneWidth, setFolderPaneWidth] = useState<number>(getInitialFolderPaneWidth);
+  const [isResizingFolderPane, setIsResizingFolderPane] = useState<boolean>(false);
+  const [isDesktopLayout, setIsDesktopLayout] = useState<boolean>(() => window.innerWidth >= 1024);
+  const assetLayoutRef = useRef<HTMLDivElement | null>(null);
+  const personalUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadSessionRef = useRef<number>(0);
 
   // Reset page when filters or space change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCat, keyword, currentSpace]);
+  }, [selectedCat, keyword, currentSpace, selectedFolderId, includeSubfolderAssets]);
 
   useEffect(() => {
     setSelectedAsset(null);
   }, [currentSpace]);
+
+  useEffect(() => {
+    if (!folderContextMenu) return;
+
+    const closeContextMenu = () => setFolderContextMenu(null);
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('scroll', closeContextMenu, true);
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('scroll', closeContextMenu, true);
+    };
+  }, [folderContextMenu]);
+
+  useEffect(() => {
+    localStorage.setItem(ASSET_FOLDER_STORAGE_KEY, JSON.stringify(folders));
+  }, [folders]);
+
+  useEffect(() => {
+    localStorage.setItem(ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY, JSON.stringify(folderAssignments));
+  }, [folderAssignments]);
+
+  useEffect(() => {
+    localStorage.setItem(ASSET_FOLDER_PANE_WIDTH_STORAGE_KEY, String(folderPaneWidth));
+  }, [folderPaneWidth]);
+
+  useEffect(() => {
+    const cleanedFolders = normalizeFolders(folders);
+    if (cleanedFolders.length !== folders.length) {
+      setFolders(cleanedFolders);
+    }
+
+    const cleanedAssignments = normalizeFolderAssignments(folderAssignments);
+    if (Object.entries(cleanedAssignments).some(([assetId, folderId]) => folderAssignments[assetId] !== folderId)) {
+      setFolderAssignments(cleanedAssignments);
+    }
+  }, [folders, folderAssignments]);
+
+  useEffect(() => {
+    const handleWindowResize = () => {
+      setIsDesktopLayout(window.innerWidth >= 1024);
+    };
+
+    window.addEventListener('resize', handleWindowResize);
+    return () => window.removeEventListener('resize', handleWindowResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktopLayout && isResizingFolderPane) {
+      setIsResizingFolderPane(false);
+    }
+  }, [isDesktopLayout, isResizingFolderPane]);
+
+  useEffect(() => {
+    if (!isResizingFolderPane) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const containerRect = assetLayoutRef.current?.getBoundingClientRect();
+      if (!containerRect) return;
+
+      const rawWidth = event.clientX - containerRect.left;
+      const maxWidthByContainer = Math.max(MIN_FOLDER_PANE_WIDTH, containerRect.width - 360);
+      const constrainedWidth = Math.min(rawWidth, maxWidthByContainer);
+      setFolderPaneWidth(clampFolderPaneWidth(constrainedWidth));
+    };
+
+    const stopResizing = () => {
+      setIsResizingFolderPane(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', stopResizing);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', stopResizing);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizingFolderPane]);
+
+  useEffect(() => {
+    if (folders.some(folder => folder.id === selectedFolderId)) return;
+
+    const fallbackFolder = folders.find(folder => folder.id === DEFAULT_ASSET_FOLDER_ID)
+      ?? folders.find(folder => folder.parentId === null)
+      ?? folders[0];
+    if (fallbackFolder) {
+      setSelectedFolderId(fallbackFolder.id);
+    }
+  }, [folders, selectedFolderId]);
 
   useEffect(() => {
     if (!selectedAsset) return;
@@ -85,6 +415,211 @@ export default function AssetLibrary({
   const [selectedImportMode, setSelectedImportMode] = useState<string>('');
 
   const isProjectA = currentSpace.id === SpaceId.ProjectA;
+  const isPersonalSpace = currentSpace.id === SpaceId.Personal;
+  const activeAssets: ArtAsset[] = isPersonalSpace ? personalAssets : assets;
+
+  const buildAiTagsForUpload = async (file: File, uploadType: PersonalUploadType) => {
+    const format = getFileExtension(file.name).toUpperCase() || 'BIN';
+    const tags: string[] = [
+      personalTypeLabel[uploadType],
+      format,
+      'AI自动打标',
+      ...extractNameTags(file.name)
+    ];
+
+    if (file.size >= 200 * BYTES_IN_MB) {
+      tags.push('大体积');
+    } else if (file.size <= 5 * BYTES_IN_MB) {
+      tags.push('轻量');
+    }
+
+    if (uploadType === 'video') {
+      const metadata = await readVideoMetadata(file);
+      if (metadata) {
+        tags.push(`${metadata.width}x${metadata.height}`);
+        if (metadata.duration <= 10) tags.push('短视频');
+        else if (metadata.duration >= 60) tags.push('长视频');
+        else tags.push('中视频');
+      }
+    } else {
+      const dimensions = await readImageDimensions(file);
+      if (dimensions) {
+        tags.push(`${dimensions.width}x${dimensions.height}`);
+        if (dimensions.width > dimensions.height) tags.push('横版');
+        else if (dimensions.width < dimensions.height) tags.push('竖版');
+        else tags.push('方图');
+      }
+    }
+
+    return dedupeTags(tags).slice(0, 8);
+  };
+
+  const closePersonalUploadDraft = () => {
+    uploadSessionRef.current += 1;
+    setPersonalUploadDraft(null);
+    setPendingTagInputs({});
+  };
+
+  const updateDraftItemTags = (itemId: string, updater: (tags: string[]) => string[]) => {
+    setPersonalUploadDraft(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.map(item => (
+          item.id === itemId
+            ? { ...item, tags: dedupeTags(updater(item.tags)).slice(0, 12) }
+            : item
+        ))
+      };
+    });
+  };
+
+  const addDraftTag = (itemId: string) => {
+    const value = normalizeTag(pendingTagInputs[itemId] ?? '');
+    if (!value) return;
+    updateDraftItemTags(itemId, tags => [...tags, value]);
+    setPendingTagInputs(prev => ({ ...prev, [itemId]: '' }));
+  };
+
+  const removeDraftTag = (itemId: string, tagToRemove: string) => {
+    updateDraftItemTags(itemId, tags => tags.filter(tag => tag !== tagToRemove));
+  };
+
+  const editDraftTag = (itemId: string, currentTag: string) => {
+    const nextTag = window.prompt('编辑标签', currentTag);
+    if (nextTag === null) return;
+
+    const normalized = normalizeTag(nextTag);
+    if (!normalized) {
+      removeDraftTag(itemId, currentTag);
+      return;
+    }
+
+    updateDraftItemTags(itemId, tags => tags.map(tag => tag === currentTag ? normalized : tag));
+  };
+
+  const confirmPersonalUpload = () => {
+    if (!personalUploadDraft || personalUploadDraft.isTagging) return;
+
+    const timestampBase = Date.now();
+    const newAssets: PersonalUploadedAsset[] = personalUploadDraft.items.map((item, index) => ({
+      id: `personal-asset-${timestampBase}-${index}`,
+      name: getFileBaseName(item.fileName),
+      category: item.uploadType === 'video' ? AssetCategory.Video : AssetCategory.GUI,
+      format: item.format,
+      sizeMB: toDisplayMB(item.sizeBytes),
+      thumbnail: item.previewUrl,
+      previewUrl: item.previewUrl,
+      author: '当前用户',
+      platform: '个人空间·置顶目录',
+      desc: `用户上传文件 ${item.sourceFileName}，已完成 AI 自动识别与标签确认。`,
+      tags: dedupeTags(item.tags),
+      uploadType: item.uploadType,
+      sourceFileName: item.sourceFileName,
+      uploadedAt: new Date().toISOString()
+    }));
+
+    setPersonalAssets(prev => [...newAssets, ...prev]);
+    setFolderAssignments(prev => {
+      const next = { ...prev };
+      newAssets.forEach((asset) => {
+        next[asset.id] = DEFAULT_ASSET_FOLDER_ID;
+      });
+      return next;
+    });
+    setSelectedFolderId(DEFAULT_ASSET_FOLDER_ID);
+    setExpandedFolderIds(prev => new Set(prev).add(DEFAULT_ASSET_FOLDER_ID));
+    addLog(`📤 个人空间上传完成：${newAssets.length} 条素材已归档到【置顶目录】。`, 'success');
+    closePersonalUploadDraft();
+  };
+
+  const handlePersonalFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (files.length === 0) return;
+
+    const unsupported = files.filter(file => inferUploadType(file) === null);
+    if (unsupported.length > 0) {
+      alert(`仅支持上传图片、动图(GIF)和视频文件。\n\n当前包含 ${unsupported.length} 个不支持的文件。`);
+      addLog(`❌ 个人空间上传被拦截：存在 ${unsupported.length} 个不支持格式文件。`, 'error');
+      return;
+    }
+
+    if (files.length > PERSONAL_UPLOAD_MAX_COUNT) {
+      alert(`单次最多上传 ${PERSONAL_UPLOAD_MAX_COUNT} 条素材。\n当前选择 ${files.length} 条，请分批上传。`);
+      addLog(`❌ 个人空间上传被拦截：单次上传数量 ${files.length} 超过上限 ${PERSONAL_UPLOAD_MAX_COUNT}。`, 'error');
+      return;
+    }
+
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > PERSONAL_UPLOAD_MAX_TOTAL_BYTES) {
+      alert(`单次上传总大小不能超过 10 GB。\n当前选择总大小：${formatUploadTotal(totalBytes)}。`);
+      addLog(`❌ 个人空间上传被拦截：批量体积 ${formatUploadTotal(totalBytes)} 超过 10 GB。`, 'error');
+      return;
+    }
+
+    setIsPersonalUploadInfoOpen(false);
+
+    const sessionId = Date.now();
+    uploadSessionRef.current = sessionId;
+    addLog(`📤 已选择 ${files.length} 个文件，开始执行上传预处理与 AI 自动打标。`, 'info');
+
+    const initialItems: PendingPersonalUploadItem[] = files.map((file, index) => {
+      const uploadType = inferUploadType(file) ?? 'image';
+      return {
+        id: `pending-${sessionId}-${index}`,
+        fileName: getFileBaseName(file.name),
+        sourceFileName: file.name,
+        sizeBytes: file.size,
+        format: getFileExtension(file.name).toUpperCase() || 'BIN',
+        uploadType,
+        previewUrl: URL.createObjectURL(file),
+        tags: [],
+        status: 'tagging'
+      };
+    });
+
+    setPendingTagInputs({});
+    setPersonalUploadDraft({
+      items: initialItems,
+      totalBytes,
+      isTagging: true
+    });
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const itemId = initialItems[index].id;
+      const uploadType = inferUploadType(file) ?? 'image';
+      const aiTags = await buildAiTagsForUpload(file, uploadType);
+
+      if (uploadSessionRef.current !== sessionId) return;
+
+      setPersonalUploadDraft(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          items: prev.items.map(item => (
+            item.id === itemId
+              ? { ...item, tags: aiTags, status: 'ready' }
+              : item
+          ))
+        };
+      });
+    }
+
+    if (uploadSessionRef.current !== sessionId) return;
+
+    setPersonalUploadDraft(prev => prev ? { ...prev, isTagging: false } : prev);
+    addLog(`🤖 AI 自动打标完成：${files.length} 条素材可确认标签后入库。`, 'success');
+  };
+
+  const openPersonalUploadPicker = () => {
+    personalUploadInputRef.current?.click();
+  };
+
+  const openPersonalUploadInfo = () => {
+    setIsPersonalUploadInfoOpen(true);
+  };
 
   // Filter categories list matching PRD
   const categoryTabs = [
@@ -97,6 +632,103 @@ export default function AssetLibrary({
     { id: AssetCategory.Video, name: '粒子视频' },
     { id: AssetCategory.GUI, name: 'GUI 切图' },
   ];
+
+  const foldersByParent = useMemo(() => {
+    const map = new Map<string | null, AssetFolder[]>();
+    folders.forEach((folder) => {
+      const list = map.get(folder.parentId) ?? [];
+      list.push(folder);
+      map.set(folder.parentId, list);
+    });
+
+    const getCreatedFolderOrder = (folder: AssetFolder) => {
+      const match = CREATED_FOLDER_ID_PATTERN.exec(folder.id);
+      return match ? Number(match[1]) : null;
+    };
+
+    map.forEach((list) => {
+      list.sort((a, b) => {
+        const aCreatedOrder = getCreatedFolderOrder(a);
+        const bCreatedOrder = getCreatedFolderOrder(b);
+
+        if (aCreatedOrder !== null || bCreatedOrder !== null) {
+          if (aCreatedOrder === null) return -1;
+          if (bCreatedOrder === null) return 1;
+          return aCreatedOrder - bCreatedOrder;
+        }
+
+        return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
+      });
+    });
+
+    return map;
+  }, [folders]);
+
+  const folderById = useMemo(() => {
+    return folders.reduce<Record<string, AssetFolder>>((acc, folder) => {
+      acc[folder.id] = folder;
+      return acc;
+    }, {});
+  }, [folders]);
+
+  const selectedFolder = folderById[selectedFolderId] ?? folders.find(folder => folder.parentId === null);
+
+  const getDescendantFolderIds = (folderId: string): string[] => {
+    const childFolders = foldersByParent.get(folderId) ?? [];
+    return childFolders.flatMap(folder => [folder.id, ...getDescendantFolderIds(folder.id)]);
+  };
+
+  const getFolderAssetCount = (folderId: string, includeDescendants = true) => {
+    const folderIds = new Set([folderId]);
+    if (includeDescendants) {
+      getDescendantFolderIds(folderId).forEach(id => folderIds.add(id));
+    }
+
+    return activeAssets.filter(asset => folderIds.has(folderAssignments[asset.id] ?? DEFAULT_ASSET_FOLDER_ID)).length;
+  };
+
+  const getFolderDepth = (folderId: string) => {
+    let depth = 0;
+    let cursor = folderById[folderId];
+
+    while (cursor?.parentId) {
+      depth += 1;
+      cursor = folderById[cursor.parentId];
+    }
+
+    return depth;
+  };
+
+  const selectedFolderPath = useMemo(() => {
+    if (!selectedFolder) return [];
+
+    const path: AssetFolder[] = [];
+    let cursor: AssetFolder | undefined = selectedFolder;
+    while (cursor) {
+      path.unshift(cursor);
+      cursor = cursor.parentId ? folderById[cursor.parentId] : undefined;
+    }
+
+    return path;
+  }, [folderById, selectedFolder]);
+
+  const visibleFolderIds = useMemo(() => {
+    const normalizedKeyword = folderKeyword.trim().toLowerCase();
+    if (!normalizedKeyword) return null;
+
+    const matches = new Set<string>();
+    folders.forEach((folder) => {
+      if (!folder.name.toLowerCase().includes(normalizedKeyword)) return;
+
+      let cursor: AssetFolder | undefined = folder;
+      while (cursor) {
+        matches.add(cursor.id);
+        cursor = cursor.parentId ? folderById[cursor.parentId] : undefined;
+      }
+    });
+
+    return matches;
+  }, [folderById, folderKeyword, folders]);
 
   // Queue Concurrency Handler (Max 3 concurrent downloading)
   useEffect(() => {
@@ -388,9 +1020,142 @@ export default function AssetLibrary({
     addLog(`⚠️ 已从后台下载排队中移除该素材缓存下载操作。`, 'warning');
   };
 
+  const openCreateFolderEditor = (parentId: string | null) => {
+    setFolderContextMenu(null);
+    setFolderEditor({
+      mode: 'create',
+      parentId,
+      name: ''
+    });
+  };
+
+  const openRenameFolderEditor = (folderId = selectedFolderId) => {
+    const folder = folderById[folderId];
+    if (!folder) return;
+
+    setFolderContextMenu(null);
+    setSelectedFolderId(folder.id);
+    setFolderEditor({
+      mode: 'rename',
+      parentId: folder.parentId,
+      folderId: folder.id,
+      name: folder.name
+    });
+  };
+
+  const submitFolderEditor = () => {
+    if (!folderEditor) return;
+
+    const folderName = folderEditor.name.trim();
+    if (!folderName) return;
+
+    if (folderEditor.mode === 'create') {
+      const newFolder: AssetFolder = {
+        id: `folder-${Date.now()}`,
+        name: folderName,
+        parentId: folderEditor.parentId
+      };
+
+      setFolders(prev => [...prev, newFolder]);
+      setSelectedFolderId(newFolder.id);
+      if (folderEditor.parentId) {
+        setExpandedFolderIds(prev => new Set(prev).add(folderEditor.parentId));
+      }
+      addLog(`📁 已新建素材文件夹: ${folderName}`, 'success');
+    } else if (folderEditor.folderId) {
+      const originalName = folderById[folderEditor.folderId]?.name ?? '未命名文件夹';
+      setFolders(prev => prev.map(folder => (
+        folder.id === folderEditor.folderId ? { ...folder, name: folderName } : folder
+      )));
+      addLog(`✏️ 文件夹已重命名: ${originalName} → ${folderName}`, 'success');
+    }
+
+    setFolderEditor(null);
+  };
+
+  const deleteFolder = (folderId = selectedFolderId) => {
+    const targetFolder = folderById[folderId];
+    if (!targetFolder) return;
+
+    setFolderContextMenu(null);
+    const deletedFolderIds = new Set([targetFolder.id, ...getDescendantFolderIds(targetFolder.id)]);
+    const remainingFolders = folders.filter(folder => !deletedFolderIds.has(folder.id));
+    if (remainingFolders.length === 0) {
+      alert('素材库至少需要保留一个文件夹。');
+      return;
+    }
+
+    const fallbackFolderId = targetFolder.parentId && remainingFolders.some(folder => folder.id === targetFolder.parentId)
+      ? targetFolder.parentId
+      : remainingFolders.find(folder => folder.parentId === null)?.id ?? remainingFolders[0].id;
+
+    const assetCount = activeAssets.filter(asset => deletedFolderIds.has(folderAssignments[asset.id] ?? DEFAULT_ASSET_FOLDER_ID)).length;
+    const confirmed = window.confirm(`确认删除「${targetFolder.name}」及其 ${deletedFolderIds.size - 1} 个子文件夹吗？\n\n其中 ${assetCount} 个素材会移动到上级文件夹。`);
+    if (!confirmed) return;
+
+    setFolders(remainingFolders);
+    setFolderAssignments(prev => {
+      const next = { ...prev };
+      Object.entries(next).forEach(([assetId, folderId]) => {
+        if (deletedFolderIds.has(folderId)) {
+          next[assetId] = fallbackFolderId;
+        }
+      });
+      return next;
+    });
+    setSelectedFolderId(fallbackFolderId);
+    addLog(`🗑️ 已删除素材文件夹: ${targetFolder.name}，相关素材已移动到上级目录。`, 'warning');
+  };
+
+  const toggleFolderExpanded = (folderId: string) => {
+    setExpandedFolderIds(prev => {
+      const next = new Set(prev);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+      } else {
+        next.add(folderId);
+      }
+      return next;
+    });
+  };
+
+  const openFolderContextMenu = (event: React.MouseEvent, folderId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedFolderId(folderId);
+    setFolderContextMenu({
+      folderId,
+      x: event.clientX,
+      y: event.clientY
+    });
+  };
+
+  const startFolderPaneResize = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDesktopLayout) return;
+
+    const containerRect = assetLayoutRef.current?.getBoundingClientRect();
+    if (containerRect) {
+      const rawWidth = event.clientX - containerRect.left;
+      const maxWidthByContainer = Math.max(MIN_FOLDER_PANE_WIDTH, containerRect.width - 360);
+      const constrainedWidth = Math.min(rawWidth, maxWidthByContainer);
+      setFolderPaneWidth(clampFolderPaneWidth(constrainedWidth));
+    }
+
+    event.preventDefault();
+    setIsResizingFolderPane(true);
+  };
+
+  const directChildFolders = selectedFolder ? (foldersByParent.get(selectedFolder.id) ?? []) : [];
+  const scopedFolderIds = new Set<string>(
+    selectedFolder
+      ? [selectedFolder.id, ...(includeSubfolderAssets ? getDescendantFolderIds(selectedFolder.id) : [])]
+      : []
+  );
+
   // Filtering calculation
-  const filteredAssets = assets.filter(asset => {
-    if (!isProjectA) return false;
+  const filteredAssets = activeAssets.filter(asset => {
+    if (!isProjectA && !isPersonalSpace) return false;
+    if (!scopedFolderIds.has(folderAssignments[asset.id] ?? DEFAULT_ASSET_FOLDER_ID)) return false;
 
     // Cat filter
     if (selectedCat !== AssetCategory.All && asset.category !== selectedCat) return false;
@@ -406,6 +1171,10 @@ export default function AssetLibrary({
     return true;
   });
 
+  const personalReadyTaggingCount = personalUploadDraft
+    ? personalUploadDraft.items.filter(item => item.status === 'ready').length
+    : 0;
+
   const itemsPerPage = 12;
   const totalPages = Math.ceil(filteredAssets.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
@@ -417,78 +1186,99 @@ export default function AssetLibrary({
     ? categoryTabs.find(tab => tab.id === selectedAsset.category)?.name ?? selectedAsset.category
     : '';
 
+  const renderFolderTree = (parentId: string | null, depth = 0): React.ReactNode => {
+    const childFolders = (foldersByParent.get(parentId) ?? []).filter(folder => (
+      !visibleFolderIds || visibleFolderIds.has(folder.id)
+    ));
+
+    return childFolders.map((folder) => {
+      const children = foldersByParent.get(folder.id) ?? [];
+      const hasChildren = children.length > 0;
+      const isExpanded = expandedFolderIds.has(folder.id);
+      const isSelected = selectedFolderId === folder.id;
+      const nestedCount = getFolderAssetCount(folder.id);
+
+      return (
+        <div key={folder.id}>
+          <button
+            type="button"
+            onClick={() => setSelectedFolderId(folder.id)}
+            onContextMenu={(event) => openFolderContextMenu(event, folder.id)}
+            className={`group/folder flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-xs transition-all ${
+              isSelected
+                ? 'bg-[#18181b] text-white border border-transparent'
+                : 'text-zinc-400 border border-transparent hover:bg-[#0c0c0e] hover:text-white'
+            }`}
+            style={{ paddingLeft: `${8 + depth * 16}px` }}
+          >
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label={isExpanded ? '收起文件夹' : '展开文件夹'}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (hasChildren) toggleFolderExpanded(folder.id);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (hasChildren) toggleFolderExpanded(folder.id);
+                }
+              }}
+              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors ${
+                hasChildren ? 'text-zinc-500 hover:text-[#00ff00]' : 'text-zinc-700'
+              }`}
+            >
+              {hasChildren ? (
+                isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />
+              ) : (
+                <span className="h-1 w-1 rounded-full bg-current" />
+              )}
+            </span>
+            {isExpanded && hasChildren ? (
+              <FolderOpen size={15} className={isSelected ? 'text-[#00ff00]' : 'text-zinc-400 group-hover/folder:text-[#00ff00]'} />
+            ) : (
+              <Folder size={15} className={isSelected ? 'text-[#00ff00]' : 'text-zinc-400 group-hover/folder:text-[#00ff00]'} />
+            )}
+            <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+            <span className={`font-mono text-[10px] ${isSelected ? 'text-[#00ff00]' : 'text-zinc-500'}`}>
+              {nestedCount}
+            </span>
+          </button>
+          {hasChildren && isExpanded && renderFolderTree(folder.id, depth + 1)}
+        </div>
+      );
+    });
+  };
+
   return (
     <div className="flex-1 overflow-hidden flex flex-col font-sans">
       
-      {/* Top section: Title and search */}
-      <div className="p-6 pb-2 border-b border-[#27272a] shrink-0">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      {/* Top section: Title */}
+      <div className="p-6 pb-4 border-b border-[#27272a] shrink-0">
+        <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-bold font-display tracking-tight text-white flex items-center gap-2">
               <FolderOpen size={22} className="text-[#00ff00]" />
-              项目美术素材库
+              {isPersonalSpace ? '个人空间素材库' : '项目美术素材库'}
             </h1>
           </div>
-
-          {/* Keyword Search box */}
-          {isProjectA && (
-            <div className="relative w-full md:w-68 shrink-0">
-              <Search size={14} className="absolute left-3 top-2.5 text-zinc-500" />
-              <input 
-                type="text" 
-                value={keyword}
-                onChange={e => setKeyword(e.target.value)}
-                placeholder="搜索素材名或细分标签(如:盔甲)..."
-                className="w-full bg-zinc-950 border border-zinc-900 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-2 pl-9 pr-4 text-zinc-200 font-mono"
-              />
-            </div>
-          )}
         </div>
-
-        {/* Category Tabs inside Project Space A */}
-        {isProjectA && (
-          <div className="mt-5 flex items-center justify-between gap-4 pb-2 font-mono">
-            <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-none">
-              {categoryTabs.map((tab) => {
-                const isSelected = selectedCat === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setSelectedCat(tab.id)}
-                    className={`px-3 py-1 font-mono text-[10.5px] rounded whitespace-nowrap cursor-pointer transition-all border cat-tab-btn ${
-                      isSelected 
-                        ? 'bg-white text-black font-semibold border-white shadow is-selected' 
-                        : 'bg-transparent border-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700'
-                    }`}
-                  >
-                    {tab.name}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="asset-card-info-control flex shrink-0 items-center gap-2">
-              <span className="text-[10.5px] font-bold text-white whitespace-nowrap">
-                {showAssetCardInfo ? '显示素材信息' : '仅查看素材封面'}
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={showAssetCardInfo}
-                aria-label="切换素材卡片信息显示"
-                onClick={() => setShowAssetCardInfo(prev => !prev)}
-                className="asset-card-info-switch"
-              >
-                <span />
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
+      <input
+        ref={personalUploadInputRef}
+        type="file"
+        multiple
+        accept="image/*,video/*,.gif"
+        onChange={handlePersonalFileSelection}
+        className="hidden"
+      />
+
       {/* Main body content */}
-      {!isProjectA ? (
-        /* Empty status for space B, Shared, Personal */
+      {!(isProjectA || isPersonalSpace) ? (
+        /* Empty status for space B, Shared */
         <div className="flex-1 overflow-y-auto p-12 flex flex-col items-center justify-center text-center select-none">
           <div className="w-16 h-16 rounded-full bg-zinc-900 border border-[#27272a] flex items-center justify-center text-zinc-500 mb-4/5 text-zinc-600">
             <FolderDot size={28} />
@@ -501,170 +1291,693 @@ export default function AssetLibrary({
           </p>
         </div>
       ) : (
-        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-          <div className="flex-1 overflow-y-auto p-6">
-            {filteredAssets.length === 0 ? (
-              <div className="h-64 border border-dashed border-[#27272a] rounded flex flex-col items-center justify-center p-8 text-center text-zinc-500 text-xs">
-                没有找到匹配 “{keyword}” 描述的美术内容包。
-              </div>
-            ) : (
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                {paginatedAssets.map((asset) => {
-                  const isCurSelected = selectedAsset?.id === asset.id;
-                  const isDownloaded = downloadedAssetIds.has(asset.id);
+        <div ref={assetLayoutRef} className="flex-1 overflow-hidden flex flex-col lg:flex-row min-h-0">
+          {folderContextMenu && (
+            <div
+              className="fixed z-50 w-44 overflow-hidden rounded border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl font-mono text-[11px]"
+              style={{ left: folderContextMenu.x, top: folderContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <button
+                type="button"
+                onClick={() => openCreateFolderEditor(folderById[folderContextMenu.folderId]?.parentId ?? null)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+              >
+                <Plus size={12} className="text-[#00ff00]" />
+                新建同级文件夹
+              </button>
+              <button
+                type="button"
+                onClick={() => openCreateFolderEditor(folderContextMenu.folderId)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+              >
+                <FolderPlus size={12} className="text-[#00ff00]" />
+                新建子文件夹
+              </button>
+              <button
+                type="button"
+                onClick={() => openRenameFolderEditor(folderContextMenu.folderId)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+              >
+                <Pencil size={12} className="text-zinc-400" />
+                重命名
+              </button>
+              <div className="my-1 border-t border-zinc-900" />
+              <button
+                type="button"
+                onClick={() => deleteFolder(folderContextMenu.folderId)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-400 transition-colors hover:bg-red-950/30 hover:text-red-300"
+              >
+                <Trash2 size={12} />
+                删除文件夹
+              </button>
+            </div>
+          )}
 
-                  // Check if currently downloading/queued
-                  const activeTask = activeDownloads.find(task => task.assetId === asset.id);
-
-                  return (
-                    <div
-                      key={asset.id}
-                      onClick={() => setSelectedAsset(asset)}
-                      className={`group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
-                        isCurSelected
-                          ? 'border-[#00ff00]'
-                          : 'border-[#27272a] hover:border-zinc-700'
-                      }`}
+          <aside
+            className="w-full shrink-0 border-b lg:border-b-0 border-[#27272a] bg-[#070708] flex flex-col min-h-0"
+            style={isDesktopLayout ? { width: `${folderPaneWidth}px` } : undefined}
+          >
+            <div className="p-3 border-b border-[#1c1c1f]">
+              {isFolderSearchActive ? (
+                <div className="relative">
+                  <Search size={13} className="absolute left-2.5 top-2.5 text-zinc-500" />
+                  <input
+                    autoFocus
+                    type="text"
+                    value={folderKeyword}
+                    onChange={(event) => setFolderKeyword(event.target.value)}
+                    onBlur={() => {
+                      if (!folderKeyword.trim()) {
+                        setIsFolderSearchActive(false);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        setFolderKeyword('');
+                        setIsFolderSearchActive(false);
+                      }
+                    }}
+                    placeholder="搜索目录"
+                    className="w-full rounded border border-zinc-800 bg-[#0c0c0e] py-2 pl-8 pr-8 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
+                  />
+                  <button
+                    type="button"
+                    title="关闭目录搜索"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setFolderKeyword('');
+                      setIsFolderSearchActive(false);
+                    }}
+                    className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded text-zinc-500 hover:text-white"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Archive size={15} className="text-[#00ff00]" />
+                    <span className="text-xs font-bold text-white truncate">文件夹目录</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      title="搜索目录"
+                      onClick={() => setIsFolderSearchActive(true)}
+                      className="flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-[#0c0c0e] text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
                     >
-                      {/* Thumbnail wrapper */}
-                      <div className="aspect-video relative overflow-hidden bg-black/60 shrink-0 select-none border-b border-[#18181b]">
-                        <img
-                          src={asset.thumbnail}
-                          alt={asset.name}
-                          className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
-                          referrerPolicy="no-referrer"
-                        />
+                      <Search size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      title="新建一级文件夹"
+                      onClick={() => openCreateFolderEditor(null)}
+                      className="flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-[#0c0c0e] text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </div>
+                </div>
+              )}
 
-                        {/* Format sticker and category indicator */}
-                        <div className="absolute top-2 left-2 flex items-center gap-1">
-                          <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded uppercase">
-                            .{asset.format}
+              {folderEditor && (
+                <div className="mt-3 rounded border border-[#27272a] bg-black p-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      autoFocus
+                      value={folderEditor.name}
+                      onChange={(event) => setFolderEditor(prev => prev ? { ...prev, name: event.target.value } : prev)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') submitFolderEditor();
+                        if (event.key === 'Escape') setFolderEditor(null);
+                      }}
+                      placeholder={folderEditor.mode === 'create' ? '文件夹名称' : '重命名'}
+                      className="min-w-0 flex-1 rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
+                    />
+                    <button
+                      type="button"
+                      title="确认"
+                      onClick={submitFolderEditor}
+                      className="flex h-7 w-7 items-center justify-center rounded bg-[#00ff00] text-black"
+                    >
+                      <Check size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      title="取消"
+                      onClick={() => setFolderEditor(null)}
+                      className="flex h-7 w-7 items-center justify-center rounded border border-zinc-800 text-zinc-500 hover:text-white"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 max-h-[240px] lg:max-h-none">
+              <div className="space-y-1">
+                {renderFolderTree(null)}
+              </div>
+            </div>
+          </aside>
+
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整目录结构宽度"
+            onMouseDown={startFolderPaneResize}
+            className="group relative hidden w-2 shrink-0 cursor-col-resize lg:block"
+          >
+            <div
+              className={`absolute inset-y-0 left-1/2 -translate-x-1/2 w-px transition-colors ${
+                isResizingFolderPane ? 'bg-[#00ff00]' : 'bg-[#27272a] group-hover:bg-[#00ff00]/70'
+              }`}
+            />
+          </div>
+
+          <section className="flex-1 overflow-hidden flex flex-col min-w-0">
+            <div className="asset-content-toolbar shrink-0 border-b border-[#27272a] bg-[#0c0c0e]/60 px-4 py-2">
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <div className="flex min-w-0 items-center gap-2 text-sm font-bold text-white">
+                      <FolderOpen size={16} className="text-[#00ff00]" />
+                      <span className="truncate">{selectedFolder?.name ?? '未选择文件夹'}</span>
+                      <span className="rounded border border-zinc-800 bg-black px-1.5 py-0.5 text-[10px] font-mono text-zinc-500">
+                        L{selectedFolder ? getFolderDepth(selectedFolder.id) + 1 : 0}
+                      </span>
+                    </div>
+                    <div className="flex min-w-0 items-center gap-1 text-[10px] font-mono text-zinc-500">
+                      {selectedFolderPath.map((folder, index) => (
+                        <React.Fragment key={folder.id}>
+                          {index > 0 && <ChevronRight size={11} />}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFolderId(folder.id)}
+                            className="truncate hover:text-[#00ff00]"
+                          >
+                            {folder.name}
+                          </button>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="relative w-full sm:w-72 xl:w-80 shrink-0">
+                    <Search size={13} className="absolute left-3 top-2 text-zinc-500" />
+                    <input 
+                      type="text" 
+                      value={keyword}
+                      onChange={e => setKeyword(e.target.value)}
+                      placeholder="搜索素材名或标签"
+                      className="w-full bg-zinc-950 border border-zinc-900 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-1.5 pl-9 pr-3 text-zinc-200 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2 2xl:flex-row 2xl:items-center 2xl:justify-between">
+                  <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-none font-mono">
+                    {categoryTabs.map((tab) => {
+                      const isSelected = selectedCat === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          onClick={() => setSelectedCat(tab.id)}
+                          className={`px-3 py-1 font-mono text-[10.5px] rounded whitespace-nowrap cursor-pointer transition-all border cat-tab-btn ${
+                            isSelected 
+                              ? 'bg-white text-black font-semibold border-white shadow is-selected' 
+                              : 'bg-transparent border-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700'
+                          }`}
+                        >
+                          {tab.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    {isPersonalSpace && (
+                      <button
+                        type="button"
+                        onClick={openPersonalUploadInfo}
+                        className="inline-flex items-center justify-center gap-1.5 rounded border border-[#00ff00]/40 bg-[#00ff00]/10 px-3 py-1.5 text-[10.5px] font-mono font-semibold text-[#00ff00] transition-colors hover:border-[#00ff00] hover:bg-[#00ff00]/20"
+                      >
+                        <Upload size={12} />
+                        上传素材
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-7">
+              <section>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm font-bold text-white">
+                    <Folder size={16} className="text-[#00ff00]" />
+                    <span>子文件夹</span>
+                    <span className="font-mono text-xs text-zinc-500">({directChildFolders.length})</span>
+                  </div>
+                </div>
+
+                {directChildFolders.length > 0 ? (
+                  <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    {directChildFolders.map((folder) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedFolderId(folder.id);
+                          setExpandedFolderIds(prev => new Set(prev).add(selectedFolderId));
+                        }}
+                        className="group/folderCard min-h-[128px] rounded border border-[#27272a] bg-[#0c0c0e] p-4 text-left transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <FolderOpen size={42} className="text-zinc-500 transition-colors group-hover/folderCard:text-[#00ff00]" />
+                          <span className="rounded border border-zinc-800 bg-black px-1.5 py-0.5 text-[10px] font-mono text-zinc-500">
+                            {getFolderAssetCount(folder.id)}
                           </span>
                         </div>
+                        <div className="mt-3 min-w-0">
+                          <p className="truncate text-sm font-semibold text-zinc-200 group-hover/folderCard:text-white">
+                            {folder.name}
+                          </p>
+                          <p className="mt-1 text-[10px] font-mono text-zinc-500">
+                            {foldersByParent.get(folder.id)?.length ?? 0} 个子目录
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded border border-dashed border-[#27272a] bg-[#0c0c0e]/30 px-4 py-5 text-xs text-zinc-500">
+                    当前文件夹没有子文件夹。
+                  </div>
+                )}
+              </section>
 
-                        {/* Status overlays (Download Status / Queued) */}
-                        {isDownloaded && (
-                          <div className="absolute top-2 right-2 bg-[#00ff00] text-black rounded-full p-1 shadow-lg">
-                            <CheckCircle size={12} fill="currentColor" className="text-black" />
-                          </div>
-                        )}
+              <section>
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2 text-sm font-bold text-white">
+                    <Files size={16} className="text-[#00ff00]" />
+                    <span>素材</span>
+                    <span className="font-mono text-xs text-zinc-500">({filteredAssets.length})</span>
+                  </div>
 
-                        {activeTask && (
-                          <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center p-3 text-center">
-                            {activeTask.status === 'queued' ? (
-                              <div className="flex flex-col items-center gap-1.5 animate-pulse">
-                                <Clock size={16} className="text-amber-400" />
-                                <span className="text-[10px] font-mono text-amber-400 font-bold">排队等候中...</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={includeSubfolderAssets}
+                    onClick={() => setIncludeSubfolderAssets(prev => !prev)}
+                    className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 text-[10.5px] font-mono transition-colors ${
+                      includeSubfolderAssets
+                        ? 'border-[#00ff00]/50 bg-[#00ff00]/10 text-[#00ff00]'
+                        : 'border-zinc-800 bg-black text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    <span className={`flex h-3.5 w-3.5 items-center justify-center rounded-full border ${
+                      includeSubfolderAssets ? 'border-[#00ff00] bg-[#00ff00] text-black' : 'border-zinc-700'
+                    }`}>
+                      {includeSubfolderAssets && <Check size={10} />}
+                    </span>
+                    显示子文件夹素材
+                  </button>
+                </div>
+
+                {filteredAssets.length === 0 ? (
+                  <div className="h-64 border border-dashed border-[#27272a] rounded flex flex-col items-center justify-center p-8 text-center text-zinc-500 text-xs">
+                    没有找到匹配 “{keyword}” 描述的美术内容包。
+                  </div>
+                ) : (
+                  <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                    {paginatedAssets.map((asset) => {
+                      const isCurSelected = selectedAsset?.id === asset.id;
+                      const isDownloaded = downloadedAssetIds.has(asset.id);
+
+                      // Check if currently downloading/queued
+                      const activeTask = activeDownloads.find(task => task.assetId === asset.id);
+
+                      return (
+                        <div
+                          key={asset.id}
+                          onClick={() => {
+                            if (!isPersonalSpace) {
+                              setSelectedAsset(asset);
+                            }
+                          }}
+                          className={`group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
+                            isCurSelected
+                              ? 'border-[#00ff00]'
+                              : 'border-[#27272a] hover:border-zinc-700'
+                          }`}
+                        >
+                          {/* Thumbnail wrapper */}
+                          <div className="aspect-video relative overflow-hidden bg-black/60 shrink-0 select-none border-b border-[#18181b]">
+                            <img
+                              src={asset.thumbnail}
+                              alt={asset.name}
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
+                              referrerPolicy="no-referrer"
+                            />
+
+                            {/* Format sticker and category indicator */}
+                            <div className="absolute top-2 left-2 flex items-center gap-1">
+                              <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded uppercase">
+                                .{asset.format}
+                              </span>
+                            </div>
+
+                            {/* Status overlays (Download Status / Queued) */}
+                            {isDownloaded && (
+                              <div className="absolute top-2 right-2 bg-[#00ff00] text-black rounded-full p-1 shadow-lg">
+                                <CheckCircle size={12} fill="currentColor" className="text-black" />
                               </div>
-                            ) : (
-                              <div className="w-full px-4 flex flex-col items-center">
-                                <div className="w-6 h-6 rounded-full border-2 border-t-transparent border-[#00ff00] animate-spin mb-1.5"></div>
-                                <span className="text-[10px] font-mono text-zinc-300">后台高速并行拉取中</span>
-                                <span className="text-[12px] font-mono text-[#00ff00] font-bold mt-0.5">{activeTask.progress}%</span>
+                            )}
+
+                            {activeTask && (
+                              <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center p-3 text-center">
+                                {activeTask.status === 'queued' ? (
+                                  <div className="flex flex-col items-center gap-1.5 animate-pulse">
+                                    <Clock size={16} className="text-amber-400" />
+                                    <span className="text-[10px] font-mono text-amber-400 font-bold">排队等候中...</span>
+                                  </div>
+                                ) : (
+                                  <div className="w-full px-4 flex flex-col items-center">
+                                    <div className="w-6 h-6 rounded-full border-2 border-t-transparent border-[#00ff00] animate-spin mb-1.5"></div>
+                                    <span className="text-[10px] font-mono text-zinc-300">后台高速并行拉取中</span>
+                                    <span className="text-[12px] font-mono text-[#00ff00] font-bold mt-0.5">{activeTask.progress}%</span>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
+
+                          {showAssetCardInfo && (
+                            <div className="p-3.5 flex-1 flex flex-col justify-between">
+                              <div>
+                                <h3 className="text-xs font-bold text-white tracking-wide font-sans line-clamp-1 truncate block group-hover/card:text-[#00ff00] transition-colors">
+                                  {asset.name}
+                                </h3>
+                                <div className="flex items-center gap-2 mt-1 px-0.5">
+                                  <span className="text-[9.2px] font-mono text-zinc-500 uppercase">
+                                    类别: {asset.category.replace('_', ' ')}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="mt-3.5 pt-2 border-t border-zinc-900 flex justify-between items-center text-[10px] font-mono text-zinc-500">
+                                <span>大小: {asset.sizeMB} MB</span>
+                                {!isPersonalSpace && (
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setSelectedAsset(asset);
+                                    }}
+                                    className="text-zinc-400 text-[10.5px] group-hover/card:text-[#00ff00] flex items-center transition-colors cursor-pointer"
+                                  >
+                                    查看素材详情
+                                    <ExternalLink size={10} className="ml-1" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="px-6 py-4 border-t border-[#27272a] bg-[#0c0c0e]/80 backdrop-blur-md flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0 font-mono text-xs text-zinc-400 select-none">
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-500">
+                    当前显示 <span className="text-[#00ff00] font-bold">{startIndex + 1} - {Math.min(startIndex + itemsPerPage, filteredAssets.length)}</span> / 共 <span className="text-white font-bold">{filteredAssets.length}</span> 项
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  {/* Previous Page Button */}
+                  <button
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    className={`p-2 rounded border border-[#27272a] transition-all ${
+                      currentPage === 1
+                        ? 'text-zinc-700 bg-transparent cursor-not-allowed opacity-40'
+                        : 'text-zinc-300 hover:text-white hover:border-[#00ff00]/60 bg-[#0c0c0e] hover:bg-zinc-900 cursor-pointer'
+                    }`}
+                    title="上一页"
+                  >
+                    <ChevronLeft size={14} className="pointer-events-none" />
+                  </button>
+
+                  {/* Page numbers */}
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                    const isCurrent = page === currentPage;
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className={`w-8 h-8 rounded border transition-all text-xs font-mono font-medium ${
+                          isCurrent
+                            ? 'bg-zinc-950 border-[#00ff00] text-[#00ff00] font-bold'
+                            : 'bg-transparent border-zinc-900 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-400 hover:text-white cursor-pointer'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    );
+                  })}
+
+                  {/* Next Page Button */}
+                  <button
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    className={`p-2 rounded border border-[#27272a] transition-all ${
+                      currentPage === totalPages
+                        ? 'text-zinc-700 bg-transparent cursor-not-allowed opacity-40'
+                        : 'text-zinc-300 hover:text-white hover:border-[#00ff00]/60 bg-[#0c0c0e] hover:bg-zinc-900 cursor-pointer'
+                    }`}
+                    title="下一页"
+                  >
+                    <ChevronRight size={14} className="pointer-events-none" />
+                  </button>
+                </div>
+
+                <div className="hidden md:block text-zinc-500 text-[10px]">
+                  页码: {currentPage} / {totalPages}
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {isPersonalUploadInfoOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm p-4 flex items-center justify-center">
+          <div className="w-full max-w-[560px] rounded-xl border border-[#27272a] bg-[#0c0c0e] p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                  <Upload size={14} className="text-[#00ff00]" />
+                  上传素材说明
+                </h3>
+                <p className="mt-1 text-[11px] text-zinc-500 font-mono">
+                  个人空间目录结构与项目空间一致
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPersonalUploadInfoOpen(false)}
+                className="flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 hover:border-zinc-600 hover:text-white"
+                title="关闭"
+              >
+                <X size={13} />
+              </button>
+            </div>
+
+            <div className="mt-4 rounded border border-zinc-800 bg-black/40 p-3 text-[11px] font-mono text-zinc-300 space-y-1.5">
+              <p>1. 目录逻辑一致：支持一级目录、子目录、目录搜索、右键管理。</p>
+              <p>2. 入库目录：确认上传后自动写入个人空间置顶目录（一级目录）。</p>
+              <p>3. 格式限制：支持图片、动图(GIF)、视频。</p>
+              <p>4. 批量限制：单次最多 500 条，总大小不超过 10 GB。</p>
+              <p>5. 智能处理：上传阶段自动 AI 打标，支持标签增删改后再确认。</p>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsPersonalUploadInfoOpen(false)}
+                className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 hover:border-zinc-600 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={openPersonalUploadPicker}
+                className="rounded bg-[#00ff00] px-4 py-1.5 text-xs font-bold text-black hover:bg-[#00dd00]"
+              >
+                选择本地文件
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {personalUploadDraft && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center">
+          <div className="w-full max-w-[1080px] max-h-[88vh] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] flex flex-col">
+            <div className="px-5 py-4 border-b border-[#27272a] flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                  <Sparkles size={14} className="text-[#00ff00]" />
+                  上传预处理与 AI 自动打标
+                </h3>
+                <p className="mt-1 text-[11px] text-zinc-500 font-mono">
+                  共 {personalUploadDraft.items.length} 条 | 总大小 {formatUploadTotal(personalUploadDraft.totalBytes)} | 已完成标注 {personalReadyTaggingCount}/{personalUploadDraft.items.length}
+                </p>
+              </div>
+              <button
+                type="button"
+                title="关闭上传面板"
+                onClick={closePersonalUploadDraft}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 transition-colors hover:border-zinc-600 hover:text-white"
+              >
+                <X size={13} />
+              </button>
+            </div>
+
+            <div className="px-5 py-3 border-b border-[#27272a]">
+              <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                <div
+                  className="h-full bg-[#00ff00] transition-all"
+                  style={{
+                    width: `${personalUploadDraft.items.length === 0 ? 0 : (personalReadyTaggingCount / personalUploadDraft.items.length) * 100}%`
+                  }}
+                />
+              </div>
+              {personalUploadDraft.isTagging && (
+                <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono text-zinc-400">
+                  <Loader2 size={12} className="animate-spin text-[#00ff00]" />
+                  正在执行上传预处理和智能打标，请稍候...
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-3">
+              {personalUploadDraft.items.map((item) => (
+                <div key={item.id} className="rounded border border-[#27272a] bg-black/35 p-3">
+                  <div className="flex flex-col gap-3 xl:flex-row">
+                    <div className="w-full xl:w-52 shrink-0">
+                      <div className="aspect-video rounded border border-zinc-800 overflow-hidden bg-black">
+                        {item.uploadType === 'video' ? (
+                          <video src={item.previewUrl} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                        ) : (
+                          <img src={item.previewUrl} alt={item.fileName} className="h-full w-full object-cover" />
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="min-w-0 flex-1 space-y-2.5">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono">
+                        <p className="text-zinc-200 font-semibold truncate">{item.fileName}</p>
+                        <span className="text-zinc-500">{item.sourceFileName}</span>
+                        <span className="text-zinc-500">.{item.format}</span>
+                        <span className="text-zinc-500">{toDisplayMB(item.sizeBytes)} MB</span>
+                        <span className="text-[#00ff00]">{personalTypeLabel[item.uploadType]}</span>
+                        <span className={item.status === 'ready' ? 'text-[#00ff00]' : 'text-amber-400'}>
+                          {item.status === 'ready' ? '已打标' : '打标中'}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {item.tags.map((tag) => (
+                          <span
+                            key={`${item.id}-${tag}`}
+                            className="inline-flex items-center gap-1 rounded border border-[#00ff00]/20 bg-[#00ff00]/5 px-2 py-0.5 text-[10px] font-mono text-[#00ff00]"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => editDraftTag(item.id, tag)}
+                              className="inline-flex items-center gap-1 hover:text-white"
+                              title="编辑标签"
+                            >
+                              <Tag size={10} />
+                              #{tag}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeDraftTag(item.id, tag)}
+                              className="text-zinc-500 hover:text-red-400"
+                              title="删除标签"
+                            >
+                              <X size={10} />
+                            </button>
+                          </span>
+                        ))}
+                        {item.tags.length === 0 && (
+                          <span className="text-[10px] text-zinc-600 font-mono">暂无标签</span>
                         )}
                       </div>
 
-                      {showAssetCardInfo && (
-                        <div className="p-3.5 flex-1 flex flex-col justify-between">
-                          <div>
-                            <h3 className="text-xs font-bold text-white tracking-wide font-sans line-clamp-1 truncate block group-hover/card:text-[#00ff00] transition-colors">
-                              {asset.name}
-                            </h3>
-                            <div className="flex items-center gap-2 mt-1 px-0.5">
-                              <span className="text-[9.2px] font-mono text-zinc-500 uppercase">
-                                类别: {asset.category.replace('_', ' ')}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="mt-3.5 pt-2 border-t border-zinc-900 flex justify-between items-center text-[10px] font-mono text-zinc-500">
-                            <span>大小: {asset.sizeMB} MB</span>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setSelectedAsset(asset);
-                              }}
-                              className="text-zinc-400 text-[10.5px] group-hover/card:text-[#00ff00] flex items-center transition-colors cursor-pointer"
-                            >
-                              查看素材详情
-                              <ExternalLink size={10} className="ml-1" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={pendingTagInputs[item.id] ?? ''}
+                          onChange={(event) => setPendingTagInputs(prev => ({ ...prev, [item.id]: event.target.value }))}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              addDraftTag(item.id);
+                            }
+                          }}
+                          placeholder="新增标签并回车"
+                          className="w-full rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => addDraftTag(item.id)}
+                          className="shrink-0 rounded border border-zinc-800 bg-black px-2.5 py-1.5 text-[11px] font-mono text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
+                        >
+                          添加
+                        </button>
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="px-6 py-4 border-t border-[#27272a] bg-[#0c0c0e]/80 backdrop-blur-md flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0 font-mono text-xs text-zinc-400 select-none">
-              <div className="flex items-center gap-2">
-                <span className="text-zinc-500">
-                  当前显示 <span className="text-[#00ff00] font-bold">{startIndex + 1} - {Math.min(startIndex + itemsPerPage, filteredAssets.length)}</span> / 共 <span className="text-white font-bold">{filteredAssets.length}</span> 项
-                </span>
-              </div>
-
-              <div className="flex items-center gap-1">
-                {/* Previous Page Button */}
-                <button
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  className={`p-2 rounded border border-[#27272a] transition-all ${
-                    currentPage === 1
-                      ? 'text-zinc-700 bg-transparent cursor-not-allowed opacity-40'
-                      : 'text-zinc-300 hover:text-white hover:border-[#00ff00]/60 bg-[#0c0c0e] hover:bg-zinc-900 cursor-pointer'
-                  }`}
-                  title="上一页"
-                >
-                  <ChevronLeft size={14} className="pointer-events-none" />
-                </button>
-
-                {/* Page numbers */}
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
-                  const isCurrent = page === currentPage;
-                  return (
-                    <button
-                      key={page}
-                      onClick={() => setCurrentPage(page)}
-                      className={`w-8 h-8 rounded border transition-all text-xs font-mono font-medium ${
-                        isCurrent
-                          ? 'bg-zinc-950 border-[#00ff00] text-[#00ff00] font-bold'
-                          : 'bg-transparent border-zinc-900 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-400 hover:text-white cursor-pointer'
-                      }`}
-                    >
-                      {page}
-                    </button>
-                  );
-                })}
-
-                {/* Next Page Button */}
-                <button
-                  disabled={currentPage === totalPages}
-                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                  className={`p-2 rounded border border-[#27272a] transition-all ${
-                    currentPage === totalPages
-                      ? 'text-zinc-700 bg-transparent cursor-not-allowed opacity-40'
-                      : 'text-zinc-300 hover:text-white hover:border-[#00ff00]/60 bg-[#0c0c0e] hover:bg-zinc-900 cursor-pointer'
-                  }`}
-                  title="下一页"
-                >
-                  <ChevronRight size={14} className="pointer-events-none" />
-                </button>
-              </div>
-
-              <div className="hidden md:block text-zinc-500 text-[10px]">
-                页码: {currentPage} / {totalPages}
-              </div>
+                  </div>
+                </div>
+              ))}
             </div>
-          )}
+
+            <div className="px-5 py-4 border-t border-[#27272a] flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={closePersonalUploadDraft}
+                className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmPersonalUpload}
+                disabled={personalUploadDraft.isTagging}
+                className={`rounded px-4 py-1.5 text-xs font-bold transition-colors ${
+                  personalUploadDraft.isTagging
+                    ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                    : 'bg-[#00ff00] text-black hover:bg-[#00dd00]'
+                }`}
+              >
+                确认上传到置顶目录
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

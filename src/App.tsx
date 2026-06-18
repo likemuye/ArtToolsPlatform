@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { PROJECT_SPACES, INITIAL_APPS, EXTENSIONS_PROJECT_A, ART_ASSETS_PROJECT_A } from './data';
-import { ProjectSpace, AppConfig, DccExtension, ArtAsset, SpaceId } from './types';
+import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId } from './types';
 
 // Importing child components
 import Sidebar from './components/Sidebar';
@@ -50,6 +50,7 @@ export default function App() {
   const [apps, setApps] = useState<AppConfig[]>(INITIAL_APPS);
   const [extensions, setExtensions] = useState<DccExtension[]>(EXTENSIONS_PROJECT_A);
   const [assets] = useState<ArtAsset[]>(ART_ASSETS_PROJECT_A);
+  const [personalAssets, setPersonalAssets] = useState<PersonalUploadedAsset[]>([]);
 
   // Pre-seed some downloaded assets to show the "Already Downloaded" status immediately in V1 demo
   const [downloadedAssetIds, setDownloadedAssetIds] = useState<Set<string>>(
@@ -142,6 +143,8 @@ export default function App() {
             currentSpace={currentSpace}
             apps={apps}
             assets={assets}
+            personalAssets={personalAssets}
+            setPersonalAssets={setPersonalAssets}
             downloadedAssetIds={downloadedAssetIds}
             setDownloadedAssetIds={setDownloadedAssetIds}
             simulatedDiskGB={simulatedDiskGB}
