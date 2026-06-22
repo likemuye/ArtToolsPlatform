@@ -81,6 +81,15 @@ const DEFAULT_FOLDER_PANE_WIDTH = 304;
 const MIN_FOLDER_PANE_WIDTH = 240;
 const MAX_FOLDER_PANE_WIDTH = 520;
 
+// Folder name validation rules: length cap, illegal chars, reserved names, sibling uniqueness
+const FOLDER_NAME_MAX_LENGTH = 32;
+const ILLEGAL_FOLDER_NAME_CHARS_REGEX = /[\\/:*?"<>|]/;
+const RESERVED_FOLDER_NAMES = new Set([
+  'CON', 'PRN', 'AUX', 'NUL',
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+]);
+
 const personalTypeLabel: Record<PersonalUploadType, string> = {
   image: '图片',
   gif: '动图',
@@ -664,6 +673,40 @@ export default function AssetLibrary({
     return map;
   }, [folders]);
 
+  // Folder name validation: empty / length / illegal chars / leading dot / reserved / sibling duplicate.
+  // Returns an error message string, or '' when the name is valid. Used both to block submit and to
+  // show live inline feedback in the editor.
+  const validateFolderName = (
+    rawName: string,
+    editor: { mode: 'create' | 'rename'; parentId: string | null; folderId?: string }
+  ): string => {
+    const name = rawName.trim();
+    if (!name) return '文件夹名称不能为空';
+
+    const charCount = [...name].length;
+    if (charCount > FOLDER_NAME_MAX_LENGTH) {
+      return `文件夹名称不能超过 ${FOLDER_NAME_MAX_LENGTH} 个字符（当前 ${charCount} 个）`;
+    }
+    if (ILLEGAL_FOLDER_NAME_CHARS_REGEX.test(name)) {
+      return '名称不能包含 \\ / : * ? " < > | 等特殊字符';
+    }
+    if (name.startsWith('.')) {
+      return '名称不能以 "." 开头';
+    }
+    if (RESERVED_FOLDER_NAMES.has(name.toUpperCase())) {
+      return '不能使用系统保留名（如 CON、NUL、COM1 等）';
+    }
+
+    const siblings = foldersByParent.get(editor.parentId) ?? [];
+    const hasConflict = siblings.some(folder => (
+      folder.id !== editor.folderId &&
+      folder.name.trim().toLowerCase() === name.toLowerCase()
+    ));
+    if (hasConflict) return '该目录下已存在同名文件夹';
+
+    return '';
+  };
+
   const folderById = useMemo(() => {
     return folders.reduce<Record<string, AssetFolder>>((acc, folder) => {
       acc[folder.id] = folder;
@@ -1046,8 +1089,13 @@ export default function AssetLibrary({
   const submitFolderEditor = () => {
     if (!folderEditor) return;
 
+    const error = validateFolderName(folderEditor.name, folderEditor);
+    if (error) {
+      addLog(`❌ 文件夹操作被拦截：${error}`, 'error');
+      return;
+    }
+
     const folderName = folderEditor.name.trim();
-    if (!folderName) return;
 
     if (folderEditor.mode === 'create') {
       const newFolder: AssetFolder = {
@@ -1080,31 +1128,43 @@ export default function AssetLibrary({
     setFolderContextMenu(null);
     const deletedFolderIds = new Set([targetFolder.id, ...getDescendantFolderIds(targetFolder.id)]);
     const remainingFolders = folders.filter(folder => !deletedFolderIds.has(folder.id));
-    if (remainingFolders.length === 0) {
-      alert('素材库至少需要保留一个文件夹。');
-      return;
-    }
 
-    const fallbackFolderId = targetFolder.parentId && remainingFolders.some(folder => folder.id === targetFolder.parentId)
-      ? targetFolder.parentId
-      : remainingFolders.find(folder => folder.parentId === null)?.id ?? remainingFolders[0].id;
+    // Fallback folder to re-home affected assets. When every folder is deleted there is none,
+    // so affected assets are detached from the tree instead (rule: the folder directory may be empty).
+    const fallbackFolder = (targetFolder.parentId && remainingFolders.some(folder => folder.id === targetFolder.parentId))
+      ? folderById[targetFolder.parentId]
+      : (remainingFolders.find(folder => folder.parentId === null) ?? remainingFolders[0]);
+    const fallbackFolderId = fallbackFolder?.id;
 
-    const assetCount = activeAssets.filter(asset => deletedFolderIds.has(folderAssignments[asset.id] ?? DEFAULT_ASSET_FOLDER_ID)).length;
-    const confirmed = window.confirm(`确认删除「${targetFolder.name}」及其 ${deletedFolderIds.size - 1} 个子文件夹吗？\n\n其中 ${assetCount} 个素材会移动到上级文件夹。`);
+    const affectedAssetCount = activeAssets.filter(asset => deletedFolderIds.has(folderAssignments[asset.id] ?? DEFAULT_ASSET_FOLDER_ID)).length;
+    const assetHint = affectedAssetCount > 0
+      ? (fallbackFolderId
+        ? `\n\n其中 ${affectedAssetCount} 个素材会移动到上级文件夹。`
+        : `\n\n其中 ${affectedAssetCount} 个素材将解除目录归属（删除后无文件夹留存）。`)
+      : '';
+    const confirmed = window.confirm(`确认删除「${targetFolder.name}」及其 ${deletedFolderIds.size - 1} 个子文件夹吗？${assetHint}`);
     if (!confirmed) return;
 
     setFolders(remainingFolders);
     setFolderAssignments(prev => {
       const next = { ...prev };
       Object.entries(next).forEach(([assetId, folderId]) => {
-        if (deletedFolderIds.has(folderId)) {
+        if (!deletedFolderIds.has(folderId)) return;
+        if (fallbackFolderId) {
           next[assetId] = fallbackFolderId;
+        } else {
+          delete next[assetId];
         }
       });
       return next;
     });
-    setSelectedFolderId(fallbackFolderId);
-    addLog(`🗑️ 已删除素材文件夹: ${targetFolder.name}，相关素材已移动到上级目录。`, 'warning');
+    if (fallbackFolderId) {
+      setSelectedFolderId(fallbackFolderId);
+    }
+    addLog(
+      `🗑️ 已删除素材文件夹: ${targetFolder.name}，${fallbackFolderId ? '相关素材已移动到上级目录。' : '文件夹目录已清空。'}`,
+      'warning'
+    );
   };
 
   const toggleFolderExpanded = (folderId: string) => {
@@ -1151,6 +1211,9 @@ export default function AssetLibrary({
       ? [selectedFolder.id, ...(includeSubfolderAssets ? getDescendantFolderIds(selectedFolder.id) : [])]
       : []
   );
+
+  // Live validation result for the inline folder editor (drives error text + disabled confirm).
+  const folderEditorError = folderEditor ? validateFolderName(folderEditor.name, folderEditor) : '';
 
   // Filtering calculation
   const filteredAssets = activeAssets.filter(asset => {
@@ -1407,20 +1470,30 @@ export default function AssetLibrary({
                   <div className="flex items-center gap-2">
                     <input
                       autoFocus
+                      maxLength={FOLDER_NAME_MAX_LENGTH}
                       value={folderEditor.name}
                       onChange={(event) => setFolderEditor(prev => prev ? { ...prev, name: event.target.value } : prev)}
                       onKeyDown={(event) => {
-                        if (event.key === 'Enter') submitFolderEditor();
+                        if (event.key === 'Enter' && !folderEditorError) submitFolderEditor();
                         if (event.key === 'Escape') setFolderEditor(null);
                       }}
                       placeholder={folderEditor.mode === 'create' ? '文件夹名称' : '重命名'}
-                      className="min-w-0 flex-1 rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
+                      className={`min-w-0 flex-1 rounded border bg-[#0c0c0e] px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors ${
+                        folderEditorError
+                          ? 'border-red-500/70 focus:border-red-500'
+                          : 'border-zinc-800 focus:border-[#00ff00]'
+                      }`}
                     />
                     <button
                       type="button"
-                      title="确认"
+                      title={folderEditorError || '确认'}
+                      disabled={!!folderEditorError}
                       onClick={submitFolderEditor}
-                      className="flex h-7 w-7 items-center justify-center rounded bg-[#00ff00] text-black"
+                      className={`flex h-7 w-7 items-center justify-center rounded transition-colors ${
+                        folderEditorError
+                          ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+                          : 'bg-[#00ff00] text-black'
+                      }`}
                     >
                       <Check size={13} />
                     </button>
@@ -1433,13 +1506,22 @@ export default function AssetLibrary({
                       <X size={13} />
                     </button>
                   </div>
+                  {folderEditorError && (
+                    <p className="mt-1.5 px-0.5 text-[10px] font-mono leading-relaxed text-red-400">
+                      {folderEditorError}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
 
             <div className="flex-1 overflow-y-auto p-3 max-h-[240px] lg:max-h-none">
               <div className="space-y-1">
-                {renderFolderTree(null)}
+                {folders.length === 0 ? (
+                  <div className="rounded border border-dashed border-[#27272a] bg-[#0c0c0e]/30 px-3 py-4 text-center text-[11px] text-zinc-500 font-mono">
+                    暂无文件夹，点击上方 <span className="text-[#00ff00] font-bold">+</span> 新建。
+                  </div>
+                ) : renderFolderTree(null)}
               </div>
             </div>
           </aside>
@@ -1610,7 +1692,9 @@ export default function AssetLibrary({
 
                 {filteredAssets.length === 0 ? (
                   <div className="h-64 border border-dashed border-[#27272a] rounded flex flex-col items-center justify-center p-8 text-center text-zinc-500 text-xs">
-                    没有找到匹配 “{keyword}” 描述的美术内容包。
+                    {folders.length === 0
+                      ? '当前没有文件夹，请新建文件夹后在此查看素材。'
+                      : `没有找到匹配 “${keyword}” 描述的美术内容包。`}
                   </div>
                 ) : (
                   <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
