@@ -717,6 +717,162 @@
   color: #94a3b8 !important;
 }
 
+/* Delete-folder confirm modal theme fixes */
+.delete-folder-modal {
+  background-color: rgba(0, 0, 0, 0.85) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+.light .delete-folder-modal {
+  background-color: rgba(255, 255, 255, 0.62) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+.light .delete-folder-modal-panel {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12) !important;
+}
+
+.light .delete-folder-modal-body {
+  background-color: #f8fafc !important;
+  border-color: #dbe4ee !important;
+  color: #334155 !important;
+}
+
+.light .delete-folder-modal-warning {
+  color: #b45309 !important;
+}
+
+.light .delete-folder-modal-close,
+.light .delete-folder-modal-cancel {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+
+.light .delete-folder-modal-close:hover,
+.light .delete-folder-modal-cancel:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+.light .delete-folder-modal-confirm {
+  background-color: #b91c1c !important;
+  border-color: #b91c1c !important;
+  color: #ffffff !important;
+}
+
+.light .delete-folder-modal-confirm:hover {
+  background-color: #991b1b !important;
+  border-color: #991b1b !important;
+  color: #ffffff !important;
+}
+
+/* Personal-upload info modal theme fixes */
+.personal-upload-info-modal {
+  background-color: rgba(0, 0, 0, 0.8) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+.light .personal-upload-info-modal {
+  background-color: rgba(255, 255, 255, 0.62) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+.light .personal-upload-info-panel {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12) !important;
+}
+
+.light .personal-upload-info-body {
+  background-color: #f8fafc !important;
+  border-color: #dbe4ee !important;
+  color: #334155 !important;
+}
+
+.light .personal-upload-info-close,
+.light .personal-upload-info-cancel {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+
+.light .personal-upload-info-close:hover,
+.light .personal-upload-info-cancel:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+/* Personal-upload modal theme fixes */
+.personal-upload-modal {
+  background-color: rgba(0, 0, 0, 0.85) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+.light .personal-upload-modal {
+  background-color: rgba(255, 255, 255, 0.62) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+.light .personal-upload-modal-panel {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12) !important;
+}
+
+.light .personal-upload-modal-item {
+  background-color: #f8fafc !important;
+  border-color: #dbe4ee !important;
+}
+
+.light .personal-upload-modal-preview {
+  background-color: #eef2f7 !important;
+  border-color: #d3deea !important;
+}
+
+.light .personal-upload-modal-input {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.light .personal-upload-modal-input::placeholder {
+  color: #94a3b8 !important;
+}
+
+.light .personal-upload-modal-add-tag,
+.light .personal-upload-modal-close,
+.light .personal-upload-modal-cancel {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+
+.light .personal-upload-modal-add-tag:hover,
+.light .personal-upload-modal-close:hover,
+.light .personal-upload-modal-cancel:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+/* Subfolder-assets toggle light mode fix */
+.light .subfolder-assets-toggle.is-active {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+.light .subfolder-assets-toggle-indicator.is-active {
+  background-color: #64748b !important;
+  border-color: #64748b !important;
+  color: #ffffff !important;
+}
+
 /* 3. Ensure card dividers (such as asset card top dividers and extension card dividers) are clean light grey */
 .light .border-zinc-900\/60,
 .light .border-t.border-zinc-900\/60,

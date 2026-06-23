@@ -208,7 +208,7 @@ export default function Sidebar({
                     isActive 
                       ? 'bg-[#18181b] text-white font-medium' 
                       : 'text-zinc-400 hover:text-white hover:bg-[#0c0c0e]'
-                  } ${isCollapsed ? 'h-14 w-14 mx-auto p-1.5 flex flex-col items-center gap-0.5' : 'py-2 px-3 flex items-center justify-between text-left'}`}
+                  } ${isCollapsed ? 'h-14 w-14 mx-auto p-1.5 flex flex-col items-center justify-center gap-0.5' : 'py-2 px-3 flex items-center justify-between text-left'}`}
                 >
                   <div className={`flex ${isCollapsed ? 'flex-col items-center gap-1' : 'items-center gap-3'}`}>
                     <TabIcon size={isCollapsed ? 15 : 16} className={isActive ? 'text-[#00ff00]' : 'text-zinc-400 group-hover:text-zinc-200'} />
@@ -247,7 +247,7 @@ export default function Sidebar({
                     key={tab.id}
                     title="PRD 规划 V2 版本，当前仅作原型占位"
                     className={`w-full border border-dashed border-zinc-800/40 opacity-40 cursor-not-allowed text-zinc-500 rounded ${
-                      isCollapsed ? 'h-14 w-14 mx-auto p-1.5 flex flex-col items-center gap-0.5' : 'py-2 px-3 flex items-center justify-between text-left'
+                      isCollapsed ? 'h-14 w-14 mx-auto p-1.5 flex flex-col items-center justify-center gap-0.5' : 'py-2 px-3 flex items-center justify-between text-left'
                     }`}
                   >
                     <div className={`flex ${isCollapsed ? 'flex-col items-center gap-1' : 'items-center gap-3'}`}>
