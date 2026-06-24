@@ -166,6 +166,20 @@ const dedupeTags = (tags: string[]) => {
   return next;
 };
 
+const fuzzyTagMatch = (candidate: string, query: string) => {
+  const source = candidate.toLowerCase();
+  const target = query.toLowerCase();
+  if (!target) return false;
+  if (source.includes(target)) return true;
+
+  let pointer = 0;
+  for (const ch of source) {
+    if (ch === target[pointer]) pointer += 1;
+    if (pointer === target.length) return true;
+  }
+  return false;
+};
+
 const getFileExtension = (fileName: string) => {
   const ext = fileName.split('.').pop();
   return ext ? ext.toLowerCase() : '';
@@ -371,6 +385,7 @@ export default function AssetLibrary({
     folderId?: string;
     name: string;
   } | null>(null);
+  const [isFolderEditorSubmitAttempted, setIsFolderEditorSubmitAttempted] = useState<boolean>(false);
   const [folderContextMenu, setFolderContextMenu] = useState<{
     folderId: string;
     x: number;
@@ -394,6 +409,7 @@ export default function AssetLibrary({
     assetName: string;
   } | null>(null);
   const [isPersonalUploadInfoOpen, setIsPersonalUploadInfoOpen] = useState<boolean>(false);
+  const [isPersonalUploadDropzoneActive, setIsPersonalUploadDropzoneActive] = useState<boolean>(false);
   const [personalUploadDraft, setPersonalUploadDraft] = useState<PersonalUploadDraft | null>(null);
   const [pendingTagInputs, setPendingTagInputs] = useState<Record<string, string>>({});
   const [folderPaneWidth, setFolderPaneWidth] = useState<number>(getInitialFolderPaneWidth);
@@ -566,6 +582,11 @@ export default function AssetLibrary({
   const isProjectA = currentSpace.id === SpaceId.ProjectA;
   const isPersonalSpace = currentSpace.id === SpaceId.Personal;
   const activeAssets: ArtAsset[] = isPersonalSpace ? personalAssets : assets;
+  const existingTagPool = useMemo(() => {
+    const sourceTags = assets.flatMap(asset => asset.tags);
+    const personalTags = personalAssets.flatMap(asset => asset.tags);
+    return dedupeTags([...sourceTags, ...personalTags]);
+  }, [assets, personalAssets]);
   // Fit scale in CSS pixels at zoom=1. When zoom <= 1 we treat preview as fit mode.
   const previewFitScale = useMemo(() => {
     if (
@@ -666,6 +687,11 @@ export default function AssetLibrary({
     setPendingTagInputs({});
   };
 
+  const resetPersonalUploadDraftToInitial = () => {
+    closePersonalUploadDraft();
+    setIsPersonalUploadInfoOpen(true);
+  };
+
   const updateDraftItemTags = (itemId: string, updater: (tags: string[]) => string[]) => {
     setPersonalUploadDraft(prev => {
       if (!prev) return prev;
@@ -694,6 +720,20 @@ export default function AssetLibrary({
     });
   };
 
+  const updateDraftItemName = (itemId: string, nextName: string) => {
+    setPersonalUploadDraft(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.map(item => (
+          item.id === itemId
+            ? { ...item, fileName: nextName.replace(/\r?\n/g, '').slice(0, 80) }
+            : item
+        ))
+      };
+    });
+  };
+
   const addDraftTag = (itemId: string) => {
     const value = normalizeTag(pendingTagInputs[itemId] ?? '');
     if (!value) return;
@@ -701,11 +741,37 @@ export default function AssetLibrary({
     setPendingTagInputs(prev => ({ ...prev, [itemId]: '' }));
   };
 
+  const getTagSuggestions = (itemId: string) => {
+    const query = normalizeTag(pendingTagInputs[itemId] ?? '');
+    if (!query) return [];
+
+    const currentItem = personalUploadDraft?.items.find(item => item.id === itemId);
+    const exists = new Set((currentItem?.tags ?? []).map(tag => tag.toLowerCase()));
+
+    return existingTagPool
+      .filter(tag => !exists.has(tag.toLowerCase()))
+      .filter(tag => fuzzyTagMatch(tag, query))
+      .slice(0, 8);
+  };
+
   const removeDraftTag = (itemId: string, tagToRemove: string) => {
     updateDraftItemTags(itemId, tags => tags.filter(tag => tag !== tagToRemove));
   };
 
   const removeDraftItem = (itemId: string, fileName: string) => {
+    const isRemovingLastDraftItem = (
+      !!personalUploadDraft &&
+      personalUploadDraft.items.length === 1 &&
+      personalUploadDraft.items[0].id === itemId
+    );
+
+    if (isRemovingLastDraftItem) {
+      URL.revokeObjectURL(personalUploadDraft.items[0].previewUrl);
+      resetPersonalUploadDraftToInitial();
+      addLog(`🗑️ 已从上传草稿移除素材: ${fileName}`, 'warning');
+      return;
+    }
+
     setPersonalUploadDraft(prev => {
       if (!prev) return prev;
 
@@ -753,7 +819,7 @@ export default function AssetLibrary({
     const timestampBase = Date.now();
     const newAssets: PersonalUploadedAsset[] = personalUploadDraft.items.map((item, index) => ({
       id: `personal-asset-${timestampBase}-${index}`,
-      name: getFileBaseName(item.fileName),
+      name: item.fileName.trim() || getFileBaseName(item.sourceFileName),
       category: item.category,
       format: item.format,
       sizeMB: toDisplayMB(item.sizeBytes),
@@ -782,9 +848,7 @@ export default function AssetLibrary({
     closePersonalUploadDraft();
   };
 
-  const handlePersonalFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = '';
+  const startPersonalUploadFromFiles = async (files: File[]) => {
     if (files.length === 0) return;
 
     const unsupported = files.filter(file => inferUploadType(file) === null);
@@ -864,11 +928,51 @@ export default function AssetLibrary({
     addLog(`🤖 AI 自动打标完成：${files.length} 条素材可确认标签后入库。`, 'success');
   };
 
+  const handlePersonalFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    await startPersonalUploadFromFiles(files);
+  };
+
+  const handlePersonalUploadDrop = (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsPersonalUploadDropzoneActive(false);
+
+    const files = Array.from(event.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    void startPersonalUploadFromFiles(files);
+  };
+
+  const handlePersonalUploadDragEnter = (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsPersonalUploadDropzoneActive(true);
+  };
+
+  const handlePersonalUploadDragOver = (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isPersonalUploadDropzoneActive) {
+      setIsPersonalUploadDropzoneActive(true);
+    }
+  };
+
+  const handlePersonalUploadDragLeave = (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const relatedTarget = event.relatedTarget as Node | null;
+    if (!relatedTarget || !event.currentTarget.contains(relatedTarget)) {
+      setIsPersonalUploadDropzoneActive(false);
+    }
+  };
+
   const openPersonalUploadPicker = () => {
     personalUploadInputRef.current?.click();
   };
 
   const openPersonalUploadInfo = () => {
+    setIsPersonalUploadDropzoneActive(false);
     setIsPersonalUploadInfoOpen(true);
   };
 
@@ -1307,8 +1411,14 @@ export default function AssetLibrary({
     addLog(`⚠️ 已从后台下载排队中移除该素材缓存下载操作。`, 'warning');
   };
 
+  const closeFolderEditor = () => {
+    setFolderEditor(null);
+    setIsFolderEditorSubmitAttempted(false);
+  };
+
   const openCreateFolderEditor = (parentId: string | null) => {
     setFolderContextMenu(null);
+    setIsFolderEditorSubmitAttempted(false);
     setFolderEditor({
       mode: 'create',
       parentId,
@@ -1322,6 +1432,7 @@ export default function AssetLibrary({
 
     setFolderContextMenu(null);
     setSelectedFolderId(folder.id);
+    setIsFolderEditorSubmitAttempted(false);
     setFolderEditor({
       mode: 'rename',
       parentId: folder.parentId,
@@ -1333,6 +1444,7 @@ export default function AssetLibrary({
   const submitFolderEditor = () => {
     if (!folderEditor) return;
 
+    setIsFolderEditorSubmitAttempted(true);
     const error = validateFolderName(folderEditor.name, folderEditor);
     if (error) {
       addLog(`❌ 文件夹操作被拦截：${error}`, 'error');
@@ -1362,7 +1474,7 @@ export default function AssetLibrary({
       addLog(`✏️ 文件夹已重命名: ${originalName} → ${folderName}`, 'success');
     }
 
-    setFolderEditor(null);
+    closeFolderEditor();
   };
 
   const openDeleteFolderConfirm = (folderId = selectedFolderId) => {
@@ -1519,8 +1631,8 @@ export default function AssetLibrary({
       : []
   );
 
-  // Live validation result for the inline folder editor (drives error text + disabled confirm).
-  const folderEditorError = folderEditor ? validateFolderName(folderEditor.name, folderEditor) : '';
+  const folderEditorValidationError = folderEditor ? validateFolderName(folderEditor.name, folderEditor) : '';
+  const shouldShowFolderEditorError = isFolderEditorSubmitAttempted && !!folderEditorValidationError;
 
   // Filtering calculation
   const filteredAssets = activeAssets.filter(asset => {
@@ -1816,23 +1928,23 @@ export default function AssetLibrary({
                       value={folderEditor.name}
                       onChange={(event) => setFolderEditor(prev => prev ? { ...prev, name: event.target.value } : prev)}
                       onKeyDown={(event) => {
-                        if (event.key === 'Enter' && !folderEditorError) submitFolderEditor();
-                        if (event.key === 'Escape') setFolderEditor(null);
+                        if (event.key === 'Enter') submitFolderEditor();
+                        if (event.key === 'Escape') closeFolderEditor();
                       }}
                       placeholder={folderEditor.mode === 'create' ? '文件夹名称' : '重命名'}
                       className={`min-w-0 flex-1 rounded border bg-[#0c0c0e] px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors ${
-                        folderEditorError
+                        shouldShowFolderEditorError
                           ? 'border-red-500/70 focus:border-red-500'
                           : 'border-zinc-800 focus:border-[#00ff00]'
                       }`}
                     />
                     <button
                       type="button"
-                      title={folderEditorError || '确认'}
-                      disabled={!!folderEditorError}
+                      title={shouldShowFolderEditorError ? folderEditorValidationError : '确认'}
+                      disabled={shouldShowFolderEditorError}
                       onClick={submitFolderEditor}
                       className={`flex h-7 w-7 items-center justify-center rounded transition-colors ${
-                        folderEditorError
+                        shouldShowFolderEditorError
                           ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
                           : 'bg-[#00ff00] text-black'
                       }`}
@@ -1842,15 +1954,15 @@ export default function AssetLibrary({
                     <button
                       type="button"
                       title="取消"
-                      onClick={() => setFolderEditor(null)}
+                      onClick={closeFolderEditor}
                       className="flex h-7 w-7 items-center justify-center rounded border border-zinc-800 text-zinc-500 hover:text-white"
                     >
                       <X size={13} />
                     </button>
                   </div>
-                  {folderEditorError && (
+                  {shouldShowFolderEditorError && (
                     <p className="mt-1.5 px-0.5 text-[10px] font-mono leading-relaxed text-red-400">
-                      {folderEditorError}
+                      {folderEditorValidationError}
                     </p>
                   )}
                 </div>
@@ -2220,11 +2332,8 @@ export default function AssetLibrary({
               <div>
                 <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
                   <Upload size={14} className="text-[#00ff00]" />
-                  上传素材说明
+                  上传素材
                 </h3>
-                <p className="mt-1 text-[11px] text-zinc-500 font-mono">
-                  个人空间目录结构与项目空间一致
-                </p>
               </div>
               <button
                 type="button"
@@ -2243,6 +2352,26 @@ export default function AssetLibrary({
               <p>4. 批量限制：单次最多 500 条，总大小不超过 10 GB。</p>
               <p>5. 智能处理：上传阶段自动 AI 打标，支持标签增删改后再确认。</p>
             </div>
+
+            <button
+              type="button"
+              onClick={openPersonalUploadPicker}
+              onDragEnter={handlePersonalUploadDragEnter}
+              onDragOver={handlePersonalUploadDragOver}
+              onDragLeave={handlePersonalUploadDragLeave}
+              onDrop={handlePersonalUploadDrop}
+              className={`personal-upload-dropzone mt-3 w-full rounded-lg border-2 border-dashed px-4 py-5 text-center transition-colors ${
+                isPersonalUploadDropzoneActive
+                  ? 'is-dragging border-[#00ff00] bg-[#00ff00]/10 text-[#00ff00]'
+                  : 'border-zinc-700 bg-black/30 text-zinc-400 hover:border-[#00ff00]/60 hover:text-zinc-200'
+              }`}
+              title="点击选择文件，或拖拽文件到此处上传"
+            >
+              <div className="pointer-events-none flex flex-col items-center gap-2">
+                <Upload size={16} />
+                <p className="text-[11.5px] font-semibold">点击或拖拽文件到此处上传</p>
+              </div>
+            </button>
 
             <div className="mt-4 flex items-center justify-end gap-3">
               <button
@@ -2359,57 +2488,65 @@ export default function AssetLibrary({
             </div>
 
             <div className="personal-upload-modal-list flex-1 overflow-y-auto p-5 space-y-3">
-              {personalUploadDraft.items.map((item) => (
+              {personalUploadDraft.items.map((item) => {
+                const tagSuggestions = getTagSuggestions(item.id);
+                return (
                 <div key={item.id} className="personal-upload-modal-item rounded border border-[#27272a] bg-black/35 p-3">
                   <div className="flex items-start gap-3">
                     <div className="w-28 sm:w-32 shrink-0">
-                      <div className="personal-upload-modal-preview aspect-[4/3] rounded border border-zinc-800 overflow-hidden bg-black">
+                      <div className="personal-upload-modal-preview relative aspect-[4/3] rounded border border-zinc-800 overflow-hidden bg-black">
                         {item.uploadType === 'video' ? (
                           <video src={item.previewUrl} className="h-full w-full object-cover" muted playsInline preload="metadata" />
                         ) : (
                           <img src={item.previewUrl} alt={item.fileName} className="h-full w-full object-cover" />
                         )}
+                        <span
+                          className={`personal-upload-modal-status-badge pointer-events-none absolute left-1.5 top-1.5 inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-mono ${
+                            item.status === 'ready'
+                              ? 'is-ready border-[#00ff00]/50 bg-black/65 text-[#00ff00]'
+                              : 'is-pending border-amber-400/50 bg-black/65 text-amber-300'
+                          }`}
+                        >
+                          {item.status === 'ready' ? '已打标' : '打标中'}
+                        </span>
                       </div>
                     </div>
 
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-zinc-200 text-[12px] font-semibold truncate">{item.fileName}</p>
-                          <button
-                            type="button"
-                            onClick={() => removeDraftItem(item.id, item.fileName)}
-                            className="shrink-0 inline-flex items-center gap-1 rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] font-mono text-zinc-500 transition-colors hover:border-red-500/60 hover:text-red-300"
-                            title="移除此素材"
-                          >
-                            <X size={10} />
-                            移除
-                          </button>
+                        <div className="min-w-0 flex items-center gap-2">
+                          <span className="shrink-0 text-[10px] font-mono text-zinc-500">文件名</span>
+                          <input
+                            type="text"
+                            value={item.fileName}
+                            onChange={(event) => updateDraftItemName(item.id, event.target.value)}
+                            placeholder="请输入素材名称"
+                            className="personal-upload-modal-input min-w-0 w-full rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
+                          />
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10.5px] font-mono">
-                          <span className="text-zinc-500 truncate max-w-full">{item.sourceFileName}</span>
+                        <div className="flex flex-wrap items-center gap-y-1 text-[10.5px] font-mono">
                           <span className="text-zinc-500">.{item.format}</span>
-                          <span className="text-zinc-500">{toDisplayMB(item.sizeBytes)} MB</span>
-                          <span className="text-[#00ff00]">{personalTypeLabel[item.uploadType]}</span>
-                          <label className="inline-flex items-center gap-1 text-zinc-500">
-                            分类
-                            <select
-                              value={item.category}
-                              onChange={(event) => updateDraftItemCategory(item.id, event.target.value as AssetCategory)}
-                              className="rounded border border-zinc-800 bg-[#0c0c0e] px-1.5 py-0.5 text-[10px] text-zinc-200"
-                            >
-                              {uploadCategoryOptions.map((option) => (
-                                <option key={option.id} value={option.id}>{option.name}</option>
-                              ))}
-                            </select>
-                          </label>
-                          <span className={item.status === 'ready' ? 'text-[#00ff00]' : 'text-amber-400'}>
-                            {item.status === 'ready' ? '已打标' : '打标中'}
-                          </span>
+                          <span className="ml-2 border-l border-zinc-800 pl-2 text-zinc-500">{toDisplayMB(item.sizeBytes)} MB</span>
+                          <span className="ml-2 border-l border-zinc-800 pl-2 text-[#00ff00]">{personalTypeLabel[item.uploadType]}</span>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <label className="inline-flex items-center gap-1 text-[10.5px] font-mono text-zinc-500">
+                          分类
+                          <select
+                            value={item.category}
+                            onChange={(event) => updateDraftItemCategory(item.id, event.target.value as AssetCategory)}
+                            className="rounded border border-zinc-800 bg-[#0c0c0e] px-1.5 py-0.5 text-[10px] text-zinc-200"
+                          >
+                            {uploadCategoryOptions.map((option) => (
+                              <option key={option.id} value={option.id}>{option.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <span className="ml-1 inline-flex items-center border-l border-zinc-800 pl-2 text-[10.5px] font-mono text-zinc-500">
+                          标签
+                        </span>
                         {item.tags.map((tag) => (
                           <span
                             key={`${item.id}-${tag}`}
@@ -2440,19 +2577,21 @@ export default function AssetLibrary({
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={pendingTagInputs[item.id] ?? ''}
-                          onChange={(event) => setPendingTagInputs(prev => ({ ...prev, [item.id]: event.target.value }))}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault();
-                              addDraftTag(item.id);
-                            }
-                          }}
-                          placeholder="新增标签并回车"
-                          className="personal-upload-modal-input w-full rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
-                        />
+                        <div className="w-full max-w-[420px]">
+                          <input
+                            type="text"
+                            value={pendingTagInputs[item.id] ?? ''}
+                            onChange={(event) => setPendingTagInputs(prev => ({ ...prev, [item.id]: event.target.value }))}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                addDraftTag(item.id);
+                              }
+                            }}
+                            placeholder="新增标签并回车"
+                            className="personal-upload-modal-input w-full rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
+                          />
+                        </div>
                         <button
                           type="button"
                           onClick={() => addDraftTag(item.id)}
@@ -2461,10 +2600,38 @@ export default function AssetLibrary({
                           添加
                         </button>
                       </div>
+
+                      {tagSuggestions.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          <span className="text-[10px] font-mono text-zinc-500">推荐标签</span>
+                          {tagSuggestions.map((tag) => (
+                            <button
+                              key={`${item.id}-suggest-${tag}`}
+                              type="button"
+                              onClick={() => updateDraftItemTags(item.id, tags => [...tags, tag])}
+                              className="rounded border border-zinc-800 bg-black px-2 py-0.5 text-[10px] font-mono text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
+                            >
+                              #{tag}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="personal-upload-modal-remove-slot shrink-0 self-stretch flex items-center justify-center border-l border-zinc-800 px-3">
+                      <button
+                        type="button"
+                        onClick={() => removeDraftItem(item.id, item.fileName)}
+                        className="shrink-0 inline-flex items-center gap-1 rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] font-mono text-zinc-500 transition-colors hover:border-red-500/60 hover:text-red-300"
+                        title="移除此素材"
+                      >
+                        <X size={10} />
+                        移除
+                      </button>
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="px-5 py-4 border-t border-[#27272a] flex items-center justify-end gap-3">

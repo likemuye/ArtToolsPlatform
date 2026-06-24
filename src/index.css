@@ -807,6 +807,19 @@
   color: #0f172a !important;
 }
 
+.light .personal-upload-dropzone {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+
+.light .personal-upload-dropzone:hover,
+.light .personal-upload-dropzone.is-dragging {
+  background-color: #eef6ff !important;
+  border-color: #22c55e !important;
+  color: #0f172a !important;
+}
+
 /* Personal-upload modal theme fixes */
 .personal-upload-modal {
   background-color: rgba(0, 0, 0, 0.85) !important;
@@ -844,6 +857,10 @@
   color: #94a3b8 !important;
 }
 
+.personal-upload-modal-status-badge {
+  background-color: rgba(0, 0, 0, 0.65);
+}
+
 .light .personal-upload-modal-add-tag,
 .light .personal-upload-modal-close,
 .light .personal-upload-modal-cancel {
@@ -852,12 +869,28 @@
   color: #475569 !important;
 }
 
+.light .personal-upload-modal-item .border-zinc-800 {
+  border-color: #cbd5e1 !important;
+}
+
 .light .personal-upload-modal-add-tag:hover,
 .light .personal-upload-modal-close:hover,
 .light .personal-upload-modal-cancel:hover {
   background-color: #f1f5f9 !important;
   border-color: #94a3b8 !important;
   color: #0f172a !important;
+}
+
+.light .personal-upload-modal-status-badge {
+  background-color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.light .personal-upload-modal-status-badge.is-ready {
+  color: #047857 !important;
+}
+
+.light .personal-upload-modal-status-badge.is-pending {
+  color: #b45309 !important;
 }
 
 /* Subfolder-assets toggle light mode fix */
