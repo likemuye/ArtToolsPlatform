@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+.claude/
+ArtToolsPlatform-可分享静态页.html

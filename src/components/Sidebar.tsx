@@ -1,28 +1,23 @@
 import React, { useState } from 'react';
-import { 
-  Layers, 
-  Settings, 
-  Sparkles, 
-  BookOpen, 
-  HardDrive, 
+import {
+  Layers,
+  Settings,
+  HardDrive,
   User,
-  Monitor,
   FolderOpen,
   Palette,
   Sun,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Globe
+  ShieldCheck
 } from 'lucide-react';
 import { SpaceId, ProjectSpace } from '../types';
-import { PROJECT_SPACES } from '../data';
 
 interface SidebarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
   currentSpace: ProjectSpace;
-  setCurrentSpace: (space: ProjectSpace) => void;
   simulatedDiskGB: number;
   theme: 'dark' | 'light';
   toggleTheme: () => void;
@@ -32,45 +27,18 @@ export default function Sidebar({
   currentTab,
   setCurrentTab,
   currentSpace,
-  setCurrentSpace,
   simulatedDiskGB,
   theme,
   toggleTheme
 }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const projectSpaces = PROJECT_SPACES.filter(
-    (space) => space.id === SpaceId.ProjectA || space.id === SpaceId.ProjectB
-  );
-  const mySpaces = [
-    PROJECT_SPACES.find((space) => space.id === SpaceId.Personal),
-    PROJECT_SPACES.find((space) => space.id === SpaceId.Shared)
-  ].filter((space): space is ProjectSpace => Boolean(space));
-
-  const getSpaceLabel = (space: ProjectSpace) => {
-    if (space.id === SpaceId.ProjectA) return '三国：冰河时代';
-    if (space.id === SpaceId.ProjectB) return '项目空间B';
-    if (space.id === SpaceId.Personal) return '个人空间';
-    return '与我共享';
-  };
-
-  const getSpaceIcon = (space: ProjectSpace) => {
-    if (space.id === SpaceId.Personal) return User;
-    if (space.id === SpaceId.Shared) return Globe;
-    return FolderOpen;
-  };
-
   const mainTabs = [
-    { id: 'apps', name: '应用', icon: Monitor },
-    { id: 'extensions', name: '拓展', icon: Layers, badge: currentSpace.id === SpaceId.ProjectA ? '22' : '0' },
     { id: 'assets', name: '素材', icon: FolderOpen, badge: currentSpace.id === SpaceId.ProjectA ? '100+' : '0' },
+    { id: 'extensions', name: '工具', icon: Layers, badge: currentSpace.id === SpaceId.ProjectA ? '22' : '0' },
     { id: 'canvas', name: '画布', icon: Palette },
+    { id: 'permissions', name: '权限管理', icon: ShieldCheck },
     { id: 'settings', name: '缓存与设置', icon: Settings },
-  ];
-
-  const placeholderTabs = [
-    { id: 'ai-assistant', name: '美术助手 (AI)', icon: Sparkles, badge: 'V2' },
-    { id: 'docs', name: '项目说明档', icon: BookOpen, badge: 'V2' }
   ];
 
   return (
@@ -101,101 +69,9 @@ export default function Sidebar({
           </button>
         </div>
 
-        {/* Space Selector */}
-        <div className={`${isCollapsed ? 'p-2' : 'p-4'} border-b border-[#27272a]`}>
-          <div className={isCollapsed ? 'space-y-2' : 'space-y-3'}>
-            <div>
-              {!isCollapsed && (
-                <label className="text-[10px] text-zinc-500 uppercase font-mono tracking-wider block mb-1.5">
-                  项目空间
-                </label>
-              )}
-              <div className={isCollapsed ? 'space-y-1.5' : 'space-y-1'}>
-                {projectSpaces.map((space) => {
-                  const isActive = currentSpace.id === space.id;
-                  const SpaceIcon = getSpaceIcon(space);
-                  return (
-                    <button
-                      key={space.id}
-                      onClick={() => setCurrentSpace(space)}
-                      className={`rounded border transition-all cursor-pointer ${
-                        isActive
-                          ? (theme === 'light'
-                            ? 'bg-emerald-50 border-[#00C800] text-[#00A900] font-semibold'
-                            : 'bg-[#00ff00]/10 border-[#00ff00] text-[#00ff00] font-semibold')
-                          : (theme === 'light'
-                            ? 'bg-white border-slate-200 text-slate-700 hover:border-[#00C800]'
-                            : 'bg-[#121214] border-[#27272a] text-zinc-300 hover:border-[#00ff00] hover:text-white')
-                      } ${isCollapsed ? 'h-14 w-14 mx-auto p-1.5' : 'w-full py-2 px-3 text-xs text-left font-sans'}`}
-                    >
-                      {isCollapsed ? (
-                        <div className="flex w-full flex-col items-center gap-0.5">
-                          <SpaceIcon size={14} />
-                          <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap text-[9px] leading-tight text-center">{getSpaceLabel(space)}</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <SpaceIcon size={13} className="shrink-0" />
-                          <span className="truncate">{getSpaceLabel(space)}</span>
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              {!isCollapsed && (
-                <label className="text-[10px] text-zinc-500 uppercase font-mono tracking-wider block mb-1.5">
-                  我的空间
-                </label>
-              )}
-              <div className={isCollapsed ? 'space-y-1.5' : 'space-y-1'}>
-                {mySpaces.map((space) => {
-                  const isActive = currentSpace.id === space.id;
-                  const SpaceIcon = getSpaceIcon(space);
-                  return (
-                    <button
-                      key={space.id}
-                      onClick={() => setCurrentSpace(space)}
-                      className={`rounded border transition-all cursor-pointer ${
-                        isActive
-                          ? (theme === 'light'
-                            ? 'bg-emerald-50 border-[#00C800] text-[#00A900] font-semibold'
-                            : 'bg-[#00ff00]/10 border-[#00ff00] text-[#00ff00] font-semibold')
-                          : (theme === 'light'
-                            ? 'bg-white border-slate-200 text-slate-700 hover:border-[#00C800]'
-                            : 'bg-[#121214] border-[#27272a] text-zinc-300 hover:border-[#00ff00] hover:text-white')
-                      } ${isCollapsed ? 'h-14 w-14 mx-auto p-1.5' : 'w-full py-2 px-3 text-xs text-left font-sans'}`}
-                    >
-                      {isCollapsed ? (
-                        <div className="flex w-full flex-col items-center gap-0.5">
-                          <SpaceIcon size={14} />
-                          <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap text-[9px] leading-tight text-center">{getSpaceLabel(space)}</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <SpaceIcon size={13} className="shrink-0" />
-                          <span className="truncate">{getSpaceLabel(space)}</span>
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* Navigation Tabs - F1 - F10 */}
         <div className="relative flex-1 min-h-0">
           <div className={`${isCollapsed ? 'p-2' : 'p-3'} h-full overflow-y-auto sidebar-nav-scroll`}>
-          {!isCollapsed && (
-            <label className="text-[10px] text-zinc-500 uppercase font-mono tracking-wider pl-3 block mb-1">
-              核心模块
-            </label>
-          )}
           <div className={isCollapsed ? 'space-y-1.5' : 'space-y-1'}>
             {mainTabs.map((tab) => {
               const TabIcon = tab.icon;
@@ -224,45 +100,6 @@ export default function Sidebar({
                 </button>
               );
             })}
-          </div>
-
-          {/* Placeholders for V2 */}
-          <div
-            className={
-              isCollapsed
-                ? (theme === 'light' ? 'mt-3 pt-3 border-t border-slate-200' : 'mt-3 pt-3 border-t border-[#1b1b1d]')
-                : 'mt-6'
-            }
-          >
-            {!isCollapsed && (
-              <label className="text-[10px] text-zinc-500 uppercase font-mono tracking-wider pl-3 block mb-1">
-                预留模块
-              </label>
-            )}
-            <div className={isCollapsed ? 'space-y-1.5' : 'space-y-1'}>
-              {placeholderTabs.map((tab) => {
-                const TabIcon = tab.icon;
-                return (
-                  <div
-                    key={tab.id}
-                    title="PRD 规划 V2 版本，当前仅作原型占位"
-                    className={`w-full border border-dashed border-zinc-800/40 opacity-40 cursor-not-allowed text-zinc-500 rounded ${
-                      isCollapsed ? 'h-14 w-14 mx-auto p-1.5 flex flex-col items-center justify-center gap-0.5' : 'py-2 px-3 flex items-center justify-between text-left'
-                    }`}
-                  >
-                    <div className={`flex ${isCollapsed ? 'flex-col items-center gap-1' : 'items-center gap-3'}`}>
-                      <TabIcon size={isCollapsed ? 15 : 16} />
-                      <span className={isCollapsed ? 'block w-full overflow-hidden text-ellipsis whitespace-nowrap text-[9px] leading-tight text-center' : 'text-xs'}>{tab.name}</span>
-                    </div>
-                    {!isCollapsed && (
-                      <span className="text-[9px] font-mono border border-zinc-700 text-zinc-400 px-1 rounded uppercase">
-                        {tab.badge}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
           </div>
           </div>
         {isCollapsed && (
@@ -306,7 +143,7 @@ export default function Sidebar({
             </div>
             {simulatedDiskGB < 15 && (
               <div className="text-[9px] text-amber-500 leading-tight">
-                ⚠️ 磁盘可用空间不足 15 GB，安装 ComfyUI 或下载大素材将被阻断。请在设置中释放空间。
+                ⚠️ 磁盘可用空间不足 15 GB，安装大型 DCC 或下载大素材将被阻断。请在设置中释放空间。
               </div>
             )}
 

@@ -12,7 +12,8 @@ import {
   Play,
   X,
   ChevronDown,
-  Check
+  Check,
+  Puzzle
 } from 'lucide-react';
 import { AppId, AppStatus, AppConfig, DccExtension, SpaceId, ProjectSpace } from '../types';
 
@@ -205,9 +206,9 @@ export default function ExtensionManager({
   });
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 flex flex-col font-sans">
+    <div className="shrink-0 px-6 pb-6 flex flex-col font-sans border-t border-[#27272a]">
       {/* Page Title */}
-      <div className="mb-6">
+      <div className="mb-6 mt-6">
         <h1 className="text-xl font-bold font-display tracking-tight text-white flex items-center gap-2">
           <Layers size={22} className="text-[#00ff00]" />
           应用插件与拓展
@@ -216,7 +217,7 @@ export default function ExtensionManager({
 
       {!isProjectA ? (
         /* Empty State for other spaces - PRD Scope V1 Empty Data */
-        <div className="flex-1 border border-dashed border-[#27272a] bg-[#0c0c0e]/30 rounded flex flex-col items-center justify-center p-12 text-center select-none my-auto">
+        <div className="min-h-[280px] border border-dashed border-[#27272a] bg-[#0c0c0e]/30 rounded flex flex-col items-center justify-center p-12 text-center select-none">
           <div className="w-16 h-16 rounded-full bg-zinc-900 border border-[#27272a] flex items-center justify-center text-zinc-500 mb-4/5 text-zinc-600">
             <Layers size={28} />
           </div>
@@ -398,23 +399,27 @@ export default function ExtensionManager({
                 const isInstalling = installingExtId === ext.id;
 
                 return (
-                  <div 
+                  <div
                     key={ext.id}
-                    className="bg-[#0c0c0e] border border-[#27272a] rounded p-4 flex flex-col justify-between hover:border-zinc-700 transition-colors"
+                    className="relative bg-[#0c0c0e] border border-[#27272a] rounded p-4 pl-5 flex flex-col justify-between hover:border-zinc-700 transition-colors overflow-hidden"
                   >
+                    <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-violet-500/70" aria-hidden="true" />
                     {/* Header Row */}
                     <div>
                       <div className="flex items-start justify-between">
                         <div>
                           <div className="flex items-center gap-1.5">
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-violet-500/15 border border-violet-500/30 text-violet-300">
+                              <Puzzle size={11} />
+                            </span>
                             <h3 className="text-xs font-bold text-white tracking-wide font-sans">{ext.name}</h3>
                             <span className="text-[9.5px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-400 px-1 py-0.2 rounded">
                               {ext.version}
                             </span>
                           </div>
-                          
+
                           {/* DCC Associated info */}
-                          <div className="mt-1 flex items-center gap-1.5 text-[9.5px] font-mono text-[#00ff00]">
+                          <div className="mt-1 flex items-center gap-1.5 text-[9.5px] font-mono text-violet-300/80 pl-[26px]">
                             <span>宿主 DCC:</span>
                             <span className="underline uppercase">{ext.dccId === AppId.Max3ds ? '3DS MAX' : ext.dccId}</span>
                           </div>

@@ -162,6 +162,16 @@
 }
 
 /* Translucent overlay adjustments for light mode elements */
+.light .bg-\[\#0c0c0e\]\/60 {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .bg-\[\#0c0c0e\]\/40 {
+  background-color: rgba(241, 245, 249, 0.6) !important;
+  border-color: #cbd5e1 !important;
+}
+
 .light .bg-\[\#0c0c0e\]\/30 {
   background-color: rgba(241, 245, 249, 0.55) !important;
   border-color: #cbd5e1 !important;
@@ -185,7 +195,8 @@
 }
 
 /* Sidebar Hover Overrides */
-.light .hover\:bg-\[\#0c0c0e\]:hover {
+.light .hover\:bg-\[\#0c0c0e\]:hover,
+.light .hover\:bg-\[\#0c0c0e\]\/60:hover {
   background-color: #e2e8f0 !important;
   color: #0f172a !important;
 }
@@ -638,6 +649,24 @@
   color: #0f172a !important;
 }
 
+.asset-detail-form-field::placeholder {
+  color: #71717a;
+}
+
+.asset-detail-form-field[readonly] {
+  cursor: default;
+}
+
+.light .asset-detail-form-field {
+  background-color: #ffffff !important;
+  border-color: #dbe4ee !important;
+  color: #1e293b !important;
+}
+
+.light .asset-detail-form-field::placeholder {
+  color: #94a3b8 !important;
+}
+
 .asset-card-info-switch {
   position: relative;
   width: 34px;
@@ -715,6 +744,47 @@
 
 .light .asset-content-toolbar input::placeholder {
   color: #94a3b8 !important;
+}
+
+/* Cover hover action icons (light mode) */
+.light .asset-cover-actions {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.light .asset-cover-action-btn {
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25) !important;
+}
+
+.light .asset-cover-action-btn-share {
+  background-color: #dcfce7 !important;
+  color: #047857 !important;
+}
+
+.light .asset-cover-action-btn-share:hover {
+  background-color: #bbf7d0 !important;
+  color: #065f46 !important;
+}
+
+.light .asset-cover-action-btn-copy {
+  background-color: #e0f2fe !important;
+  color: #0369a1 !important;
+}
+
+.light .asset-cover-action-btn-copy:hover {
+  background-color: #bae6fd !important;
+  color: #075985 !important;
+}
+
+.light .asset-cover-action-btn-more {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+}
+
+.light .asset-cover-action-btn-more:hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
 }
 
 /* Delete-folder confirm modal theme fixes */

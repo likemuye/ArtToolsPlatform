@@ -1,22 +1,36 @@
-import React, { useState } from 'react';
-import { 
-  Monitor, 
-  Download, 
-  Play, 
-  Square, 
-  RotateCw, 
-  AlertCircle, 
-  Folder, 
-  CheckCircle2, 
-  HelpCircle, 
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Monitor,
+  Download,
+  Play,
+  Square,
+  RotateCw,
+  AlertCircle,
+  Folder,
+  CheckCircle2,
+  HelpCircle,
   ArrowUpCircle,
   FileText,
   Clock,
   X,
   Server,
-  Info
+  Info,
+  Search,
+  ChevronDown,
+  Check
 } from 'lucide-react';
 import { AppId, AppStatus, AppConfig } from '../types';
+
+// Per-DCC brand identity for the card logo.
+// `src` points at an optional real logo under public/logos/ (drop in blender.svg etc.
+// to override); if it 404s the card falls back to the brand-colored lettermark.
+const DCC_LOGO: Record<string, { label: string; color: string; src: string }> = {
+  [AppId.Blender]: { label: 'B', color: '#E87D0D', src: '/logos/blender.svg' },
+  [AppId.Maya]: { label: 'M', color: '#00939C', src: '/logos/maya.svg' },
+  [AppId.Max3ds]: { label: '3', color: '#37A5CC', src: '/logos/3dsmax.svg' },
+  [AppId.Houdini]: { label: 'H', color: '#FF4713', src: '/logos/houdini.svg' }
+};
+const DEFAULT_DCC_LOGO = { label: 'D', color: '#71717a', src: '' };
 
 interface AppManagerProps {
   apps: AppConfig[];
@@ -41,15 +55,45 @@ export default function AppManager({
   const [updateAppConfirmation, setUpdateAppConfirmation] = useState<AppConfig | null>(null);
   const [oldVersionAppDetails, setOldVersionAppDetails] = useState<AppConfig | null>(null);
   const [itTicketApp, setItTicketApp] = useState<AppConfig | null>(null);
+
+  // Auto-detection on entering page: all cards show 「检测中...」 briefly
+  const [isDetecting, setIsDetecting] = useState<boolean>(true);
+  useEffect(() => {
+    setIsDetecting(true);
+    addLog('🔍 正在后台检测全部 DCC 软件的安装与连接状态...', 'info');
+    const timer = setTimeout(() => {
+      setIsDetecting(false);
+      addLog('✅ DCC 环境检测完成，已刷新各软件连接状态。', 'success');
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Connection status filter
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [statusFilterOpen, setStatusFilterOpen] = useState<boolean>(false);
+  const statusFilterRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (statusFilterRef.current && !statusFilterRef.current.contains(event.target as Node)) {
+        setStatusFilterOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Path validation inline error for manual setup modal
+  const [pathError, setPathError] = useState<string>('');
   
-  // Simulated Manual Path folders list
+  // Simulated Manual Path folders list (last entry is intentionally invalid for validation demo)
   const [selectedFolderIdx, setSelectedFolderIdx] = useState<string>('');
   const simulatedFolders = [
-    'C:\\Program Files\\Autodesk\\3dsMax2025',
-    'D:\\Creative\\Autodesk\\Max_V2025',
-    'C:\\3dsmax_custom',
-    'E:\\StudioDCC\\Max2025'
+    'C:\\Program Files\\Side Effects Software\\Houdini 20.5',
+    'D:\\Creative\\SideFX\\Houdini_20',
+    'E:\\StudioDCC\\Houdini205',
+    'D:\\Downloads\\未解压安装包 (无效)'
   ];
+  const INVALID_FOLDER_PATHS = new Set(['D:\\Downloads\\未解压安装包 (无效)']);
 
   // IT Ticket Form state
   const [itSubject, setItSubject] = useState('DCC 商业软件版本升级申请');
@@ -146,7 +190,7 @@ export default function AppManager({
     }, 2000);
   };
 
-  // Close Application
+  // Close Application / Disconnect
   const stopApp = (app: AppConfig) => {
     setApps(prev => prev.map(a => {
       if (a.id === app.id) {
@@ -157,20 +201,44 @@ export default function AppManager({
     }));
   };
 
+  // Reconnect after a failed connection
+  const reconnectApp = (app: AppConfig) => {
+    addLog(`🔄 正在尝试重新连接 ${app.name}，重新探测本地端口...`, 'info');
+    setApps(prev => prev.map(a => (
+      a.id === app.id ? { ...a, status: AppStatus.Connecting } : a
+    )));
+
+    setTimeout(() => {
+      setApps(prev => prev.map(a => {
+        if (a.id === app.id) {
+          addLog(`⚡ ${app.name} 重新连接成功！端口握手完毕，已恢复在线。`, 'success');
+          return { ...a, status: AppStatus.Connected };
+        }
+        return a;
+      }));
+    }, 2000);
+  };
+
   // Manual Path validation - F2
   const confirmManualPath = () => {
     if (!manualPathSetupApp || !selectedFolderIdx) return;
-    
+
     const targetApp = manualPathSetupApp;
     const chosenPath = selectedFolderIdx;
-    
+
+    // Invalid path → keep modal open, show inline error
+    if (INVALID_FOLDER_PATHS.has(chosenPath)) {
+      setPathError('路径无效，请重新选择');
+      addLog(`❌ ${targetApp.name} 路径校验失败：${chosenPath} 中未找到有效的主程序可执行文件。`, 'error');
+      return;
+    }
+
     setApps(prev => prev.map(a => {
       if (a.id === targetApp.id) {
-        return { 
-          ...a, 
-          status: AppStatus.InstalledOffline, 
-          installPath: chosenPath,
-          version: targetApp.id === AppId.Max3ds ? '2025.2 (IT-Approved)' : a.version
+        return {
+          ...a,
+          status: AppStatus.InstalledOffline,
+          installPath: chosenPath
         };
       }
       return a;
@@ -179,6 +247,7 @@ export default function AppManager({
     addLog(`✅ 精确检测到 ${targetApp.name} 注册项与关联可执行文件。离线桥接完毕。`, 'success');
     setManualPathSetupApp(null);
     setSelectedFolderIdx('');
+    setPathError('');
   };
 
   // Update logic - F4 (Platform Apps)
@@ -244,8 +313,20 @@ export default function AppManager({
     }, 1500);
   };
 
+  const STATUS_FILTER_OPTIONS = [
+    { value: 'all', label: '全部' },
+    { value: AppStatus.Connected, label: '已连接' },
+    { value: AppStatus.InstalledOffline, label: '已安装·离线' },
+    { value: AppStatus.NotReady, label: '未就绪' },
+    { value: AppStatus.ConnectionFailed, label: '连接失败' }
+  ];
+  const statusFilterLabel = STATUS_FILTER_OPTIONS.find(o => o.value === statusFilter)?.label ?? '全部';
+  const visibleApps = statusFilter === 'all'
+    ? apps
+    : apps.filter(app => app.status === statusFilter);
+
   return (
-    <div className="flex-1 overflow-y-auto p-6 font-sans">
+    <div className="shrink-0 p-6 font-sans">
       {/* Title section */}
       <div className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -254,39 +335,112 @@ export default function AppManager({
             DCC 应用管理
           </h1>
         </div>
-        <div className="flex bg-[#0c0c0e] border border-[#27272a] rounded p-2 text-xs font-mono">
-          <div className="flex items-center gap-1.5 text-zinc-400">
-            <Server size={14} className="text-[#00ff00]" />
-            <span>桥接状态:</span>
-            <span className="text-[#00ff00] font-bold">已连接</span>
+        <div className="flex items-center gap-2">
+          {/* Connection status filter */}
+          <div className="relative font-mono" ref={statusFilterRef}>
+            <button
+              type="button"
+              onClick={() => setStatusFilterOpen(prev => !prev)}
+              className={`flex items-center justify-between gap-2 text-xs py-1.5 px-3 rounded-md border min-w-[150px] text-left transition-all font-sans cursor-pointer ${
+                theme === 'light'
+                  ? 'bg-white border-slate-200 text-slate-800 hover:border-[#00C800]'
+                  : 'bg-[#000000] border-zinc-900 text-zinc-300 hover:border-[#00ff00]'
+              }`}
+            >
+              <span className="flex items-center gap-1.5">
+                <span className="text-[10px] text-zinc-500 uppercase">连接状态:</span>
+                <span>{statusFilterLabel}</span>
+              </span>
+              <ChevronDown size={11} className={`text-zinc-500 transition-transform ${statusFilterOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {statusFilterOpen && (
+              <div className={`absolute right-0 top-full mt-1 z-50 rounded-md shadow-xl border p-1 w-40 flex flex-col gap-[1px] ${
+                theme === 'light' ? 'bg-white border-slate-200' : 'bg-[#121214] border-zinc-850'
+              }`}>
+                {STATUS_FILTER_OPTIONS.map(opt => {
+                  const isActive = statusFilter === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => {
+                        setStatusFilter(opt.value);
+                        setStatusFilterOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-sans text-left transition-colors ${
+                        isActive
+                          ? (theme === 'light' ? 'bg-emerald-50 text-[#00C800] font-semibold' : 'bg-[#1c1c1f] text-[#00ff00] font-semibold')
+                          : (theme === 'light' ? 'text-slate-700 hover:bg-slate-50' : 'text-zinc-400 hover:bg-zinc-900 hover:text-white')
+                      }`}
+                    >
+                      <span>{opt.label}</span>
+                      {isActive && <Check size={11} className={theme === 'light' ? 'text-[#00C800]' : 'text-[#00ff00]'} />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="flex bg-[#0c0c0e] border border-[#27272a] rounded p-2 text-xs font-mono">
+            <div className="flex items-center gap-1.5 text-zinc-400">
+              <Server size={14} className="text-[#00ff00]" />
+              <span>桥接状态:</span>
+              <span className="text-[#00ff00] font-bold">已连接</span>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Grid of Applications */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {apps.map((app) => {
+        {visibleApps.map((app) => {
           const isDownloading = app.downloadProgress !== undefined;
-          
+
           return (
-            <div 
+            <div
               key={app.id}
               className={`relative bg-[#0c0c0e] border rounded overflow-hidden p-5 transition-all ${
-                app.status === AppStatus.Connected 
-                  ? 'border-[#00ff00] shadow-[0_0_15px_rgba(0,255,0,0.06)]' 
+                !isDetecting && app.status === AppStatus.Connected
+                  ? 'border-[#00ff00] shadow-[0_0_15px_rgba(0,255,0,0.06)]'
                   : 'border-[#27272a] hover:border-zinc-700'
               }`}
             >
-              {/* Top Row: Info & Icon */}
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
+              {/* Top Row: Logo (left) + Info (right) */}
+              <div className="flex items-start gap-4">
+                {/* Brand logo block */}
+                {(() => {
+                  const logo = DCC_LOGO[app.id] ?? DEFAULT_DCC_LOGO;
+                  return (
+                    <div
+                      className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border overflow-hidden"
+                      style={{ backgroundColor: `${logo.color}1A`, borderColor: `${logo.color}59` }}
+                    >
+                      <span className="font-display text-2xl font-bold leading-none" style={{ color: logo.color }}>
+                        {logo.label}
+                      </span>
+                      {logo.src && (
+                        <img
+                          src={logo.src}
+                          alt={`${app.name} logo`}
+                          className="absolute inset-0 h-full w-full object-contain p-2.5"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Info column */}
+                <div className="flex flex-1 items-start justify-between gap-3 min-w-0">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-sm font-bold text-white tracking-wide font-display">{app.name}</h3>
                     <span className="text-[10px] font-mono bg-zinc-800 text-zinc-400 px-1 py-0.2 rounded">
                       {app.isPlatformHosted ? '平台托管' : 'IT商业授权'}
                     </span>
                   </div>
-                  
+
                   {/* Paths and versions details inside */}
                   <div className="mt-2 space-y-1">
                     <div className="flex items-center gap-1.5 text-[11px] font-mono text-zinc-400 flex-wrap">
@@ -321,32 +475,48 @@ export default function AppManager({
 
                 {/* Status Badge */}
                 <div className="flex flex-col items-end">
-                  {app.status === AppStatus.NotReady && (
-                    <span className="text-[11px] font-mono border border-dashed border-zinc-700 text-zinc-500 px-2.5 py-0.5 rounded">
-                      未就绪
+                  {isDetecting ? (
+                    <span className="text-[11px] font-mono bg-zinc-900 border border-zinc-700 text-zinc-300 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                      <RotateCw size={11} className="animate-spin text-zinc-400" />
+                      检测中...
                     </span>
-                  )}
-                  {app.status === AppStatus.InstalledOffline && (
-                    <span className="text-[11px] font-mono bg-zinc-900 border border-zinc-700 text-zinc-300 px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                      <div className="w-1.5 h-1.5 rounded-full bg-zinc-500"></div>
-                      已安装·离线
-                    </span>
-                  )}
-                  {app.status === AppStatus.Connecting && (
-                    <span className="text-[11px] font-mono bg-zinc-900 border border-[#00ff00]/40 text-[#00ff00] px-2 py-0.5 rounded-full flex items-center gap-1.5 animate-pulse">
-                      <RotateCw size={11} className="animate-spin text-[#00ff00]" />
-                      连接中
-                    </span>
-                  )}
-                  {app.status === AppStatus.Connected && (
-                    <span className="text-[11px] font-mono bg-[#00ff00]/10 border border-[#00ff00]/60 text-[#00ff00] px-2.5 py-0.5 rounded-full flex items-center gap-1 font-bold shadow-[0_0_8px_rgba(0,255,0,0.15)] glow-green">
-                      <div className="w-1.5 h-1.5 rounded-full bg-[#00ff00] animate-ping"></div>
-                      已连接
-                    </span>
+                  ) : (
+                    <>
+                      {app.status === AppStatus.NotReady && (
+                        <span className="text-[11px] font-mono border border-dashed border-zinc-700 text-zinc-500 px-2.5 py-0.5 rounded">
+                          未就绪
+                        </span>
+                      )}
+                      {app.status === AppStatus.InstalledOffline && (
+                        <span className="text-[11px] font-mono bg-zinc-900 border border-zinc-700 text-zinc-300 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                          <div className="w-1.5 h-1.5 rounded-full bg-zinc-500"></div>
+                          已安装·离线
+                        </span>
+                      )}
+                      {app.status === AppStatus.Connecting && (
+                        <span className="text-[11px] font-mono bg-zinc-900 border border-[#00ff00]/40 text-[#00ff00] px-2 py-0.5 rounded-full flex items-center gap-1.5 animate-pulse">
+                          <RotateCw size={11} className="animate-spin text-[#00ff00]" />
+                          连接中
+                        </span>
+                      )}
+                      {app.status === AppStatus.Connected && (
+                        <span className="text-[11px] font-mono bg-[#00ff00]/10 border border-[#00ff00]/60 text-[#00ff00] px-2.5 py-0.5 rounded-full flex items-center gap-1 font-bold shadow-[0_0_8px_rgba(0,255,0,0.15)] glow-green">
+                          <div className="w-1.5 h-1.5 rounded-full bg-[#00ff00] animate-ping"></div>
+                          已连接
+                        </span>
+                      )}
+                      {app.status === AppStatus.ConnectionFailed && (
+                        <span className="text-[11px] font-mono bg-red-500/10 border border-red-500/60 text-red-400 px-2.5 py-0.5 rounded-full flex items-center gap-1 font-bold">
+                          <AlertCircle size={11} className="text-red-400" />
+                          连接失败
+                        </span>
+                      )}
+                    </>
                   )}
                   <span className="text-[9.5px] font-mono text-zinc-500 mt-2">
                     所需空间: {app.sizeGB} GB
                   </span>
+                </div>
                 </div>
               </div>
 
@@ -379,9 +549,9 @@ export default function AppManager({
               )}
 
               {/* Action Buttons Section */}
-              {!isDownloading && (
+              {!isDownloading && !isDetecting && (
                 <div className="mt-5 pt-4 border-t border-zinc-900 flex flex-wrap gap-2 items-center justify-between">
-                  
+
                   {/* Left-side action: version update trigger integrated with warning details */}
                   <div>
                     {app.newVersion ? (
@@ -405,36 +575,20 @@ export default function AppManager({
 
                   {/* Right side primary controls */}
                   <div className="flex gap-2 items-center">
-                    {/* Setup manual path button with info icon on the left */}
-                    {app.status === AppStatus.NotReady && !app.isPlatformHosted && (
-                      <div className="flex items-center gap-1.5 mr-0.5">
-                        <div className="relative group flex items-center">
-                          <Info size={14} className="text-zinc-500 hover:text-zinc-300 cursor-help transition-colors shrink-0" />
-                          <div className="absolute right-0 bottom-full mb-2 hidden group-hover:block z-30 w-52 bg-[#121214] border border-[#27272a] text-zinc-400 p-2.5 text-[10.5px] rounded shadow-xl font-mono leading-relaxed pointer-events-none select-none">
-                            提示: 该商业程序未自动检获，需手工连接。
-                          </div>
+                    {/* NotReady: IT contact hint + manual path setup */}
+                    {app.status === AppStatus.NotReady && (
+                      <>
+                        <div className="flex items-center gap-1.5 mr-0.5 text-[10.5px] font-mono text-amber-500/80">
+                          <AlertCircle size={13} className="shrink-0" />
+                          <span>未找到 {app.name} 安装，请联系 IT</span>
                         </div>
-                      </div>
-                    )}
-
-                    {app.status === AppStatus.NotReady && !app.isPlatformHosted && (
-                      <button
-                        onClick={() => setManualPathSetupApp(app)}
-                        className="bg-[#121214] border border-[#27272a] hover:border-zinc-500 text-zinc-300 hover:text-white px-3 py-1 text-xs font-mono rounded cursor-pointer transition-colors btn-secondary"
-                      >
-                        手动设置路径
-                      </button>
-                    )}
-
-                    {/* Install button (platform only) */}
-                    {app.status === AppStatus.NotReady && app.isPlatformHosted && (
-                      <button
-                        onClick={() => startInstalling(app)}
-                        className="bg-white hover:bg-zinc-200 text-black font-semibold font-sans px-4 py-1 text-xs rounded transition-colors shadow-lg flex items-center gap-1 cursor-pointer dcc-deploy-btn btn-primary"
-                      >
-                        <Download size={13} />
-                        部署该应用
-                      </button>
+                        <button
+                          onClick={() => { setManualPathSetupApp(app); setSelectedFolderIdx(''); setPathError(''); }}
+                          className="bg-[#121214] border border-[#27272a] hover:border-zinc-500 text-zinc-300 hover:text-white px-3 py-1 text-xs font-mono rounded cursor-pointer transition-colors btn-secondary"
+                        >
+                          手动设置路径
+                        </button>
+                      </>
                     )}
 
                     {/* Launch button */}
@@ -463,6 +617,17 @@ export default function AppManager({
                       </button>
                     )}
 
+                    {/* ConnectionFailed: reconnect */}
+                    {app.status === AppStatus.ConnectionFailed && (
+                      <button
+                        onClick={() => reconnectApp(app)}
+                        className="bg-zinc-950 hover:bg-[#00ff00]/10 border border-[#00ff00]/60 text-[#00ff00] px-4 py-1.5 text-xs font-bold rounded transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <RotateCw size={12} />
+                        重新连接
+                      </button>
+                    )}
+
                     {/* Connected close button */}
                     {app.status === AppStatus.Connected && (
                       <button
@@ -470,7 +635,7 @@ export default function AppManager({
                         className="bg-zinc-950 hover:bg-red-950/20 border border-red-500/60 text-red-400 hover:text-red-300 px-4 py-1.5 text-xs rounded transition-all flex items-center gap-1.5"
                       >
                         <Square size={11} fill="currentColor" />
-                        关闭并断开
+                        断开连接
                       </button>
                     )}
                   </div>
@@ -551,7 +716,7 @@ export default function AppManager({
                 <Folder size={18} className="text-amber-500" />
                 手动检测路径: {manualPathSetupApp.name}
               </h3>
-              <button onClick={() => setManualPathSetupApp(null)} className="text-zinc-400 hover:text-white">
+              <button onClick={() => { setManualPathSetupApp(null); setSelectedFolderIdx(''); setPathError(''); }} className="text-zinc-400 hover:text-white">
                 <X size={16} />
               </button>
             </div>
@@ -568,19 +733,23 @@ export default function AppManager({
               <div className="space-y-2">
                 {simulatedFolders.map((pathStr) => {
                   const isSel = selectedFolderIdx === pathStr;
+                  const isInvalid = INVALID_FOLDER_PATHS.has(pathStr);
                   return (
                     <button
                       key={pathStr}
-                      onClick={() => setSelectedFolderIdx(pathStr)}
+                      onClick={() => { setSelectedFolderIdx(pathStr); setPathError(''); }}
                       className={`w-full flex items-center gap-3 text-left p-2.5 rounded transition-all text-xs font-mono border ${
-                        isSel 
-                          ? 'bg-[#00ff00]/5 border-[#00ff00] text-white font-bold' 
+                        isSel
+                          ? (isInvalid ? 'bg-red-500/5 border-red-500/60 text-red-300 font-bold' : 'bg-[#00ff00]/5 border-[#00ff00] text-white font-bold')
                           : 'bg-black border-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700'
                       }`}
                     >
-                      <Folder size={15} className={isSel ? 'text-[#00ff00]' : 'text-zinc-500'} />
+                      <Folder size={15} className={isSel ? (isInvalid ? 'text-red-400' : 'text-[#00ff00]') : 'text-zinc-500'} />
                       <span className="flex-1 truncate">{pathStr}</span>
-                      {isSel && <CheckCircle2 size={13} className="text-[#00ff00] shrink-0" />}
+                      {isSel && (isInvalid
+                        ? <AlertCircle size={13} className="text-red-400 shrink-0" />
+                        : <CheckCircle2 size={13} className="text-[#00ff00] shrink-0" />
+                      )}
                     </button>
                   );
                 })}
@@ -591,11 +760,19 @@ export default function AppManager({
               </div>
             </div>
 
+            {pathError && (
+              <div className="-mt-2 mb-4 flex items-center gap-1.5 text-[11px] font-mono text-red-400">
+                <AlertCircle size={13} className="shrink-0" />
+                <span>{pathError}</span>
+              </div>
+            )}
+
             <div className="flex gap-3 justify-end font-mono">
-              <button 
+              <button
                 onClick={() => {
                   setManualPathSetupApp(null);
                   setSelectedFolderIdx('');
+                  setPathError('');
                 }}
                 className="px-4 py-1.5 border border-[#27272a] hover:border-zinc-500 text-zinc-400 hover:text-white rounded text-xs transition-colors btn-secondary"
               >

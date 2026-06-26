@@ -220,7 +220,7 @@ export default function SettingsPanel({
             <div className="space-y-4 text-xs">
               <p className="text-zinc-400 leading-relaxed font-mono text-[11px] bg-zinc-950 p-2.5 rounded border border-zinc-900">
                 💡 <b>测试导览：</b><br/>
-                ComfyUI 部署需 15 GB 磁盘容量。在此处模拟配置磁盘空闲限制。
+                大型 DCC 部署需 15 GB 磁盘容量。在此处模拟配置磁盘空闲限制。
               </p>
 
               {/* Slider for Simulated Disk space */}

@@ -18,6 +18,7 @@ import AppManager from './components/AppManager';
 import ExtensionManager from './components/ExtensionManager';
 import AssetLibrary from './components/AssetLibrary';
 import SettingsPanel from './components/SettingsPanel';
+import PermissionManager from './components/PermissionManager';
 
 interface LogLine {
   text: string;
@@ -39,7 +40,7 @@ export default function App() {
   };
 
   // Sidebar and space states - F7
-  const [currentTab, setCurrentTab] = useState<string>('apps');
+  const [currentTab, setCurrentTab] = useState<string>('assets');
   const [currentSpace, setCurrentSpace] = useState<ProjectSpace>(
     PROJECT_SPACES.find((space) => space.id === SpaceId.ProjectA) ?? PROJECT_SPACES[0]
   );
@@ -114,33 +115,33 @@ export default function App() {
   // Render correct panel subcomponent
   const renderTabContent = () => {
     switch (currentTab) {
-      case 'apps':
-        return (
-          <AppManager
-            apps={apps}
-            setApps={setApps}
-            simulatedDiskGB={simulatedDiskGB}
-            setSimulatedDiskGB={setSimulatedDiskGB}
-            addLog={addLog}
-            theme={theme}
-          />
-        );
       case 'extensions':
         return (
-          <ExtensionManager
-            currentSpace={currentSpace}
-            apps={apps}
-            setApps={setApps}
-            extensions={extensions}
-            setExtensions={setExtensions}
-            addLog={addLog}
-            theme={theme}
-          />
+          <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
+            <AppManager
+              apps={apps}
+              setApps={setApps}
+              simulatedDiskGB={simulatedDiskGB}
+              setSimulatedDiskGB={setSimulatedDiskGB}
+              addLog={addLog}
+              theme={theme}
+            />
+            <ExtensionManager
+              currentSpace={currentSpace}
+              apps={apps}
+              setApps={setApps}
+              extensions={extensions}
+              setExtensions={setExtensions}
+              addLog={addLog}
+              theme={theme}
+            />
+          </div>
         );
       case 'assets':
         return (
           <AssetLibrary
             currentSpace={currentSpace}
+            setCurrentSpace={setCurrentSpace}
             apps={apps}
             assets={assets}
             personalAssets={personalAssets}
@@ -168,6 +169,8 @@ export default function App() {
         );
       case 'canvas':
         return <div className="flex-1"></div>;
+      case 'permissions':
+        return <PermissionManager addLog={addLog} />;
       default:
         return (
           <div className="flex-1 p-8 text-zinc-500 font-mono">
@@ -217,7 +220,6 @@ export default function App() {
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         currentSpace={currentSpace}
-        setCurrentSpace={setCurrentSpace}
         simulatedDiskGB={simulatedDiskGB}
         theme={theme}
         toggleTheme={toggleTheme}

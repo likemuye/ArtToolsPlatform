@@ -14,7 +14,6 @@ import {
   CornerDownRight, 
   CheckCircle, 
   Clock,
-  FolderDot,
   Shuffle,
   X,
   ExternalLink,
@@ -24,13 +23,24 @@ import {
   Pencil,
   Trash2,
   Plus,
-  Files
+  Files,
+  Send,
+  Link2,
+  MoreHorizontal,
+  FolderInput,
+  User,
+  Users,
+  Boxes,
+  Globe,
+  ScanSearch,
+  Package
 } from 'lucide-react';
-import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType } from '../types';
-import { INITIAL_ASSET_FOLDERS_PROJECT_A, INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A } from '../data';
+import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType, AssetTaskStatus } from '../types';
+import { INITIAL_ASSET_FOLDERS_PROJECT_A, INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A, PROJECT_SPACES, ASSET_ORG_OPTIONS, ASSET_TASK_STATUS_LABELS } from '../data';
 
 interface AssetLibraryProps {
   currentSpace: ProjectSpace;
+  setCurrentSpace: (space: ProjectSpace) => void;
   apps: AppConfig[];
   assets: ArtAsset[];
   personalAssets: PersonalUploadedAsset[];
@@ -61,6 +71,19 @@ interface PersonalUploadDraft {
   isTagging: boolean;
 }
 
+type ExternalAssetType = 'model_anim' | 'image_texture' | 'video' | 'audio' | 'project';
+type ExternalAssetSource = 'artstation' | 'pinterest' | 'huaban';
+
+interface ExternalAsset extends ArtAsset {
+  externalType: ExternalAssetType;
+  source: ExternalAssetSource;
+  sourceUrl: string;
+  createdAt: string;
+  width: number;
+  height: number;
+  nonCommercialNotice: string;
+}
+
 // Simulated active download task structure for queue management
 interface ActiveDownload {
   assetId: string;
@@ -69,12 +92,63 @@ interface ActiveDownload {
   targetDccImportAfterDownload?: AppId; // If triggered by import click, remembers DCC target
 }
 
-const ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v1';
-const ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY = 'art-launcher-asset-folder-assignments-v1';
+const LEGACY_ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v1';
+const LEGACY_ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY = 'art-launcher-asset-folder-assignments-v1';
+const ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v2';
+const ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY = 'art-launcher-asset-folder-assignments-v2';
 const ASSET_FOLDER_PANE_WIDTH_STORAGE_KEY = 'art-launcher-folder-pane-width-v1';
 const ASSET_ITEMS_PER_PAGE_STORAGE_KEY = 'art-launcher-items-per-page-v1';
 const REMOVED_DEFAULT_FOLDER_IDS = new Set(['folder-browser', 'folder-cloud-local']);
-const DEFAULT_ASSET_FOLDER_ID = 'folder-primary';
+const REMOVED_SYSTEM_FOLDER_IDS = new Set(['space-root-project-group']);
+const FOLDER_SCOPE_SEPARATOR = '::';
+const DEFAULT_ASSET_FOLDER_BASE_ID = 'folder-primary';
+const PERSONAL_SPACE_FOLDER_ID = 'space-root-personal';
+const SHARED_SPACE_FOLDER_ID = 'space-root-shared';
+const EXTERNAL_ASSET_FOLDER_ID = 'space-root-external';
+const TUYOO_COMMON_FOLDER_ID = 'space-root-tuyoo-common';
+const PROJECT_A_SPACE_FOLDER_ID = 'space-node-projectA';
+const PROJECT_B_SPACE_FOLDER_ID = 'space-node-projectB';
+const SPACE_PRIMARY_FOLDER_LABELS: Record<SpaceId, string> = {
+  [SpaceId.ProjectA]: '三国：冰河时代',
+  [SpaceId.ProjectB]: '项目空间B',
+  [SpaceId.Personal]: '个人空间',
+  [SpaceId.Shared]: '与我共享'
+};
+const SPACE_ANCHOR_FOLDER_IDS: Record<SpaceId, string> = {
+  [SpaceId.ProjectA]: PROJECT_A_SPACE_FOLDER_ID,
+  [SpaceId.ProjectB]: PROJECT_B_SPACE_FOLDER_ID,
+  [SpaceId.Personal]: PERSONAL_SPACE_FOLDER_ID,
+  [SpaceId.Shared]: SHARED_SPACE_FOLDER_ID
+};
+const SYSTEM_FOLDER_ORDER: Record<string, number> = {
+  [PERSONAL_SPACE_FOLDER_ID]: 0,
+  [TUYOO_COMMON_FOLDER_ID]: 1,
+  [SHARED_SPACE_FOLDER_ID]: 2,
+  [PROJECT_A_SPACE_FOLDER_ID]: 3,
+  [PROJECT_B_SPACE_FOLDER_ID]: 4,
+  [EXTERNAL_ASSET_FOLDER_ID]: 5
+};
+const SYSTEM_FOLDERS: AssetFolder[] = [
+  { id: PERSONAL_SPACE_FOLDER_ID, name: '个人空间', parentId: null },
+  { id: TUYOO_COMMON_FOLDER_ID, name: '途游通用', parentId: null },
+  { id: SHARED_SPACE_FOLDER_ID, name: '与我共享', parentId: null },
+  { id: EXTERNAL_ASSET_FOLDER_ID, name: '外部素材', parentId: null },
+  { id: PROJECT_A_SPACE_FOLDER_ID, name: SPACE_PRIMARY_FOLDER_LABELS[SpaceId.ProjectA], parentId: null },
+  { id: PROJECT_B_SPACE_FOLDER_ID, name: SPACE_PRIMARY_FOLDER_LABELS[SpaceId.ProjectB], parentId: null }
+];
+const SYSTEM_FOLDER_IDS = new Set(SYSTEM_FOLDERS.map(folder => folder.id));
+
+// Per-space visual identity for the four top-level folders.
+// `icon` distinguishes the space at a glance; `accent` is the icon/active color.
+const ROOT_FOLDER_VISUALS: Record<string, { icon: typeof User; accent: string }> = {
+  [PERSONAL_SPACE_FOLDER_ID]: { icon: User, accent: '#38bdf8' }, // 个人空间 - sky
+  [SHARED_SPACE_FOLDER_ID]: { icon: Users, accent: '#a78bfa' }, // 与我共享 - violet
+  [TUYOO_COMMON_FOLDER_ID]: { icon: Package, accent: '#facc15' }, // 途游通用 - amber
+  [PROJECT_A_SPACE_FOLDER_ID]: { icon: Boxes, accent: '#00ff00' }, // 项目空间 - green
+  [PROJECT_B_SPACE_FOLDER_ID]: { icon: Boxes, accent: '#00ff00' }, // 项目空间 - green
+  [EXTERNAL_ASSET_FOLDER_ID]: { icon: Globe, accent: '#fb923c' } // 外部素材 - orange
+};
+const DEFAULT_ASSET_FOLDER_ID = `${SpaceId.ProjectA}${FOLDER_SCOPE_SEPARATOR}${DEFAULT_ASSET_FOLDER_BASE_ID}`;
 const CREATED_FOLDER_ID_PATTERN = /^folder-(\d{10,})$/;
 const PERSONAL_UPLOAD_MAX_COUNT = 500;
 const PERSONAL_UPLOAD_MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024;
@@ -88,6 +162,7 @@ const PREVIEW_ZOOM_STEP = 1.2;
 
 // Folder name validation rules: length cap, illegal chars, reserved names, sibling uniqueness
 const FOLDER_NAME_MAX_LENGTH = 32;
+const PERSONAL_ASSET_NAME_MAX_LENGTH = 64;
 const ILLEGAL_FOLDER_NAME_CHARS_REGEX = /[\\/:*?"<>|]/;
 const RESERVED_FOLDER_NAMES = new Set([
   'CON', 'PRN', 'AUX', 'NUL',
@@ -180,6 +255,651 @@ const fuzzyTagMatch = (candidate: string, query: string) => {
   return false;
 };
 
+const EXTERNAL_TYPE_OPTIONS: Array<{ id: ExternalAssetType; label: string }> = [
+  { id: 'model_anim', label: '模型/动画' },
+  { id: 'image_texture', label: '图像/贴图' },
+  { id: 'video', label: '视频' },
+  { id: 'audio', label: '音频' },
+  { id: 'project', label: '工程' }
+];
+
+const EXTERNAL_SOURCE_OPTIONS: Array<{ id: ExternalAssetSource; label: string }> = [
+  { id: 'artstation', label: 'ArtStation' },
+  { id: 'pinterest', label: 'Pinterest' },
+  { id: 'huaban', label: '花瓣' }
+];
+
+const EXTERNAL_TYPE_LABELS: Record<ExternalAssetType, string> = Object.fromEntries(
+  EXTERNAL_TYPE_OPTIONS.map(option => [option.id, option.label])
+) as Record<ExternalAssetType, string>;
+
+const EXTERNAL_SOURCE_META: Record<ExternalAssetSource, { label: string; logo: string; badgeClassName: string; dotClassName: string }> = {
+  artstation: {
+    label: 'ArtStation',
+    logo: 'AS',
+    badgeClassName: 'border-sky-400/40 bg-sky-500/15 text-sky-100',
+    dotClassName: 'bg-sky-300'
+  },
+  pinterest: {
+    label: 'Pinterest',
+    logo: 'P',
+    badgeClassName: 'border-rose-400/40 bg-rose-500/15 text-rose-100',
+    dotClassName: 'bg-rose-300'
+  },
+  huaban: {
+    label: '花瓣',
+    logo: '花',
+    badgeClassName: 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100',
+    dotClassName: 'bg-emerald-300'
+  }
+};
+
+const EXTERNAL_CATEGORY_BY_TYPE: Record<ExternalAssetType, AssetCategory> = {
+  model_anim: AssetCategory.CharModel,
+  image_texture: AssetCategory.SceneConcept,
+  video: AssetCategory.Video,
+  audio: AssetCategory.Video,
+  project: AssetCategory.SceneModel
+};
+
+const EXTERNAL_NON_COMMERCIAL_NOTICE = '素材来源于外部采集平台，仅用于内部参考与创意评审，默认不可商用。';
+
+// Combined-filter taxonomy for the internal spaces (个人/共享/项目).
+// Each type owns a set of file formats; an asset's type is inferred from its format.
+type InternalAssetType = 'model_anim' | 'image_texture' | 'video' | 'audio' | 'project';
+
+const INTERNAL_TYPE_OPTIONS: Array<{ id: InternalAssetType; label: string; formats: string[] }> = [
+  { id: 'model_anim', label: '模型/动画', formats: ['FBX', 'OBJ', 'ABC', 'USD', 'GLTF', 'GLB'] },
+  { id: 'image_texture', label: '图像/贴图', formats: ['PNG', 'JPG', 'TGA', 'EXR', 'TIFF', 'PSD', 'DDS', 'HDR'] },
+  { id: 'video', label: '视频', formats: ['MOV', 'MP4', 'AVI', 'MXF'] },
+  { id: 'audio', label: '音频', formats: ['WAV', 'MP3', 'OGG', 'AAC'] },
+  { id: 'project', label: '工程', formats: ['MA', 'MB', 'BLEND', 'MAX', 'HIP', 'SPP', 'NK', 'AEP', 'ZTL', 'ZPR', 'C4D'] }
+];
+
+const INTERNAL_TYPE_LABELS: Record<InternalAssetType, string> = Object.fromEntries(
+  INTERNAL_TYPE_OPTIONS.map(option => [option.id, option.label])
+) as Record<InternalAssetType, string>;
+
+const INTERNAL_FORMAT_TO_TYPE: Record<string, InternalAssetType> = INTERNAL_TYPE_OPTIONS.reduce(
+  (acc, option) => {
+    option.formats.forEach(format => { acc[format] = option.id; });
+    return acc;
+  },
+  {} as Record<string, InternalAssetType>
+);
+
+// --- 内容类型 tab（全部/图片/视频/3D/工业/文档/音频）-------------------------
+// Top-level content-type tabs (mutually exclusive). An asset's tab is inferred from its
+// file extension. Shared by internal spaces and external assets.
+type AssetTypeTab = 'all' | 'image' | 'video' | 'model' | 'project' | 'doc' | 'audio';
+
+const ASSET_TYPE_TABS: Array<{ id: AssetTypeTab; label: string; formats: string[] }> = [
+  { id: 'all', label: '全部', formats: [] },
+  { id: 'image', label: '图片', formats: ['PNG', 'JPG', 'JPEG', 'TGA', 'EXR', 'TIFF', 'TIF', 'PSD', 'DDS', 'HDR', 'GIF', 'BMP', 'WEBP'] },
+  { id: 'video', label: '视频', formats: ['MOV', 'MP4', 'AVI', 'MXF', 'MKV', 'WEBM'] },
+  { id: 'model', label: '3D', formats: ['FBX', 'OBJ', 'ABC', 'USD', 'GLTF', 'GLB'] },
+  { id: 'project', label: '工业', formats: ['MA', 'MB', 'BLEND', 'MAX', 'HIP', 'SPP', 'NK', 'AEP', 'ZTL', 'ZPR', 'C4D', 'PRPROJ', 'FIG'] },
+  { id: 'doc', label: '文档', formats: ['PDF', 'DOC', 'DOCX', 'XLS', 'XLSX', 'PPT', 'PPTX', 'TXT', 'MD'] },
+  { id: 'audio', label: '音频', formats: ['WAV', 'MP3', 'OGG', 'AAC', 'FLAC'] }
+];
+
+const ASSET_FORMAT_TO_TAB: Record<string, AssetTypeTab> = ASSET_TYPE_TABS.reduce(
+  (acc, tab) => {
+    tab.formats.forEach(format => { acc[format] = tab.id; });
+    return acc;
+  },
+  {} as Record<string, AssetTypeTab>
+);
+
+const getAssetTypeTab = (format: string): AssetTypeTab | null => (
+  ASSET_FORMAT_TO_TAB[format.trim().toUpperCase()] ?? null
+);
+
+// All general-filter dropdown keys (shared union for internal & external open-filter state).
+type FilterKey = 'author' | 'format' | 'tag' | 'org' | 'created' | 'fileSize' | 'status' | 'size' | 'shape' | 'duration' | 'color' | 'source' | 'sort';
+
+// 形状（横版/竖版/方图）by width/height
+type AssetShape = 'landscape' | 'portrait' | 'square';
+const ASSET_SHAPE_OPTIONS: Array<{ id: AssetShape; label: string }> = [
+  { id: 'landscape', label: '横版' },
+  { id: 'portrait', label: '竖版' },
+  { id: 'square', label: '方图' }
+];
+const getAssetShape = (asset: ArtAsset): AssetShape | null => {
+  if (!asset.width || !asset.height) return null;
+  if (asset.width > asset.height) return 'landscape';
+  if (asset.width < asset.height) return 'portrait';
+  return 'square';
+};
+
+// 颜色色板：固定色相，资产主色按 RGB 距离归入最近色板。
+const COLOR_SWATCHES: Array<{ id: string; label: string; rgb: { r: number; g: number; b: number } }> = [
+  { id: 'red', label: '红', rgb: { r: 220, g: 38, b: 38 } },
+  { id: 'orange', label: '橙', rgb: { r: 234, g: 88, b: 12 } },
+  { id: 'yellow', label: '黄', rgb: { r: 234, g: 179, b: 8 } },
+  { id: 'green', label: '绿', rgb: { r: 22, g: 163, b: 74 } },
+  { id: 'cyan', label: '青', rgb: { r: 8, g: 145, b: 178 } },
+  { id: 'blue', label: '蓝', rgb: { r: 37, g: 99, b: 235 } },
+  { id: 'purple', label: '紫', rgb: { r: 124, g: 58, b: 237 } },
+  { id: 'pink', label: '粉', rgb: { r: 219, g: 39, b: 119 } },
+  { id: 'white', label: '白', rgb: { r: 240, g: 240, b: 240 } },
+  { id: 'black', label: '黑', rgb: { r: 24, g: 24, b: 27 } },
+  { id: 'gray', label: '灰', rgb: { r: 128, g: 128, b: 128 } }
+];
+const COLOR_SWATCH_HEX: Record<string, string> = {
+  red: '#dc2626', orange: '#ea580c', yellow: '#eab308', green: '#16a34a',
+  cyan: '#0891b2', blue: '#2563eb', purple: '#7c3aed', pink: '#db2777',
+  white: '#f0f0f0', black: '#18181b', gray: '#808080'
+};
+const nearestColorSwatchId = (rgb: { r: number; g: number; b: number }): string => {
+  let best = COLOR_SWATCHES[0];
+  let bestDist = Infinity;
+  COLOR_SWATCHES.forEach((swatch) => {
+    const d = (rgb.r - swatch.rgb.r) ** 2 + (rgb.g - swatch.rgb.g) ** 2 + (rgb.b - swatch.rgb.b) ** 2;
+    if (d < bestDist) { bestDist = d; best = swatch; }
+  });
+  return best.id;
+};
+
+
+const getInternalAssetType = (format: string): InternalAssetType | null => (
+  INTERNAL_FORMAT_TO_TYPE[format.trim().toUpperCase()] ?? null
+);
+
+// Longest pixel edge used by the 尺寸 filter. Prefers explicit width/height, then a
+// "1920x1080"-style resolution tag (personal uploads tag this during AI labeling).
+const getAssetLongestEdge = (asset: ArtAsset): number | null => {
+  if (asset.width && asset.height) return Math.max(asset.width, asset.height);
+  const resolutionTag = asset.tags.find(tag => /^\d{2,5}[xX]\d{2,5}$/.test(tag));
+  if (resolutionTag) {
+    const [w, h] = resolutionTag.toLowerCase().split('x').map(Number);
+    if (Number.isFinite(w) && Number.isFinite(h)) return Math.max(w, h);
+  }
+  return null;
+};
+
+// --- 图片搜索（以图搜图）: feature extraction + similarity scoring -----------
+type RGB = { r: number; g: number; b: number };
+
+interface ImageSearchQuery {
+  previewUrl: string;
+  color: RGB;
+  width: number;
+  height: number;
+  category: AssetCategory;
+  tags: string[];
+  fileName: string;
+}
+
+const hexToRgb = (hex: string): RGB | null => {
+  const cleaned = hex.replace('#', '').trim();
+  if (cleaned.length !== 6) return null;
+  const num = Number.parseInt(cleaned, 16);
+  if (Number.isNaN(num)) return null;
+  return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+};
+
+// Deterministic fallback color derived from an asset id, so scoring stays stable
+// when a thumbnail can't be sampled (network/CORS failure).
+const hashColorFallback = (seed: string): RGB => {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return { r: hash & 255, g: (hash >> 8) & 255, b: (hash >> 16) & 255 };
+};
+
+// Average pixel color from a downscaled canvas sample. Returns null on CORS/load failure.
+const sampleImageDominantColor = (src: string, allowCrossOrigin: boolean): Promise<RGB | null> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    if (allowCrossOrigin) img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const size = 24;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { resolve(null); return; }
+        ctx.drawImage(img, 0, 0, size, size);
+        const { data } = ctx.getImageData(0, 0, size, size);
+        let r = 0, g = 0, b = 0, count = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] < 16) continue; // skip transparent
+          r += data[i]; g += data[i + 1]; b += data[i + 2]; count += 1;
+        }
+        if (count === 0) { resolve(null); return; }
+        resolve({ r: Math.round(r / count), g: Math.round(g / count), b: Math.round(b / count) });
+      } catch {
+        resolve(null); // tainted canvas
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+};
+
+// Dominant color of a local File (upload query) — same averaging via object URL.
+const getImageDominantColor = (file: File): Promise<RGB | null> => {
+  const objectUrl = URL.createObjectURL(file);
+  return sampleImageDominantColor(objectUrl, false).then((color) => {
+    URL.revokeObjectURL(objectUrl);
+    return color;
+  });
+};
+
+const colorScore = (a: RGB, b: RGB): number => {
+  const dist = Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+  return Math.max(0, 1 - dist / 441.6729559300637); // sqrt(255^2*3)
+};
+
+const aspectScore = (qw: number, qh: number, aw?: number, ah?: number): number => {
+  if (!qw || !qh || !aw || !ah) return 0;
+  const arQuery = qw / qh;
+  const arAsset = aw / ah;
+  return Math.max(0, 1 - Math.min(1, Math.abs(arQuery - arAsset) / arQuery));
+};
+
+const tagOverlapScore = (queryTags: string[], assetTags: string[]): number => {
+  if (queryTags.length === 0 || assetTags.length === 0) return 0;
+  const q = new Set(queryTags.map(t => t.toLowerCase()));
+  const a = new Set(assetTags.map(t => t.toLowerCase()));
+  let intersection = 0;
+  q.forEach(tag => { if (a.has(tag)) intersection += 1; });
+  const union = new Set([...q, ...a]).size;
+  return union === 0 ? 0 : intersection / union;
+};
+
+// Weighted 0~100 similarity: color 40 + aspect 20 + category 20 + tags 20.
+const computeImageSimilarity = (query: ImageSearchQuery, asset: ArtAsset, assetColor: RGB): number => {
+  const score =
+    colorScore(query.color, assetColor) * 40 +
+    aspectScore(query.width, query.height, asset.width, asset.height) * 20 +
+    (asset.category === query.category ? 1 : 0) * 20 +
+    tagOverlapScore(query.tags, asset.tags) * 20;
+  return Math.round(score);
+};
+
+interface ExternalAssetSeed {
+  id: string;
+  name: string;
+  format: string;
+  type: ExternalAssetType;
+  source: ExternalAssetSource;
+  sourceUrl: string;
+  tags: string[];
+  createdAt: string;
+  width: number;
+  height: number;
+  sizeMB: number;
+  accentFrom: string;
+  accentTo: string;
+}
+
+const buildExternalThumbnail = (name: string, format: string, colorFrom: string, colorTo: string) => {
+  const shortName = name.length > 30 ? `${name.slice(0, 30)}...` : name;
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${colorFrom}" />
+      <stop offset="100%" stop-color="${colorTo}" />
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" fill="url(#bg)" />
+  <rect x="18" y="18" width="604" height="324" rx="18" fill="rgba(0,0,0,0.22)" stroke="rgba(255,255,255,0.24)" />
+  <text x="40" y="178" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">${shortName}</text>
+  <text x="40" y="214" fill="rgba(255,255,255,0.86)" font-family="Arial, Helvetica, sans-serif" font-size="16">${format.toUpperCase()}</text>
+</svg>
+  `.trim();
+
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
+
+const EXTERNAL_ASSET_SEEDS: ExternalAssetSeed[] = [
+  {
+    id: 'dragon-hero-rig',
+    name: 'Dragon Hero Rig',
+    format: 'fbx',
+    type: 'model_anim',
+    source: 'artstation',
+    sourceUrl: 'https://www.artstation.com/',
+    tags: ['dragon', 'hero', 'rig', 'fantasy'],
+    createdAt: '2026-05-22T10:20:00.000Z',
+    width: 2048,
+    height: 2048,
+    sizeMB: 186.4,
+    accentFrom: '#1f3a8a',
+    accentTo: '#4338ca'
+  },
+  {
+    id: 'mecha-walk-cycle',
+    name: 'Mecha Walk Cycle',
+    format: 'glb',
+    type: 'model_anim',
+    source: 'artstation',
+    sourceUrl: 'https://www.artstation.com/',
+    tags: ['mecha', 'walk', 'animation', 'robot'],
+    createdAt: '2026-05-18T03:40:00.000Z',
+    width: 1920,
+    height: 1080,
+    sizeMB: 132.9,
+    accentFrom: '#0f766e',
+    accentTo: '#0891b2'
+  },
+  {
+    id: 'ink-cloud-brush-atlas',
+    name: 'Ink Cloud Brush Atlas',
+    format: 'png',
+    type: 'image_texture',
+    source: 'huaban',
+    sourceUrl: 'https://huaban.com/',
+    tags: ['ink', 'brush', 'atlas', 'cloud'],
+    createdAt: '2026-06-09T08:12:00.000Z',
+    width: 4096,
+    height: 4096,
+    sizeMB: 48.2,
+    accentFrom: '#1d4ed8',
+    accentTo: '#2563eb'
+  },
+  {
+    id: 'bronze-pattern-tile',
+    name: 'Bronze Pattern Tile',
+    format: 'tiff',
+    type: 'image_texture',
+    source: 'huaban',
+    sourceUrl: 'https://huaban.com/',
+    tags: ['bronze', 'tile', 'pattern', 'pbr'],
+    createdAt: '2026-05-29T14:05:00.000Z',
+    width: 8192,
+    height: 8192,
+    sizeMB: 274.5,
+    accentFrom: '#92400e',
+    accentTo: '#b45309'
+  },
+  {
+    id: 'palace-night-cinematic',
+    name: 'Palace Night Cinematic',
+    format: 'mp4',
+    type: 'video',
+    source: 'pinterest',
+    sourceUrl: 'https://www.pinterest.com/',
+    tags: ['palace', 'night', 'cinematic', 'shot'],
+    createdAt: '2026-06-12T06:36:00.000Z',
+    width: 3840,
+    height: 2160,
+    sizeMB: 325.1,
+    accentFrom: '#111827',
+    accentTo: '#1f2937'
+  },
+  {
+    id: 'fire-spell-loop',
+    name: 'Fire Spell Loop',
+    format: 'mov',
+    type: 'video',
+    source: 'artstation',
+    sourceUrl: 'https://www.artstation.com/',
+    tags: ['fire', 'spell', 'fx', 'loop'],
+    createdAt: '2026-06-04T02:18:00.000Z',
+    width: 1920,
+    height: 1080,
+    sizeMB: 144.7,
+    accentFrom: '#b91c1c',
+    accentTo: '#ef4444'
+  },
+  {
+    id: 'guzheng-ambient-loop',
+    name: 'Guzheng Ambient Loop',
+    format: 'wav',
+    type: 'audio',
+    source: 'pinterest',
+    sourceUrl: 'https://www.pinterest.com/',
+    tags: ['guzheng', 'ambient', 'loop', 'music'],
+    createdAt: '2026-05-31T11:30:00.000Z',
+    width: 1600,
+    height: 900,
+    sizeMB: 82.4,
+    accentFrom: '#3730a3',
+    accentTo: '#4f46e5'
+  },
+  {
+    id: 'battle-ui-click-sfx',
+    name: 'Battle UI Click SFX',
+    format: 'mp3',
+    type: 'audio',
+    source: 'huaban',
+    sourceUrl: 'https://huaban.com/',
+    tags: ['ui', 'click', 'sfx', 'battle'],
+    createdAt: '2026-06-01T09:48:00.000Z',
+    width: 1200,
+    height: 675,
+    sizeMB: 6.7,
+    accentFrom: '#0f766e',
+    accentTo: '#10b981'
+  },
+  {
+    id: 'temple-environment-pack',
+    name: 'Temple Environment Pack',
+    format: 'blend',
+    type: 'project',
+    source: 'artstation',
+    sourceUrl: 'https://www.artstation.com/',
+    tags: ['temple', 'environment', 'blend', 'scene'],
+    createdAt: '2026-05-14T13:16:00.000Z',
+    width: 2560,
+    height: 1440,
+    sizeMB: 512.6,
+    accentFrom: '#111827',
+    accentTo: '#334155'
+  },
+  {
+    id: 'dynasty-city-layout',
+    name: 'Dynasty City Layout',
+    format: 'max',
+    type: 'project',
+    source: 'pinterest',
+    sourceUrl: 'https://www.pinterest.com/',
+    tags: ['city', 'layout', 'max', 'urban'],
+    createdAt: '2026-04-30T17:40:00.000Z',
+    width: 2400,
+    height: 1350,
+    sizeMB: 421.8,
+    accentFrom: '#6b21a8',
+    accentTo: '#7e22ce'
+  },
+  {
+    id: 'horse-armor-set',
+    name: 'Horse Armor Set',
+    format: 'obj',
+    type: 'model_anim',
+    source: 'artstation',
+    sourceUrl: 'https://www.artstation.com/',
+    tags: ['horse', 'armor', 'obj', 'mount'],
+    createdAt: '2026-05-20T07:02:00.000Z',
+    width: 2048,
+    height: 1536,
+    sizeMB: 97.8,
+    accentFrom: '#1f2937',
+    accentTo: '#475569'
+  },
+  {
+    id: 'phoenix-idle-anim',
+    name: 'Phoenix Idle Anim',
+    format: 'fbx',
+    type: 'model_anim',
+    source: 'pinterest',
+    sourceUrl: 'https://www.pinterest.com/',
+    tags: ['phoenix', 'idle', 'animation', 'myth'],
+    createdAt: '2026-06-11T12:20:00.000Z',
+    width: 1920,
+    height: 1080,
+    sizeMB: 114.2,
+    accentFrom: '#be123c',
+    accentTo: '#e11d48'
+  },
+  {
+    id: 'silk-pattern-kit',
+    name: 'Silk Pattern Kit',
+    format: 'psd',
+    type: 'image_texture',
+    source: 'huaban',
+    sourceUrl: 'https://huaban.com/',
+    tags: ['silk', 'pattern', 'fabric', 'ornament'],
+    createdAt: '2026-06-08T05:14:00.000Z',
+    width: 6000,
+    height: 4000,
+    sizeMB: 201.3,
+    accentFrom: '#9f1239',
+    accentTo: '#be185d'
+  },
+  {
+    id: 'fog-volume-sequence',
+    name: 'Fog Volume Sequence',
+    format: 'exr',
+    type: 'image_texture',
+    source: 'artstation',
+    sourceUrl: 'https://www.artstation.com/',
+    tags: ['fog', 'volume', 'sequence', 'render'],
+    createdAt: '2026-05-25T15:44:00.000Z',
+    width: 4096,
+    height: 2160,
+    sizeMB: 358.7,
+    accentFrom: '#0f172a',
+    accentTo: '#1e293b'
+  },
+  {
+    id: 'river-shot-timelapse',
+    name: 'River Shot Timelapse',
+    format: 'mp4',
+    type: 'video',
+    source: 'huaban',
+    sourceUrl: 'https://huaban.com/',
+    tags: ['river', 'timelapse', 'nature', 'cinematic'],
+    createdAt: '2026-06-10T16:26:00.000Z',
+    width: 3840,
+    height: 2160,
+    sizeMB: 280.2,
+    accentFrom: '#075985',
+    accentTo: '#0284c7'
+  },
+  {
+    id: 'thunder-drums-stem',
+    name: 'Thunder Drums Stem',
+    format: 'flac',
+    type: 'audio',
+    source: 'artstation',
+    sourceUrl: 'https://www.artstation.com/',
+    tags: ['drum', 'thunder', 'stem', 'combat'],
+    createdAt: '2026-05-15T09:12:00.000Z',
+    width: 1600,
+    height: 900,
+    sizeMB: 92.5,
+    accentFrom: '#1e293b',
+    accentTo: '#475569'
+  },
+  {
+    id: 'battlepass-ui-kit',
+    name: 'Battlepass UI Kit',
+    format: 'fig',
+    type: 'project',
+    source: 'pinterest',
+    sourceUrl: 'https://www.pinterest.com/',
+    tags: ['battlepass', 'ui', 'kit', 'layout'],
+    createdAt: '2026-06-02T11:42:00.000Z',
+    width: 1920,
+    height: 1080,
+    sizeMB: 77.9,
+    accentFrom: '#0f766e',
+    accentTo: '#14b8a6'
+  },
+  {
+    id: 'terrain-blockout-scene',
+    name: 'Terrain Blockout Scene',
+    format: 'ma',
+    type: 'project',
+    source: 'artstation',
+    sourceUrl: 'https://www.artstation.com/',
+    tags: ['terrain', 'blockout', 'maya', 'layout'],
+    createdAt: '2026-05-06T04:36:00.000Z',
+    width: 2560,
+    height: 1440,
+    sizeMB: 244.8,
+    accentFrom: '#14532d',
+    accentTo: '#15803d'
+  },
+  {
+    id: 'cloth-sim-reference',
+    name: 'Cloth Sim Reference',
+    format: 'jpg',
+    type: 'image_texture',
+    source: 'pinterest',
+    sourceUrl: 'https://www.pinterest.com/',
+    tags: ['cloth', 'sim', 'reference', 'fold'],
+    createdAt: '2026-06-07T19:08:00.000Z',
+    width: 4096,
+    height: 2731,
+    sizeMB: 16.2,
+    accentFrom: '#7c2d12',
+    accentTo: '#ea580c'
+  },
+  {
+    id: 'marketing-storyboard-proj',
+    name: 'Marketing Storyboard',
+    format: 'prproj',
+    type: 'project',
+    source: 'huaban',
+    sourceUrl: 'https://huaban.com/',
+    tags: ['storyboard', 'marketing', 'video', 'sequence'],
+    createdAt: '2026-06-03T01:18:00.000Z',
+    width: 1920,
+    height: 1080,
+    sizeMB: 268.4,
+    accentFrom: '#4c1d95',
+    accentTo: '#6d28d9'
+  }
+];
+
+const EXTERNAL_TASK_STATUS_CYCLE: AssetTaskStatus[] = ['approved', 'reviewing', 'producing', 'pending', 'rejected'];
+const EXTERNAL_TIME_BASED_FORMATS = new Set(['MOV', 'MP4', 'AVI', 'MXF', 'WAV', 'MP3', 'OGG', 'AAC', 'FLAC']);
+
+const EXTERNAL_ASSETS: ExternalAsset[] = EXTERNAL_ASSET_SEEDS.map((seed, index) => {
+  const sourceMeta = EXTERNAL_SOURCE_META[seed.source];
+  const format = seed.format.toUpperCase();
+  const thumbnail = buildExternalThumbnail(seed.name, format, seed.accentFrom, seed.accentTo);
+  const isTimeBased = EXTERNAL_TIME_BASED_FORMATS.has(format);
+
+  return {
+    id: `external-${seed.id}`,
+    name: seed.name,
+    category: EXTERNAL_CATEGORY_BY_TYPE[seed.type],
+    format,
+    sizeMB: seed.sizeMB,
+    thumbnail,
+    previewUrl: thumbnail,
+    author: sourceMeta.label,
+    platform: sourceMeta.label,
+    desc: `采集来源：${sourceMeta.label}，用于内部灵感参考。`,
+    tags: dedupeTags([...seed.tags, EXTERNAL_TYPE_LABELS[seed.type], format]),
+    externalType: seed.type,
+    source: seed.source,
+    sourceUrl: seed.sourceUrl,
+    createdAt: seed.createdAt,
+    width: seed.width,
+    height: seed.height,
+    org: ASSET_ORG_OPTIONS[index % ASSET_ORG_OPTIONS.length],
+    taskStatus: EXTERNAL_TASK_STATUS_CYCLE[index % EXTERNAL_TASK_STATUS_CYCLE.length],
+    durationSec: isTimeBased ? 8 + (index * 17) % 172 : undefined,
+    nonCommercialNotice: EXTERNAL_NON_COMMERCIAL_NOTICE
+  };
+});
+
+// Dominant-color lookup for external assets (from seed accent), used by 图片搜索 scoring
+// without canvas sampling (external thumbnails are SVG data-URIs).
+const EXTERNAL_ASSET_ACCENT: Record<string, string> = Object.fromEntries(
+  EXTERNAL_ASSET_SEEDS.map(seed => [`external-${seed.id}`, seed.accentFrom])
+);
+
 const getFileExtension = (fileName: string) => {
   const ext = fileName.split('.').pop();
   return ext ? ext.toLowerCase() : '';
@@ -198,6 +918,19 @@ const formatUploadTotal = (bytes: number) => {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatDetailDateTime = (source?: string) => {
+  if (!source) return '--';
+  const parsed = new Date(source);
+  if (Number.isNaN(parsed.getTime())) return '--';
+
+  const yyyy = parsed.getFullYear();
+  const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+  const dd = String(parsed.getDate()).padStart(2, '0');
+  const hh = String(parsed.getHours()).padStart(2, '0');
+  const min = String(parsed.getMinutes()).padStart(2, '0');
+  return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
 };
 
 const inferUploadType = (file: File): PersonalUploadType | null => {
@@ -260,42 +993,161 @@ const extractNameTags = (fileName: string) => {
   return [...zhSegments, ...enSegments].slice(0, 4);
 };
 
+const getFolderBaseId = (folderId: string) => {
+  const [head, tail] = folderId.split(FOLDER_SCOPE_SEPARATOR);
+  if (!tail) return head;
+  return tail;
+};
+
+const buildScopedFolderId = (spaceId: SpaceId, folderId: string) => `${spaceId}${FOLDER_SCOPE_SEPARATOR}${folderId}`;
+
+const getDefaultFolderIdBySpace = (spaceId: SpaceId) => buildScopedFolderId(spaceId, DEFAULT_ASSET_FOLDER_BASE_ID);
+
+const isPersonalAssetId = (assetId: string) => assetId.startsWith('personal-asset-');
+
+const getDefaultFolderIdByAssetId = (assetId: string) => (
+  isPersonalAssetId(assetId)
+    ? getDefaultFolderIdBySpace(SpaceId.Personal)
+    : getDefaultFolderIdBySpace(SpaceId.ProjectA)
+);
+
+const inferSpaceIdFromFolderId = (folderId: string): SpaceId | null => {
+  if (folderId.startsWith(`${SpaceId.ProjectA}${FOLDER_SCOPE_SEPARATOR}`)) return SpaceId.ProjectA;
+  if (folderId.startsWith(`${SpaceId.ProjectB}${FOLDER_SCOPE_SEPARATOR}`)) return SpaceId.ProjectB;
+  if (folderId.startsWith(`${SpaceId.Personal}${FOLDER_SCOPE_SEPARATOR}`)) return SpaceId.Personal;
+  if (folderId.startsWith(`${SpaceId.Shared}${FOLDER_SCOPE_SEPARATOR}`)) return SpaceId.Shared;
+  return null;
+};
+
+const scopeFoldersForSpace = (sourceFolders: AssetFolder[], spaceId: SpaceId) => {
+  const anchorFolderId = SPACE_ANCHOR_FOLDER_IDS[spaceId];
+  return sourceFolders.map(folder => ({
+    id: buildScopedFolderId(spaceId, folder.id),
+    name: folder.name,
+    parentId: folder.parentId ? buildScopedFolderId(spaceId, folder.parentId) : anchorFolderId
+  }));
+};
+
 const normalizeFolders = (folders: AssetFolder[]) => {
-  return folders.filter(folder => !REMOVED_DEFAULT_FOLDER_IDS.has(folder.id));
+  const merged = new Map<string, AssetFolder>();
+  SYSTEM_FOLDERS.forEach(folder => merged.set(folder.id, folder));
+
+  folders.forEach((folder) => {
+    if (SYSTEM_FOLDER_IDS.has(folder.id)) return;
+    if (REMOVED_SYSTEM_FOLDER_IDS.has(folder.id)) return;
+    if (REMOVED_DEFAULT_FOLDER_IDS.has(getFolderBaseId(folder.id))) return;
+    if (folder.parentId === null || REMOVED_SYSTEM_FOLDER_IDS.has(folder.parentId)) {
+      const inferredSpaceId = inferSpaceIdFromFolderId(folder.id) ?? SpaceId.ProjectA;
+      const fallbackRootParent = SPACE_ANCHOR_FOLDER_IDS[inferredSpaceId];
+      merged.set(folder.id, { ...folder, parentId: fallbackRootParent });
+      return;
+    }
+    merged.set(folder.id, folder);
+  });
+
+  const normalized = [...merged.values()];
+  const folderIds = new Set(normalized.map(folder => folder.id));
+  return normalized.filter(folder => folder.parentId === null || folderIds.has(folder.parentId));
 };
 
 const normalizeFolderAssignments = (assignments: Record<string, string>) => {
   return Object.fromEntries(
-    Object.entries(assignments).map(([assetId, folderId]) => [
+    Object.entries(assignments).map(([assetId, folderId]) => {
+      if (typeof folderId !== 'string' || folderId.trim() === '') {
+        return [assetId, getDefaultFolderIdByAssetId(assetId)];
+      }
+
+      if (SYSTEM_FOLDER_IDS.has(folderId)) {
+        return [assetId, getDefaultFolderIdByAssetId(assetId)];
+      }
+
+      const baseFolderId = getFolderBaseId(folderId);
+      if (REMOVED_DEFAULT_FOLDER_IDS.has(baseFolderId)) {
+        return [assetId, getDefaultFolderIdByAssetId(assetId)];
+      }
+
+      if (folderId.includes(FOLDER_SCOPE_SEPARATOR)) {
+        return [assetId, folderId];
+      }
+
+      return [assetId, buildScopedFolderId(SpaceId.ProjectA, baseFolderId)];
+    })
+  );
+};
+
+const getInitialScopedProjectAssignments = () => {
+  return Object.fromEntries(
+    Object.entries(INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A).map(([assetId, folderId]) => [
       assetId,
-      REMOVED_DEFAULT_FOLDER_IDS.has(folderId) ? DEFAULT_ASSET_FOLDER_ID : folderId
+      buildScopedFolderId(SpaceId.ProjectA, folderId)
     ])
   );
 };
 
+const buildDefaultFolderTree = () => {
+  const seedFolders = INITIAL_ASSET_FOLDERS_PROJECT_A.filter(
+    folder => !REMOVED_DEFAULT_FOLDER_IDS.has(folder.id)
+  );
+  return normalizeFolders([
+    ...SYSTEM_FOLDERS,
+    ...scopeFoldersForSpace(seedFolders, SpaceId.ProjectA),
+    ...scopeFoldersForSpace(seedFolders, SpaceId.ProjectB),
+    ...scopeFoldersForSpace(seedFolders, SpaceId.Personal),
+    ...scopeFoldersForSpace(seedFolders, SpaceId.Shared)
+  ]);
+};
+
 const getInitialFolders = () => {
+  const defaultFolders = buildDefaultFolderTree();
+
   try {
     const stored = localStorage.getItem(ASSET_FOLDER_STORAGE_KEY);
-    if (!stored) return INITIAL_ASSET_FOLDERS_PROJECT_A;
+    if (stored) {
+      const parsed = JSON.parse(stored) as AssetFolder[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return normalizeFolders(parsed);
+      }
+    }
 
-    const parsed = JSON.parse(stored) as AssetFolder[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return INITIAL_ASSET_FOLDERS_PROJECT_A;
-    return normalizeFolders(parsed);
+    const legacyStored = localStorage.getItem(LEGACY_ASSET_FOLDER_STORAGE_KEY);
+    if (legacyStored) {
+      const parsedLegacy = JSON.parse(legacyStored) as AssetFolder[];
+      if (Array.isArray(parsedLegacy) && parsedLegacy.length > 0) {
+        const legacyFolders = parsedLegacy.filter(folder => (
+          !!folder &&
+          typeof folder.id === 'string' &&
+          typeof folder.name === 'string' &&
+          (folder.parentId === null || typeof folder.parentId === 'string')
+        ));
+        return normalizeFolders([
+          ...SYSTEM_FOLDERS,
+          ...scopeFoldersForSpace(legacyFolders, SpaceId.ProjectA),
+          ...scopeFoldersForSpace(legacyFolders, SpaceId.ProjectB),
+          ...scopeFoldersForSpace(legacyFolders, SpaceId.Personal),
+          ...scopeFoldersForSpace(legacyFolders, SpaceId.Shared)
+        ]);
+      }
+    }
+
+    return defaultFolders;
   } catch {
-    return INITIAL_ASSET_FOLDERS_PROJECT_A;
+    return defaultFolders;
   }
 };
 
 const getInitialFolderAssignments = () => {
+  const defaultAssignments = getInitialScopedProjectAssignments();
+
   try {
-    const stored = localStorage.getItem(ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY);
-    if (!stored) return INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A;
+    const stored = localStorage.getItem(ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY)
+      ?? localStorage.getItem(LEGACY_ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY);
+    if (!stored) return defaultAssignments;
 
     const parsed = JSON.parse(stored) as Record<string, string>;
-    if (!parsed || typeof parsed !== 'object') return INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A;
-    return normalizeFolderAssignments({ ...INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A, ...parsed });
+    if (!parsed || typeof parsed !== 'object') return defaultAssignments;
+    return normalizeFolderAssignments({ ...defaultAssignments, ...parsed });
   } catch {
-    return INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A;
+    return defaultAssignments;
   }
 };
 
@@ -317,6 +1169,264 @@ const getInitialFolderPaneWidth = () => {
 };
 
 type PaginationToken = number | 'ellipsis-left' | 'ellipsis-right';
+
+// --- 创建时间筛选器 (date-range) helpers ---------------------------------
+const toLocalDateInputValue = (date: Date) => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+interface CreatedRangePreset {
+  id: string;
+  label: string;
+  getRange: () => { from: string; to: string };
+}
+
+const CREATED_RANGE_PRESETS: CreatedRangePreset[] = [
+  {
+    id: '7d',
+    label: '近 7 天',
+    getRange: () => {
+      const today = new Date();
+      const start = new Date(today);
+      start.setDate(today.getDate() - 6);
+      return { from: toLocalDateInputValue(start), to: toLocalDateInputValue(today) };
+    }
+  },
+  {
+    id: '30d',
+    label: '近 30 天',
+    getRange: () => {
+      const today = new Date();
+      const start = new Date(today);
+      start.setDate(today.getDate() - 29);
+      return { from: toLocalDateInputValue(start), to: toLocalDateInputValue(today) };
+    }
+  },
+  {
+    id: '90d',
+    label: '近 90 天',
+    getRange: () => {
+      const today = new Date();
+      const start = new Date(today);
+      start.setDate(today.getDate() - 89);
+      return { from: toLocalDateInputValue(start), to: toLocalDateInputValue(today) };
+    }
+  },
+  {
+    id: 'year',
+    label: '今年',
+    getRange: () => {
+      const today = new Date();
+      const start = new Date(today.getFullYear(), 0, 1);
+      return { from: toLocalDateInputValue(start), to: toLocalDateInputValue(today) };
+    }
+  }
+];
+
+const formatCreatedRangeSummary = (from: string, to: string) => {
+  if (from && to) return `${from} ~ ${to}`;
+  if (from) return `${from} 起`;
+  if (to) return `截至 ${to}`;
+  return '';
+};
+
+// Shared dropdown body for the 创建时间 range filter (used by both internal & external bars).
+// Quick presets + labeled, mutually-constrained from/to date inputs + inline clear.
+interface CreatedRangePanelProps {
+  from: string;
+  to: string;
+  onChange: (next: { from: string; to: string }) => void;
+}
+
+const CreatedRangePanel: React.FC<CreatedRangePanelProps> = ({ from, to, onChange }) => {
+  const todayValue = toLocalDateInputValue(new Date());
+  const activePresetId = CREATED_RANGE_PRESETS.find((preset) => {
+    const range = preset.getRange();
+    return range.from === from && range.to === to;
+  })?.id ?? null;
+  const summary = formatCreatedRangeSummary(from, to);
+
+  return (
+    <div className="absolute left-0 top-full z-30 mt-1.5 w-60 rounded border border-zinc-700 bg-[#0c0c0e] p-2.5 shadow-xl shadow-black/60">
+      <div className="grid grid-cols-2 gap-1.5">
+        {CREATED_RANGE_PRESETS.map((preset) => {
+          const isActive = activePresetId === preset.id;
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => onChange(preset.getRange())}
+              className={`rounded border px-2 py-1 text-[10px] transition-colors ${
+                isActive
+                  ? 'border-[#00ff00]/60 bg-[#00ff00]/10 text-[#00ff00]'
+                  : 'border-zinc-800 bg-black text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+              }`}
+            >
+              {preset.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-2.5 space-y-1.5">
+        <label className="block">
+          <span className="mb-1 block text-[9px] uppercase tracking-wide text-zinc-500">开始日期</span>
+          <input
+            type="date"
+            value={from}
+            max={to || todayValue}
+            onChange={(event) => onChange({ from: event.target.value, to })}
+            className="w-full rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[9px] uppercase tracking-wide text-zinc-500">结束日期</span>
+          <input
+            type="date"
+            value={to}
+            min={from || undefined}
+            max={todayValue}
+            onChange={(event) => onChange({ from, to: event.target.value })}
+            className="w-full rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]"
+          />
+        </label>
+      </div>
+
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-zinc-800 pt-2">
+        <span className="truncate text-[9px] text-zinc-500">{summary || '未设置时间区间'}</span>
+        <button
+          type="button"
+          onClick={() => onChange({ from: '', to: '' })}
+          disabled={!from && !to}
+          className="shrink-0 rounded px-1.5 py-0.5 text-[9px] text-zinc-400 transition-colors hover:text-[#00ff00] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          清除
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// Reusable multi-select dropdown body (创建人/标签/后缀/组织架构/任务状态/形状). Renders the
+// panel only (caller owns the trigger button + relative wrapper).
+interface MultiSelectFilterPanelProps {
+  options: Array<{ value: string; label: string }>;
+  selected: Set<string>;
+  onToggle: (value: string) => void;
+  searchable?: boolean;
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
+  searchPlaceholder?: string;
+  emptyText?: string;
+  width?: string;
+}
+
+const MultiSelectFilterPanel: React.FC<MultiSelectFilterPanelProps> = ({
+  options, selected, onToggle, searchable, searchValue, onSearchChange, searchPlaceholder, emptyText, width
+}) => (
+  <div className={`absolute left-0 top-full z-30 mt-1.5 ${width ?? 'w-52'} rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60`}>
+    {searchable && (
+      <div className="relative mb-2">
+        <Search size={11} className="absolute left-2 top-1.5 text-zinc-600" />
+        <input
+          type="text"
+          value={searchValue ?? ''}
+          onChange={(event) => onSearchChange?.(event.target.value)}
+          placeholder={searchPlaceholder ?? '搜索'}
+          className="w-full rounded border border-zinc-800 bg-black py-1 pl-7 pr-2 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00]"
+        />
+      </div>
+    )}
+    <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+      {options.length > 0 ? options.map((option) => (
+        <label key={option.value} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+          <input
+            type="checkbox"
+            checked={selected.has(option.value)}
+            onChange={() => onToggle(option.value)}
+            className="h-3 w-3 rounded border-zinc-700 bg-black text-[#00ff00] focus:ring-[#00ff00]/50"
+          />
+          <span className="truncate">{option.label}</span>
+        </label>
+      )) : (
+        <p className="text-[10px] text-zinc-600">{emptyText ?? '暂无可选项'}</p>
+      )}
+    </div>
+  </div>
+);
+
+// Reusable numeric min/max range dropdown body (文件大小/尺寸/时长).
+interface RangeFilterPanelProps {
+  min: string;
+  max: string;
+  onMinChange: (value: string) => void;
+  onMaxChange: (value: string) => void;
+  minPlaceholder?: string;
+  maxPlaceholder?: string;
+  hint?: string;
+  width?: string;
+}
+
+const RangeFilterPanel: React.FC<RangeFilterPanelProps> = ({
+  min, max, onMinChange, onMaxChange, minPlaceholder, maxPlaceholder, hint, width
+}) => (
+  <div className={`absolute left-0 top-full z-30 mt-1.5 ${width ?? 'w-56'} rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60`}>
+    <div className="grid grid-cols-2 gap-1.5">
+      <input
+        type="number"
+        min={0}
+        value={min}
+        onChange={(event) => onMinChange(event.target.value)}
+        placeholder={minPlaceholder ?? '最小'}
+        className="rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]"
+      />
+      <input
+        type="number"
+        min={0}
+        value={max}
+        onChange={(event) => onMaxChange(event.target.value)}
+        placeholder={maxPlaceholder ?? '最大'}
+        className="rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]"
+      />
+    </div>
+    {hint && <p className="mt-1 text-[9px] text-zinc-600">{hint}</p>}
+  </div>
+);
+
+// Reusable color-swatch grid dropdown body (颜色).
+interface ColorFilterPanelProps {
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+}
+
+const ColorFilterPanel: React.FC<ColorFilterPanelProps> = ({ selected, onToggle }) => (
+  <div className="absolute left-0 top-full z-30 mt-1.5 w-52 rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60">
+    <div className="grid grid-cols-4 gap-1.5">
+      {COLOR_SWATCHES.map((swatch) => {
+        const isActive = selected.has(swatch.id);
+        return (
+          <button
+            key={swatch.id}
+            type="button"
+            onClick={() => onToggle(swatch.id)}
+            className={`flex flex-col items-center gap-1 rounded border p-1.5 transition-colors ${
+              isActive ? 'border-[#00ff00] bg-[#00ff00]/10' : 'border-zinc-800 hover:border-zinc-600'
+            }`}
+          >
+            <span
+              className="h-5 w-5 rounded-full border border-white/20"
+              style={{ backgroundColor: COLOR_SWATCH_HEX[swatch.id] }}
+            />
+            <span className="text-[9px] text-zinc-400">{swatch.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  </div>
+);
 
 const getInitialItemsPerPage = () => {
   try {
@@ -351,6 +1461,7 @@ const buildPaginationTokens = (currentPage: number, totalPages: number): Paginat
 
 export default function AssetLibrary({
   currentSpace,
+  setCurrentSpace,
   apps,
   assets,
   personalAssets,
@@ -362,9 +1473,65 @@ export default function AssetLibrary({
   addLog
 }: AssetLibraryProps) {
   // Navigation & filter states
-  const [selectedCat, setSelectedCat] = useState<AssetCategory>(AssetCategory.All);
   const [keyword, setKeyword] = useState<string>('');
+  // 图片搜索（以图搜图）: active query + async color-sampling cache & version trigger
+  const [imageSearchQuery, setImageSearchQuery] = useState<ImageSearchQuery | null>(null);
+  const [isImageSearchProcessing, setIsImageSearchProcessing] = useState<boolean>(false);
+  const [assetColorVersion, setAssetColorVersion] = useState<number>(0);
+  const imageSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const assetColorCacheRef = useRef<Map<string, RGB>>(new Map());
+  const [externalKeyword, setExternalKeyword] = useState<string>('');
+  const [externalTypeFilters, setExternalTypeFilters] = useState<Set<ExternalAssetType>>(() => new Set());
+  const [externalFormatKeyword, setExternalFormatKeyword] = useState<string>('');
+  const [externalFormatFilters, setExternalFormatFilters] = useState<Set<string>>(() => new Set());
+  const [externalSourceFilters, setExternalSourceFilters] = useState<Set<ExternalAssetSource>>(() => new Set());
+  const [externalCreatedFrom, setExternalCreatedFrom] = useState<string>('');
+  const [externalCreatedTo, setExternalCreatedTo] = useState<string>('');
+  const [externalSizeMin, setExternalSizeMin] = useState<string>('');
+  const [externalSizeMax, setExternalSizeMax] = useState<string>('');
+  const [externalSortOrder, setExternalSortOrder] = useState<'asc' | 'desc'>('desc');
+  // 外部素材新增筛选维度
+  const [externalAuthorFilters, setExternalAuthorFilters] = useState<Set<string>>(() => new Set());
+  const [externalAuthorKeyword, setExternalAuthorKeyword] = useState<string>('');
+  const [externalTagFilters, setExternalTagFilters] = useState<Set<string>>(() => new Set());
+  const [externalTagKeyword, setExternalTagKeyword] = useState<string>('');
+  const [externalOrgFilters, setExternalOrgFilters] = useState<Set<string>>(() => new Set());
+  const [externalStatusFilters, setExternalStatusFilters] = useState<Set<string>>(() => new Set());
+  const [externalShapeFilters, setExternalShapeFilters] = useState<Set<string>>(() => new Set());
+  const [externalColorFilters, setExternalColorFilters] = useState<Set<string>>(() => new Set());
+  const [externalFileSizeMin, setExternalFileSizeMin] = useState<string>('');
+  const [externalFileSizeMax, setExternalFileSizeMax] = useState<string>('');
+  const [externalDurationMin, setExternalDurationMin] = useState<string>('');
+  const [externalDurationMax, setExternalDurationMax] = useState<string>('');
+  const [openExternalFilter, setOpenExternalFilter] = useState<FilterKey | null>(null);
+  const externalFilterBarRef = useRef<HTMLDivElement | null>(null);
+  // 内容类型 tab（全部/图片/视频/3D/工业/文档/音频），内外共用
+  const [activeTypeTab, setActiveTypeTab] = useState<AssetTypeTab>('all');
+  // Internal combined filters (个人空间 / 与我共享 / 项目空间)
+  const [internalFormatKeyword, setInternalFormatKeyword] = useState<string>('');
+  const [internalFormatFilters, setInternalFormatFilters] = useState<Set<string>>(() => new Set());
+  const [internalCreatedFrom, setInternalCreatedFrom] = useState<string>('');
+  const [internalCreatedTo, setInternalCreatedTo] = useState<string>('');
+  const [internalSizeMin, setInternalSizeMin] = useState<string>(''); // 尺寸（最长边 px）
+  const [internalSizeMax, setInternalSizeMax] = useState<string>('');
+  const [internalSortOrder, setInternalSortOrder] = useState<'asc' | 'desc'>('desc');
+  // 内部空间新增筛选维度
+  const [internalAuthorFilters, setInternalAuthorFilters] = useState<Set<string>>(() => new Set());
+  const [internalAuthorKeyword, setInternalAuthorKeyword] = useState<string>('');
+  const [internalTagFilters, setInternalTagFilters] = useState<Set<string>>(() => new Set());
+  const [internalTagKeyword, setInternalTagKeyword] = useState<string>('');
+  const [internalOrgFilters, setInternalOrgFilters] = useState<Set<string>>(() => new Set());
+  const [internalStatusFilters, setInternalStatusFilters] = useState<Set<string>>(() => new Set());
+  const [internalShapeFilters, setInternalShapeFilters] = useState<Set<string>>(() => new Set());
+  const [internalColorFilters, setInternalColorFilters] = useState<Set<string>>(() => new Set());
+  const [internalFileSizeMin, setInternalFileSizeMin] = useState<string>(''); // 文件大小（MB）
+  const [internalFileSizeMax, setInternalFileSizeMax] = useState<string>('');
+  const [internalDurationMin, setInternalDurationMin] = useState<string>(''); // 时长（秒）
+  const [internalDurationMax, setInternalDurationMax] = useState<string>('');
+  const [openInternalFilter, setOpenInternalFilter] = useState<FilterKey | null>(null);
+  const internalFilterBarRef = useRef<HTMLDivElement | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<ArtAsset | null>(null);
+  const [assetDetailNameDraft, setAssetDetailNameDraft] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(getInitialItemsPerPage);
   // 卡片元信息功能暂时停用，保留原渲染逻辑便于后续快速恢复。
@@ -374,9 +1541,21 @@ export default function AssetLibrary({
   const [isFolderSearchActive, setIsFolderSearchActive] = useState<boolean>(false);
   const [folders, setFolders] = useState<AssetFolder[]>(getInitialFolders);
   const [folderAssignments, setFolderAssignments] = useState<Record<string, string>>(getInitialFolderAssignments);
-  const [selectedFolderId, setSelectedFolderId] = useState<string>('folder-primary');
+  const [selectedFolderId, setSelectedFolderId] = useState<string>(SPACE_ANCHOR_FOLDER_IDS[SpaceId.ProjectA]);
+  // Folder browse history (stack of previously-visited folder ids) so users can step back
+  // to the directory they came from. Populated by watching selectedFolderId transitions,
+  // so every selection entry point (tree click, card click, upload, delete fallback) is covered.
+  const [folderHistory, setFolderHistory] = useState<string[]>([]);
+  const previousFolderIdRef = useRef<string>(SPACE_ANCHOR_FOLDER_IDS[SpaceId.ProjectA]);
+  const isNavigatingBackRef = useRef<boolean>(false);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(
-    () => new Set(['folder-primary', 'folder-character', 'folder-scene'])
+    () => new Set([
+      PROJECT_A_SPACE_FOLDER_ID,
+      PERSONAL_SPACE_FOLDER_ID,
+      SHARED_SPACE_FOLDER_ID,
+      getDefaultFolderIdBySpace(SpaceId.ProjectA),
+      getDefaultFolderIdBySpace(SpaceId.Personal)
+    ])
   );
   const [includeSubfolderAssets, setIncludeSubfolderAssets] = useState<boolean>(true);
   const [folderEditor, setFolderEditor] = useState<{
@@ -408,6 +1587,17 @@ export default function AssetLibrary({
     assetId: string;
     assetName: string;
   } | null>(null);
+  const [projectAssetNameOverrides, setProjectAssetNameOverrides] = useState<Record<string, string>>({});
+  const [projectRemovedAssetIds, setProjectRemovedAssetIds] = useState<Set<string>>(new Set());
+  const [personalAssetMoveEditor, setPersonalAssetMoveEditor] = useState<{
+    assetId: string;
+    targetFolderId: string;
+  } | null>(null);
+  const [personalAssetRenameEditor, setPersonalAssetRenameEditor] = useState<{
+    assetId: string;
+    name: string;
+  } | null>(null);
+  const [isPersonalAssetRenameSubmitAttempted, setIsPersonalAssetRenameSubmitAttempted] = useState<boolean>(false);
   const [isPersonalUploadInfoOpen, setIsPersonalUploadInfoOpen] = useState<boolean>(false);
   const [isPersonalUploadDropzoneActive, setIsPersonalUploadDropzoneActive] = useState<boolean>(false);
   const [personalUploadDraft, setPersonalUploadDraft] = useState<PersonalUploadDraft | null>(null);
@@ -427,12 +1617,55 @@ export default function AssetLibrary({
   // Reset page when filters or space change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCat, keyword, currentSpace, selectedFolderId, includeSubfolderAssets]);
+  }, [
+    keyword,
+    currentSpace,
+    selectedFolderId,
+    includeSubfolderAssets,
+    activeTypeTab,
+    internalFormatFilters,
+    internalAuthorFilters,
+    internalTagFilters,
+    internalOrgFilters,
+    internalStatusFilters,
+    internalShapeFilters,
+    internalColorFilters,
+    internalCreatedFrom,
+    internalCreatedTo,
+    internalSizeMin,
+    internalSizeMax,
+    internalFileSizeMin,
+    internalFileSizeMax,
+    internalDurationMin,
+    internalDurationMax,
+    internalSortOrder,
+    externalKeyword,
+    externalFormatFilters,
+    externalSourceFilters,
+    externalAuthorFilters,
+    externalTagFilters,
+    externalOrgFilters,
+    externalStatusFilters,
+    externalShapeFilters,
+    externalColorFilters,
+    externalCreatedFrom,
+    externalCreatedTo,
+    externalSizeMin,
+    externalSizeMax,
+    externalFileSizeMin,
+    externalFileSizeMax,
+    externalDurationMin,
+    externalDurationMax,
+    externalSortOrder
+  ]);
 
   useEffect(() => {
     setSelectedAsset(null);
     setAssetContextMenu(null);
     setPendingPersonalAssetDelete(null);
+    setPersonalAssetMoveEditor(null);
+    setPersonalAssetRenameEditor(null);
+    setIsPersonalAssetRenameSubmitAttempted(false);
   }, [currentSpace]);
 
   useEffect(() => {
@@ -449,6 +1682,44 @@ export default function AssetLibrary({
       window.removeEventListener('scroll', closeContextMenu, true);
     };
   }, [folderContextMenu, assetContextMenu]);
+
+  useEffect(() => {
+    if (!openExternalFilter) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (externalFilterBarRef.current && !externalFilterBarRef.current.contains(event.target as Node)) {
+        setOpenExternalFilter(null);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenExternalFilter(null);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [openExternalFilter]);
+
+  useEffect(() => {
+    if (!openInternalFilter) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (internalFilterBarRef.current && !internalFilterBarRef.current.contains(event.target as Node)) {
+        setOpenInternalFilter(null);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenInternalFilter(null);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [openInternalFilter]);
 
   useEffect(() => {
     localStorage.setItem(ASSET_FOLDER_STORAGE_KEY, JSON.stringify(folders));
@@ -472,7 +1743,13 @@ export default function AssetLibrary({
       setFolders(cleanedFolders);
     }
 
-    const cleanedAssignments = normalizeFolderAssignments(folderAssignments);
+    const validFolderIds = new Set(cleanedFolders.map(folder => folder.id));
+    const cleanedAssignments = Object.fromEntries(
+      Object.entries(normalizeFolderAssignments(folderAssignments)).map(([assetId, folderId]) => {
+        if (validFolderIds.has(folderId)) return [assetId, folderId];
+        return [assetId, getDefaultFolderIdByAssetId(assetId)];
+      })
+    );
     if (Object.entries(cleanedAssignments).some(([assetId, folderId]) => folderAssignments[assetId] !== folderId)) {
       setFolderAssignments(cleanedAssignments);
     }
@@ -526,13 +1803,14 @@ export default function AssetLibrary({
   useEffect(() => {
     if (folders.some(folder => folder.id === selectedFolderId)) return;
 
-    const fallbackFolder = folders.find(folder => folder.id === DEFAULT_ASSET_FOLDER_ID)
+    const fallbackFolder = folders.find(folder => folder.id === SPACE_ANCHOR_FOLDER_IDS[currentSpace.id])
+      ?? folders.find(folder => folder.id === DEFAULT_ASSET_FOLDER_ID)
       ?? folders.find(folder => folder.parentId === null)
       ?? folders[0];
     if (fallbackFolder) {
       setSelectedFolderId(fallbackFolder.id);
     }
-  }, [folders, selectedFolderId]);
+  }, [folders, selectedFolderId, currentSpace.id]);
 
   useEffect(() => {
     if (!selectedAsset) return;
@@ -553,6 +1831,10 @@ export default function AssetLibrary({
     setPreviewMode('fit');
     setPreviewNaturalSize({ width: 0, height: 0 });
   }, [selectedAsset]);
+
+  useEffect(() => {
+    setAssetDetailNameDraft(selectedAsset?.name ?? '');
+  }, [selectedAsset?.id, selectedAsset?.name]);
 
   useEffect(() => {
     if (!selectedAsset || !previewViewportRef.current) return;
@@ -581,12 +1863,167 @@ export default function AssetLibrary({
 
   const isProjectA = currentSpace.id === SpaceId.ProjectA;
   const isPersonalSpace = currentSpace.id === SpaceId.Personal;
-  const activeAssets: ArtAsset[] = isPersonalSpace ? personalAssets : assets;
+  const projectScopedAssets = useMemo<ArtAsset[]>(() => {
+    return assets
+      .filter(asset => !projectRemovedAssetIds.has(asset.id))
+      .map(asset => {
+        const overrideName = projectAssetNameOverrides[asset.id];
+        if (!overrideName || overrideName === asset.name) return asset;
+        return { ...asset, name: overrideName };
+      });
+  }, [assets, projectAssetNameOverrides, projectRemovedAssetIds]);
+  const activeAssets: ArtAsset[] = useMemo(() => {
+    if (currentSpace.id === SpaceId.Personal) return personalAssets;
+    if (currentSpace.id === SpaceId.ProjectA) return projectScopedAssets;
+    return [];
+  }, [currentSpace.id, personalAssets, projectScopedAssets]);
+
+  // Resolve an asset's dominant color for 图片搜索 scoring: cached sample → external accent
+  // → deterministic id-hash fallback. Never blocks; the async effect fills the cache.
+  const getAssetColor = (asset: ArtAsset): RGB => {
+    const cached = assetColorCacheRef.current.get(asset.id);
+    if (cached) return cached;
+    const accent = EXTERNAL_ASSET_ACCENT[asset.id];
+    if (accent) {
+      const rgb = hexToRgb(accent);
+      if (rgb) return rgb;
+    }
+    return hashColorFallback(asset.id);
+  };
+
+  const handleImageSearchSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('请选择图片文件用于以图搜图。');
+      return;
+    }
+
+    setIsImageSearchProcessing(true);
+    addLog(`🔍 已选择参考图【${file.name}】，开始提取视觉特征并匹配相似素材。`, 'info');
+
+    const [color, dimensions] = await Promise.all([
+      getImageDominantColor(file),
+      readImageDimensions(file)
+    ]);
+    const fileBaseName = getFileBaseName(file.name);
+    const tags = extractNameTags(file.name);
+
+    setImageSearchQuery({
+      previewUrl: URL.createObjectURL(file),
+      color: color ?? { r: 128, g: 128, b: 128 },
+      width: dimensions?.width ?? 0,
+      height: dimensions?.height ?? 0,
+      category: inferCategoryForUpload(fileBaseName, 'image', tags),
+      tags,
+      fileName: file.name
+    });
+    // Text search and image search are mutually exclusive — image search takes over.
+    setKeyword('');
+    setExternalKeyword('');
+    setIsImageSearchProcessing(false);
+    addLog(`🤖 参考图特征解析完成，已按相似度对素材重新排序。`, 'success');
+  };
+
+  const clearImageSearch = () => {
+    setImageSearchQuery(prev => {
+      if (prev) URL.revokeObjectURL(prev.previewUrl);
+      return null;
+    });
+  };
+
+  const openImageSearchPicker = () => {
+    imageSearchInputRef.current?.click();
+  };
+
+  // 图片搜索 / 颜色筛选: asynchronously sample dominant colors for candidate assets not yet
+  // cached (external assets use their accent and are skipped), then bump the version to
+  // trigger a re-sort/re-filter with real colors. Runs when image search OR a color filter
+  // is active.
+  const colorFilterActive = internalColorFilters.size > 0 || externalColorFilters.size > 0;
+  useEffect(() => {
+    if (!imageSearchQuery && !colorFilterActive) return;
+    let cancelled = false;
+
+    const candidates = [...activeAssets, ...EXTERNAL_ASSETS].filter(asset => (
+      !assetColorCacheRef.current.has(asset.id) && !EXTERNAL_ASSET_ACCENT[asset.id]
+    ));
+    if (candidates.length === 0) return;
+
+    (async () => {
+      let sampledAny = false;
+      for (const asset of candidates) {
+        if (cancelled) return;
+        const color = await sampleImageDominantColor(asset.thumbnail, true);
+        assetColorCacheRef.current.set(asset.id, color ?? hashColorFallback(asset.id));
+        sampledAny = true;
+      }
+      if (!cancelled && sampledAny) {
+        setAssetColorVersion(v => v + 1);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [imageSearchQuery, colorFilterActive, activeAssets]);
   const existingTagPool = useMemo(() => {
     const sourceTags = assets.flatMap(asset => asset.tags);
     const personalTags = personalAssets.flatMap(asset => asset.tags);
     return dedupeTags([...sourceTags, ...personalTags]);
   }, [assets, personalAssets]);
+  const externalAssetById = useMemo(() => {
+    return EXTERNAL_ASSETS.reduce<Map<string, ExternalAsset>>((map, asset) => {
+      map.set(asset.id, asset);
+      return map;
+    }, new Map<string, ExternalAsset>());
+  }, []);
+  const externalAllFormats = useMemo(() => {
+    return Array.from(new Set(EXTERNAL_ASSETS.map(asset => asset.format)))
+      .sort((a, b) => a.localeCompare(b, 'en-US', { numeric: true }));
+  }, []);
+  const externalFormatFilterOptions = useMemo(() => {
+    const query = externalFormatKeyword.trim().toUpperCase();
+    if (!query) return externalAllFormats;
+    return externalAllFormats.filter(format => format.includes(query));
+  }, [externalAllFormats, externalFormatKeyword]);
+  const externalAuthorOptions = useMemo(() => {
+    const all = Array.from(new Set(EXTERNAL_ASSETS.map(a => a.author).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    const query = externalAuthorKeyword.trim().toLowerCase();
+    return query ? all.filter(a => a.toLowerCase().includes(query)) : all;
+  }, [externalAuthorKeyword]);
+  const externalTagOptions = useMemo(() => {
+    const all = dedupeTags(EXTERNAL_ASSETS.flatMap(a => a.tags));
+    const query = externalTagKeyword.trim().toLowerCase();
+    return query ? all.filter(t => t.toLowerCase().includes(query)) : all;
+  }, [externalTagKeyword]);
+  const externalOrgOptions = useMemo(() => (
+    Array.from(new Set(EXTERNAL_ASSETS.map(a => a.org).filter((o): o is string => !!o)))
+  ), []);
+  // Internal format catalog: when a type tab is active, restrict to that tab's formats;
+  // otherwise expose every known format. Filtered live by the search box.
+  const internalFormatFilterOptions = useMemo(() => {
+    const tab = ASSET_TYPE_TABS.find(t => t.id === activeTypeTab);
+    const baseFormats = tab && tab.id !== 'all' && tab.formats.length > 0
+      ? tab.formats
+      : ASSET_TYPE_TABS.flatMap(t => t.formats);
+    const unique = Array.from(new Set(baseFormats));
+    const query = internalFormatKeyword.trim().toUpperCase();
+    return query ? unique.filter(format => format.includes(query)) : unique;
+  }, [activeTypeTab, internalFormatKeyword]);
+  // Facet option lists derived from the current internal candidate set.
+  const internalAuthorOptions = useMemo(() => {
+    const all = Array.from(new Set(activeAssets.map(a => a.author).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+    const query = internalAuthorKeyword.trim().toLowerCase();
+    return query ? all.filter(a => a.toLowerCase().includes(query)) : all;
+  }, [activeAssets, internalAuthorKeyword]);
+  const internalTagOptions = useMemo(() => {
+    const all = dedupeTags(activeAssets.flatMap(a => a.tags));
+    const query = internalTagKeyword.trim().toLowerCase();
+    return query ? all.filter(t => t.toLowerCase().includes(query)) : all;
+  }, [activeAssets, internalTagKeyword]);
+  const internalOrgOptions = useMemo(() => (
+    Array.from(new Set(activeAssets.map(a => a.org).filter((o): o is string => !!o)))
+  ), [activeAssets]);
   // Fit scale in CSS pixels at zoom=1. When zoom <= 1 we treat preview as fit mode.
   const previewFitScale = useMemo(() => {
     if (
@@ -815,6 +2252,7 @@ export default function AssetLibrary({
 
   const confirmPersonalUpload = () => {
     if (!personalUploadDraft || personalUploadDraft.isTagging) return;
+    const personalDefaultFolderId = getDefaultFolderIdBySpace(SpaceId.Personal);
 
     const timestampBase = Date.now();
     const newAssets: PersonalUploadedAsset[] = personalUploadDraft.items.map((item, index) => ({
@@ -838,12 +2276,12 @@ export default function AssetLibrary({
     setFolderAssignments(prev => {
       const next = { ...prev };
       newAssets.forEach((asset) => {
-        next[asset.id] = DEFAULT_ASSET_FOLDER_ID;
+        next[asset.id] = personalDefaultFolderId;
       });
       return next;
     });
-    setSelectedFolderId(DEFAULT_ASSET_FOLDER_ID);
-    setExpandedFolderIds(prev => new Set(prev).add(DEFAULT_ASSET_FOLDER_ID));
+    setSelectedFolderId(personalDefaultFolderId);
+    setExpandedFolderIds(prev => new Set(prev).add(personalDefaultFolderId));
     addLog(`📤 个人空间上传完成：${newAssets.length} 条素材已归档到【置顶目录】。`, 'success');
     closePersonalUploadDraft();
   };
@@ -989,12 +2427,21 @@ export default function AssetLibrary({
     });
 
     const getCreatedFolderOrder = (folder: AssetFolder) => {
-      const match = CREATED_FOLDER_ID_PATTERN.exec(folder.id);
+      const match = CREATED_FOLDER_ID_PATTERN.exec(getFolderBaseId(folder.id));
       return match ? Number(match[1]) : null;
     };
 
     map.forEach((list) => {
       list.sort((a, b) => {
+        const aSystemOrder = SYSTEM_FOLDER_ORDER[a.id];
+        const bSystemOrder = SYSTEM_FOLDER_ORDER[b.id];
+        const hasSystemOrder = aSystemOrder !== undefined || bSystemOrder !== undefined;
+        if (hasSystemOrder) {
+          if (aSystemOrder === undefined) return 1;
+          if (bSystemOrder === undefined) return -1;
+          if (aSystemOrder !== bSystemOrder) return aSystemOrder - bSystemOrder;
+        }
+
         const aCreatedOrder = getCreatedFolderOrder(a);
         const bCreatedOrder = getCreatedFolderOrder(b);
 
@@ -1045,6 +2492,30 @@ export default function AssetLibrary({
     return '';
   };
 
+  const validatePersonalAssetName = (rawName: string, assetId: string, sourceAssets: ArtAsset[]): string => {
+    const name = rawName.trim();
+    if (!name) return '素材名称不能为空';
+
+    const charCount = [...name].length;
+    if (charCount > PERSONAL_ASSET_NAME_MAX_LENGTH) {
+      return `素材名称不能超过 ${PERSONAL_ASSET_NAME_MAX_LENGTH} 个字符（当前 ${charCount} 个）`;
+    }
+    if (ILLEGAL_FOLDER_NAME_CHARS_REGEX.test(name)) {
+      return '名称不能包含 \\ / : * ? " < > | 等特殊字符';
+    }
+    if (name.startsWith('.')) {
+      return '名称不能以 "." 开头';
+    }
+
+    const hasConflict = sourceAssets.some(asset => (
+      asset.id !== assetId &&
+      asset.name.trim().toLowerCase() === name.toLowerCase()
+    ));
+    if (hasConflict) return '个人空间内已存在同名素材';
+
+    return '';
+  };
+
   const folderById = useMemo(() => {
     return folders.reduce<Record<string, AssetFolder>>((acc, folder) => {
       acc[folder.id] = folder;
@@ -1052,7 +2523,164 @@ export default function AssetLibrary({
     }, {});
   }, [folders]);
 
-  const selectedFolder = folderById[selectedFolderId] ?? folders.find(folder => folder.parentId === null);
+  const getFolderSpaceId = (folderId: string): SpaceId | null => {
+    const visited = new Set<string>();
+    let cursor: AssetFolder | undefined = folderById[folderId];
+
+    while (cursor && !visited.has(cursor.id)) {
+      visited.add(cursor.id);
+      if (cursor.id === PROJECT_A_SPACE_FOLDER_ID) return SpaceId.ProjectA;
+      if (cursor.id === PROJECT_B_SPACE_FOLDER_ID) return SpaceId.ProjectB;
+      if (cursor.id === PERSONAL_SPACE_FOLDER_ID) return SpaceId.Personal;
+      if (cursor.id === SHARED_SPACE_FOLDER_ID) return SpaceId.Shared;
+      cursor = cursor.parentId ? folderById[cursor.parentId] : undefined;
+    }
+
+    return null;
+  };
+
+  const getResolvedAssetFolderId = (asset: ArtAsset) => {
+    const assignedFolderId = folderAssignments[asset.id];
+    if (assignedFolderId && folderById[assignedFolderId]) {
+      return assignedFolderId;
+    }
+
+    const fallbackFolderId = isPersonalAssetId(asset.id)
+      ? getDefaultFolderIdBySpace(SpaceId.Personal)
+      : getDefaultFolderIdBySpace(SpaceId.ProjectA);
+    return folderById[fallbackFolderId] ? fallbackFolderId : DEFAULT_ASSET_FOLDER_ID;
+  };
+
+  const selectedFolder = folderById[selectedFolderId] ?? folderById[SPACE_ANCHOR_FOLDER_IDS[currentSpace.id]];
+  const isExternalRootSelected = selectedFolder?.id === EXTERNAL_ASSET_FOLDER_ID;
+  // The toolbar "+" creates a child of whatever folder is currently selected. The external
+  // root is read-only (no space id), so child creation is disabled there.
+  const canCreateChildOfSelected = !!selectedFolder && getFolderSpaceId(selectedFolder.id) !== null;
+
+  // Record folder navigation so the back button can step through visited directories.
+  // When selectedFolderId changes via a normal selection we push the prior folder; when it
+  // changes because the user clicked "back" we skip the push (the stack was just popped).
+  useEffect(() => {
+    const previousFolderId = previousFolderIdRef.current;
+    if (previousFolderId === selectedFolderId) return;
+
+    if (isNavigatingBackRef.current) {
+      isNavigatingBackRef.current = false;
+    } else if (folderById[previousFolderId]) {
+      setFolderHistory(prev => (
+        prev[prev.length - 1] === previousFolderId ? prev : [...prev, previousFolderId]
+      ));
+    }
+
+    previousFolderIdRef.current = selectedFolderId;
+  }, [selectedFolderId, folderById]);
+
+  const goToPreviousFolder = () => {
+    setFolderHistory(prev => {
+      if (prev.length === 0) return prev;
+      const target = prev[prev.length - 1];
+      if (folderById[target]) {
+        isNavigatingBackRef.current = true;
+        setSelectedFolderId(target);
+      }
+      return prev.slice(0, -1);
+    });
+  };
+
+  const previousFolderName = folderHistory.length > 0
+    ? folderById[folderHistory[folderHistory.length - 1]]?.name ?? null
+    : null;
+
+  const selectedFolderSpaceId = selectedFolder ? getFolderSpaceId(selectedFolder.id) : null;
+  const selectedFolderSpaceAnchorId = selectedFolderSpaceId ? SPACE_ANCHOR_FOLDER_IDS[selectedFolderSpaceId] : null;
+  const getAssetsBySpaceId = (spaceId: SpaceId | null): ArtAsset[] => {
+    if (spaceId === SpaceId.Personal) return personalAssets;
+    if (spaceId === SpaceId.ProjectA) return projectScopedAssets;
+    return [];
+  };
+  const isSystemFolder = (folderId: string) => SYSTEM_FOLDER_IDS.has(folderId);
+  const resolveCreateFolderParentId = (parentId: string | null) => {
+    if (parentId) return parentId;
+    return selectedFolderSpaceAnchorId ?? SPACE_ANCHOR_FOLDER_IDS[currentSpace.id];
+  };
+  // Generic toggle for a Set-based filter state.
+  const makeSetToggle = <T,>(setter: React.Dispatch<React.SetStateAction<Set<T>>>) => (value: T) => {
+    setter(prev => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  };
+  const toggleExternalFormatFilter = makeSetToggle(setExternalFormatFilters);
+  const toggleExternalSourceFilter = makeSetToggle(setExternalSourceFilters);
+  const toggleExternalAuthorFilter = makeSetToggle(setExternalAuthorFilters);
+  const toggleExternalTagFilter = makeSetToggle(setExternalTagFilters);
+  const toggleExternalOrgFilter = makeSetToggle(setExternalOrgFilters);
+  const toggleExternalStatusFilter = makeSetToggle(setExternalStatusFilters);
+  const toggleExternalShapeFilter = makeSetToggle(setExternalShapeFilters);
+  const toggleExternalColorFilter = makeSetToggle(setExternalColorFilters);
+  const clearExternalFilters = () => {
+    setExternalKeyword('');
+    setActiveTypeTab('all');
+    setExternalFormatKeyword('');
+    setExternalFormatFilters(new Set());
+    setExternalSourceFilters(new Set());
+    setExternalCreatedFrom('');
+    setExternalCreatedTo('');
+    setExternalSizeMin('');
+    setExternalSizeMax('');
+    setExternalSortOrder('desc');
+    setExternalAuthorFilters(new Set());
+    setExternalAuthorKeyword('');
+    setExternalTagFilters(new Set());
+    setExternalTagKeyword('');
+    setExternalOrgFilters(new Set());
+    setExternalStatusFilters(new Set());
+    setExternalShapeFilters(new Set());
+    setExternalColorFilters(new Set());
+    setExternalFileSizeMin('');
+    setExternalFileSizeMax('');
+    setExternalDurationMin('');
+    setExternalDurationMax('');
+  };
+  const toggleInternalFormatFilter = makeSetToggle(setInternalFormatFilters);
+  const toggleInternalAuthorFilter = makeSetToggle(setInternalAuthorFilters);
+  const toggleInternalTagFilter = makeSetToggle(setInternalTagFilters);
+  const toggleInternalOrgFilter = makeSetToggle(setInternalOrgFilters);
+  const toggleInternalStatusFilter = makeSetToggle(setInternalStatusFilters);
+  const toggleInternalShapeFilter = makeSetToggle(setInternalShapeFilters);
+  const toggleInternalColorFilter = makeSetToggle(setInternalColorFilters);
+  const clearInternalFilters = () => {
+    setKeyword('');
+    setActiveTypeTab('all');
+    setInternalFormatKeyword('');
+    setInternalFormatFilters(new Set());
+    setInternalCreatedFrom('');
+    setInternalCreatedTo('');
+    setInternalSizeMin('');
+    setInternalSizeMax('');
+    setInternalSortOrder('desc');
+    setInternalAuthorFilters(new Set());
+    setInternalAuthorKeyword('');
+    setInternalTagFilters(new Set());
+    setInternalTagKeyword('');
+    setInternalOrgFilters(new Set());
+    setInternalStatusFilters(new Set());
+    setInternalShapeFilters(new Set());
+    setInternalColorFilters(new Set());
+    setInternalFileSizeMin('');
+    setInternalFileSizeMax('');
+    setInternalDurationMin('');
+    setInternalDurationMax('');
+  };
+
+  useEffect(() => {
+    if (!selectedFolderSpaceId || selectedFolderSpaceId === currentSpace.id) return;
+    const nextSpace = PROJECT_SPACES.find(space => space.id === selectedFolderSpaceId);
+    if (!nextSpace) return;
+    setCurrentSpace(nextSpace);
+  }, [selectedFolderSpaceId, currentSpace.id, setCurrentSpace]);
 
   const getDescendantFolderIds = (folderId: string): string[] => {
     const childFolders = foldersByParent.get(folderId) ?? [];
@@ -1065,7 +2693,8 @@ export default function AssetLibrary({
       getDescendantFolderIds(folderId).forEach(id => folderIds.add(id));
     }
 
-    return activeAssets.filter(asset => folderIds.has(folderAssignments[asset.id] ?? DEFAULT_ASSET_FOLDER_ID)).length;
+    const scopedAssets = getAssetsBySpaceId(getFolderSpaceId(folderId));
+    return scopedAssets.filter(asset => folderIds.has(getResolvedAssetFolderId(asset))).length;
   };
 
   const getFolderDepth = (folderId: string) => {
@@ -1080,18 +2709,38 @@ export default function AssetLibrary({
     return depth;
   };
 
+  const getFolderPathLabel = (folderId: string): string => {
+    const segments: string[] = [];
+    const visited = new Set<string>();
+    let cursor = folderById[folderId];
+
+    while (cursor && !visited.has(cursor.id)) {
+      visited.add(cursor.id);
+      segments.unshift(cursor.name);
+      cursor = cursor.parentId ? folderById[cursor.parentId] : undefined;
+    }
+
+    return segments.join(' / ') || folderId;
+  };
+
   const getFolderDeleteContext = (folderId: string) => {
     const targetFolder = folderById[folderId];
     if (!targetFolder) return null;
 
     const deletedFolderIds = new Set([targetFolder.id, ...getDescendantFolderIds(targetFolder.id)]);
     const remainingFolders = folders.filter(folder => !deletedFolderIds.has(folder.id));
+    const targetSpaceId = getFolderSpaceId(targetFolder.id);
     const fallbackFolder = (targetFolder.parentId && remainingFolders.some(folder => folder.id === targetFolder.parentId))
       ? folderById[targetFolder.parentId]
-      : (remainingFolders.find(folder => folder.parentId === null) ?? remainingFolders[0]);
+      : (
+        targetSpaceId
+          ? remainingFolders.find(folder => folder.id === SPACE_ANCHOR_FOLDER_IDS[targetSpaceId])
+          : remainingFolders.find(folder => folder.parentId === null)
+      );
     const fallbackFolderId = fallbackFolder?.id;
     const fallbackFolderName = fallbackFolder?.name;
-    const affectedAssetCount = activeAssets.filter(asset => deletedFolderIds.has(folderAssignments[asset.id] ?? DEFAULT_ASSET_FOLDER_ID)).length;
+    const scopedAssets = getAssetsBySpaceId(targetSpaceId);
+    const affectedAssetCount = scopedAssets.filter(asset => deletedFolderIds.has(getResolvedAssetFolderId(asset))).length;
 
     return {
       targetFolder,
@@ -1417,18 +3066,23 @@ export default function AssetLibrary({
   };
 
   const openCreateFolderEditor = (parentId: string | null) => {
+    const nextParentId = resolveCreateFolderParentId(parentId);
     setFolderContextMenu(null);
     setIsFolderEditorSubmitAttempted(false);
+    // Expand the target parent so its inline create-input row (rendered as the last child) is visible.
+    if (nextParentId) {
+      setExpandedFolderIds(prev => new Set(prev).add(nextParentId));
+    }
     setFolderEditor({
       mode: 'create',
-      parentId,
+      parentId: nextParentId,
       name: ''
     });
   };
 
   const openRenameFolderEditor = (folderId = selectedFolderId) => {
     const folder = folderById[folderId];
-    if (!folder) return;
+    if (!folder || isSystemFolder(folder.id)) return;
 
     setFolderContextMenu(null);
     setSelectedFolderId(folder.id);
@@ -1454,10 +3108,12 @@ export default function AssetLibrary({
     const folderName = folderEditor.name.trim();
 
     if (folderEditor.mode === 'create') {
+      const targetSpaceId = folderEditor.parentId ? getFolderSpaceId(folderEditor.parentId) : currentSpace.id;
+      const newFolderSpaceId = targetSpaceId ?? currentSpace.id;
       const newFolder: AssetFolder = {
-        id: `folder-${Date.now()}`,
+        id: buildScopedFolderId(newFolderSpaceId, `folder-${Date.now()}`),
         name: folderName,
-        parentId: folderEditor.parentId
+        parentId: folderEditor.parentId ?? SPACE_ANCHOR_FOLDER_IDS[newFolderSpaceId]
       };
 
       setFolders(prev => [...prev, newFolder]);
@@ -1478,6 +3134,7 @@ export default function AssetLibrary({
   };
 
   const openDeleteFolderConfirm = (folderId = selectedFolderId) => {
+    if (isSystemFolder(folderId)) return;
     setFolderContextMenu(null);
     const context = getFolderDeleteContext(folderId);
     if (!context) return;
@@ -1556,19 +3213,31 @@ export default function AssetLibrary({
   };
 
   const openAssetContextMenu = (event: React.MouseEvent, assetId: string) => {
-    if (!isPersonalSpace) return;
+    if (!isPersonalSpace && !isProjectA) return;
     event.preventDefault();
     event.stopPropagation();
+    const x = event.clientX;
+    const y = event.clientY;
+    const menuWidth = 176;
+    const viewportPadding = 8;
+    const clampedX = Math.max(viewportPadding, Math.min(x, window.innerWidth - menuWidth - viewportPadding));
+    const clampedY = Math.max(viewportPadding, Math.min(y, window.innerHeight - viewportPadding - 40));
     setFolderContextMenu(null);
     setAssetContextMenu({
       assetId,
-      x: event.clientX,
-      y: event.clientY
+      x: clampedX,
+      y: clampedY
     });
   };
 
+  const openAssetMoreMenu = (event: React.MouseEvent<HTMLButtonElement>, assetId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openAssetContextMenu(event, assetId);
+  };
+
   const openPersonalAssetDeleteConfirm = (assetId: string) => {
-    const targetAsset = personalAssets.find(asset => asset.id === assetId);
+    const targetAsset = activeAssets.find(asset => asset.id === assetId);
     if (!targetAsset) return;
     setAssetContextMenu(null);
     setPendingPersonalAssetDelete({
@@ -1577,16 +3246,196 @@ export default function AssetLibrary({
     });
   };
 
+  const openPersonalAssetMoveEditor = (assetId: string) => {
+    const targetAsset = activeAssets.find(asset => asset.id === assetId);
+    if (!targetAsset) return;
+    setAssetContextMenu(null);
+    setPersonalAssetMoveEditor({
+      assetId: targetAsset.id,
+      targetFolderId: getResolvedAssetFolderId(targetAsset)
+    });
+  };
+
+  const submitPersonalAssetMove = () => {
+    if (!personalAssetMoveEditor) return;
+
+    const targetAsset = activeAssets.find(asset => asset.id === personalAssetMoveEditor.assetId);
+    if (!targetAsset) {
+      setPersonalAssetMoveEditor(null);
+      return;
+    }
+
+    const targetFolder = folderById[personalAssetMoveEditor.targetFolderId];
+    if (!targetFolder) {
+      addLog('❌ 移动失败：目标文件夹不存在。', 'error');
+      return;
+    }
+
+    const originalFolderId = getResolvedAssetFolderId(targetAsset);
+    if (originalFolderId === targetFolder.id) {
+      setPersonalAssetMoveEditor(null);
+      return;
+    }
+
+    setFolderAssignments(prev => ({
+      ...prev,
+      [targetAsset.id]: targetFolder.id
+    }));
+    setPersonalAssetMoveEditor(null);
+    addLog(
+      `📦 已移动素材: ${targetAsset.name}（${folderById[originalFolderId]?.name ?? '未分类'} → ${targetFolder.name}）`,
+      'success'
+    );
+  };
+
+  const closePersonalAssetRenameEditor = () => {
+    setPersonalAssetRenameEditor(null);
+    setIsPersonalAssetRenameSubmitAttempted(false);
+  };
+
+  const applyAssetRename = (assetId: string, rawName: string) => {
+    const targetAsset = activeAssets.find(asset => asset.id === assetId);
+    if (!targetAsset) return { ok: false as const };
+
+    const validationError = validatePersonalAssetName(rawName, targetAsset.id, activeAssets);
+    if (validationError) {
+      addLog(`❌ 素材重命名失败：${validationError}`, 'error');
+      return { ok: false as const, nextName: targetAsset.name };
+    }
+
+    const nextName = rawName.trim();
+    if (nextName === targetAsset.name) {
+      return { ok: true as const, nextName };
+    }
+
+    if (isPersonalSpace) {
+      setPersonalAssets(prev => prev.map(asset => (
+        asset.id === targetAsset.id
+          ? { ...asset, name: nextName }
+          : asset
+      )));
+    } else {
+      const baseName = assets.find(asset => asset.id === targetAsset.id)?.name;
+      setProjectAssetNameOverrides(prev => {
+        const next = { ...prev };
+        if (baseName && nextName === baseName) {
+          delete next[targetAsset.id];
+        } else {
+          next[targetAsset.id] = nextName;
+        }
+        return next;
+      });
+    }
+    setSelectedAsset(prev => (
+      prev?.id === targetAsset.id
+        ? { ...prev, name: nextName }
+        : prev
+    ));
+    addLog(`✏️ 素材已重命名: ${targetAsset.name} → ${nextName}`, 'success');
+
+    return { ok: true as const, nextName };
+  };
+
+  const submitAssetDetailNameEdit = () => {
+    if (!selectedAsset) return;
+
+    const result = applyAssetRename(selectedAsset.id, assetDetailNameDraft);
+    if (!result.ok) {
+      setAssetDetailNameDraft(selectedAsset.name);
+      return;
+    }
+    setAssetDetailNameDraft(result.nextName);
+  };
+
+  const openPersonalAssetRenameEditor = (assetId: string) => {
+    const targetAsset = activeAssets.find(asset => asset.id === assetId);
+    if (!targetAsset) return;
+    setAssetContextMenu(null);
+    setIsPersonalAssetRenameSubmitAttempted(false);
+    setPersonalAssetRenameEditor({
+      assetId: targetAsset.id,
+      name: targetAsset.name
+    });
+  };
+
+  const submitPersonalAssetRename = () => {
+    if (!personalAssetRenameEditor) return;
+    setIsPersonalAssetRenameSubmitAttempted(true);
+
+    const result = applyAssetRename(personalAssetRenameEditor.assetId, personalAssetRenameEditor.name);
+    if (!result.ok) return;
+    closePersonalAssetRenameEditor();
+  };
+
+  const getPersonalAssetShareUrl = (asset: ArtAsset) => (
+    isPersonalSpace
+      ? `${window.location.origin}/personal-space/assets/${asset.id}`
+      : `${window.location.origin}/project-space/${currentSpace.id}/assets/${asset.id}`
+  );
+
+  const handleSharePersonalAsset = async (asset: ArtAsset) => {
+    if (!isPersonalSpace) return;
+
+    setAssetContextMenu(null);
+    const shareUrl = getPersonalAssetShareUrl(asset);
+
+    const supportsNativeShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    if (supportsNativeShare) {
+      try {
+        await navigator.share({
+          title: asset.name,
+          text: `分享素材：${asset.name}`,
+          url: shareUrl
+        });
+        addLog(`📤 已触发系统分享: ${asset.name}`, 'success');
+        return;
+      } catch {
+        // If the user cancels sharing, we simply keep the current state.
+      }
+    }
+
+    window.alert(`[分享链接]\n${shareUrl}`);
+    addLog(`📤 已生成分享链接: ${asset.name}`, 'info');
+  };
+
+  const handleCopyPersonalAssetLink = async (asset: ArtAsset) => {
+    if (!isPersonalSpace && !isProjectA) return;
+
+    const shareUrl = getPersonalAssetShareUrl(asset);
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      addLog(`🔗 已复制链接: ${asset.name}`, 'success');
+    } catch {
+      window.alert(`[复制失败，请手动复制]\n${shareUrl}`);
+      addLog(`🔗 已提供可复制链接: ${asset.name}`, 'info');
+    }
+  };
+
   const confirmPersonalAssetDelete = () => {
     if (!pendingPersonalAssetDelete) return;
 
-    const targetAsset = personalAssets.find(asset => asset.id === pendingPersonalAssetDelete.assetId);
+    const targetAsset = activeAssets.find(asset => asset.id === pendingPersonalAssetDelete.assetId);
     if (!targetAsset) {
       setPendingPersonalAssetDelete(null);
       return;
     }
 
-    setPersonalAssets(prev => prev.filter(asset => asset.id !== targetAsset.id));
+    if (isPersonalSpace) {
+      setPersonalAssets(prev => prev.filter(asset => asset.id !== targetAsset.id));
+    } else {
+      setProjectRemovedAssetIds(prev => {
+        const next = new Set(prev);
+        next.add(targetAsset.id);
+        return next;
+      });
+      setProjectAssetNameOverrides(prev => {
+        if (!(targetAsset.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[targetAsset.id];
+        return next;
+      });
+    }
     setFolderAssignments(prev => {
       const next = { ...prev };
       delete next[targetAsset.id];
@@ -1606,7 +3455,9 @@ export default function AssetLibrary({
     }
 
     setPendingPersonalAssetDelete(null);
-    addLog(`🗑️ 已删除个人空间素材: ${targetAsset.name}`, 'warning');
+    setPersonalAssetMoveEditor(prev => (prev?.assetId === targetAsset.id ? null : prev));
+    setPersonalAssetRenameEditor(prev => (prev?.assetId === targetAsset.id ? null : prev));
+    addLog(`🗑️ 已删除素材: ${targetAsset.name}`, 'warning');
   };
 
   const startFolderPaneResize = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1633,37 +3484,320 @@ export default function AssetLibrary({
 
   const folderEditorValidationError = folderEditor ? validateFolderName(folderEditor.name, folderEditor) : '';
   const shouldShowFolderEditorError = isFolderEditorSubmitAttempted && !!folderEditorValidationError;
+  const personalAssetRenameValidationError = personalAssetRenameEditor
+    ? validatePersonalAssetName(personalAssetRenameEditor.name, personalAssetRenameEditor.assetId, activeAssets)
+    : '';
+  const shouldShowPersonalAssetRenameError = isPersonalAssetRenameSubmitAttempted && !!personalAssetRenameValidationError;
+  const moveEditorAsset = personalAssetMoveEditor
+    ? activeAssets.find(asset => asset.id === personalAssetMoveEditor.assetId) ?? null
+    : null;
+  const renameEditorAsset = personalAssetRenameEditor
+    ? activeAssets.find(asset => asset.id === personalAssetRenameEditor.assetId) ?? null
+    : null;
 
   // Filtering calculation
-  const filteredAssets = activeAssets.filter(asset => {
-    if (!isProjectA && !isPersonalSpace) return false;
-    if (!scopedFolderIds.has(folderAssignments[asset.id] ?? DEFAULT_ASSET_FOLDER_ID)) return false;
+  // 图片搜索: per-asset similarity score (0~100) for the active query. Recomputed when the
+  // query changes or async color sampling bumps assetColorVersion. Empty when inactive.
+  const imageSimilarityById = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!imageSearchQuery) return map;
+    void assetColorVersion; // re-run after async color cache fills
+    [...activeAssets, ...EXTERNAL_ASSETS].forEach((asset) => {
+      map.set(asset.id, computeImageSimilarity(imageSearchQuery, asset, getAssetColor(asset)));
+    });
+    return map;
+  }, [imageSearchQuery, assetColorVersion, activeAssets]);
 
-    // Cat filter
-    if (selectedCat !== AssetCategory.All && asset.category !== selectedCat) return false;
+  const filteredInternalAssets = useMemo(() => {
+    if (isExternalRootSelected) return [];
 
-    // Search Box keyword matching title or tags
-    if (keyword.trim() !== '') {
-      const kw = keyword.toLowerCase();
-      const matchTitle = asset.name.toLowerCase().includes(kw);
-      const matchTags = asset.tags.some(t => t.toLowerCase().includes(kw));
-      return matchTitle || matchTags;
+    const createdFromTs = internalCreatedFrom
+      ? new Date(`${internalCreatedFrom}T00:00:00`).getTime()
+      : null;
+    const createdToTs = internalCreatedTo
+      ? new Date(`${internalCreatedTo}T23:59:59`).getTime()
+      : null;
+    const parsedMinSize = internalSizeMin.trim() === '' ? null : Number(internalSizeMin);
+    const parsedMaxSize = internalSizeMax.trim() === '' ? null : Number(internalSizeMax);
+    const hasMinSize = parsedMinSize !== null && Number.isFinite(parsedMinSize);
+    const hasMaxSize = parsedMaxSize !== null && Number.isFinite(parsedMaxSize);
+    const parsedMinFileSize = internalFileSizeMin.trim() === '' ? null : Number(internalFileSizeMin);
+    const parsedMaxFileSize = internalFileSizeMax.trim() === '' ? null : Number(internalFileSizeMax);
+    const hasMinFileSize = parsedMinFileSize !== null && Number.isFinite(parsedMinFileSize);
+    const hasMaxFileSize = parsedMaxFileSize !== null && Number.isFinite(parsedMaxFileSize);
+    const parsedMinDuration = internalDurationMin.trim() === '' ? null : Number(internalDurationMin);
+    const parsedMaxDuration = internalDurationMax.trim() === '' ? null : Number(internalDurationMax);
+    const hasMinDuration = parsedMinDuration !== null && Number.isFinite(parsedMinDuration);
+    const hasMaxDuration = parsedMaxDuration !== null && Number.isFinite(parsedMaxDuration);
+    const kw = keyword.trim().toLowerCase();
+    const isImageSearch = imageSearchQuery !== null;
+    void assetColorVersion; // re-run color matching after async sampling
+
+    const filtered = activeAssets.filter((asset) => {
+      if (!scopedFolderIds.has(getResolvedAssetFolderId(asset))) return false;
+
+      // 类型 tab（按后缀归类）
+      if (activeTypeTab !== 'all' && getAssetTypeTab(asset.format) !== activeTypeTab) return false;
+      if (internalFormatFilters.size > 0 && !internalFormatFilters.has(asset.format.trim().toUpperCase())) return false;
+      if (internalAuthorFilters.size > 0 && !internalAuthorFilters.has(asset.author)) return false;
+      if (internalTagFilters.size > 0 && !asset.tags.some(t => internalTagFilters.has(t))) return false;
+      if (internalOrgFilters.size > 0 && (!asset.org || !internalOrgFilters.has(asset.org))) return false;
+      if (internalStatusFilters.size > 0 && (!asset.taskStatus || !internalStatusFilters.has(asset.taskStatus))) return false;
+      if (internalShapeFilters.size > 0) {
+        const shape = getAssetShape(asset);
+        if (!shape || !internalShapeFilters.has(shape)) return false;
+      }
+      if (internalColorFilters.size > 0 && !internalColorFilters.has(nearestColorSwatchId(getAssetColor(asset)))) return false;
+
+      if (createdFromTs !== null || createdToTs !== null) {
+        const createdTs = asset.createdAt ? new Date(asset.createdAt).getTime() : NaN;
+        if (Number.isNaN(createdTs)) return false;
+        if (createdFromTs !== null && createdTs < createdFromTs) return false;
+        if (createdToTs !== null && createdTs > createdToTs) return false;
+      }
+
+      if (hasMinSize || hasMaxSize) {
+        const longestEdge = getAssetLongestEdge(asset);
+        if (longestEdge === null) return false;
+        if (hasMinSize && longestEdge < (parsedMinSize as number)) return false;
+        if (hasMaxSize && longestEdge > (parsedMaxSize as number)) return false;
+      }
+
+      if (hasMinFileSize && asset.sizeMB < (parsedMinFileSize as number)) return false;
+      if (hasMaxFileSize && asset.sizeMB > (parsedMaxFileSize as number)) return false;
+
+      if (hasMinDuration || hasMaxDuration) {
+        if (asset.durationSec === undefined) return false;
+        if (hasMinDuration && asset.durationSec < (parsedMinDuration as number)) return false;
+        if (hasMaxDuration && asset.durationSec > (parsedMaxDuration as number)) return false;
+      }
+
+      // Text keyword and image search are mutually exclusive; skip kw when image search is active.
+      if (!isImageSearch && kw) {
+        const matchTitle = asset.name.toLowerCase().includes(kw);
+        const matchTags = asset.tags.some(t => t.toLowerCase().includes(kw));
+        if (!matchTitle && !matchTags) return false;
+      }
+
+      return true;
+    });
+
+    if (isImageSearch) {
+      return [...filtered].sort((a, b) => (
+        (imageSimilarityById.get(b.id) ?? 0) - (imageSimilarityById.get(a.id) ?? 0)
+      ));
     }
 
-    return true;
-  });
+    const getTime = (asset: ArtAsset) => (asset.createdAt ? new Date(asset.createdAt).getTime() : 0);
+    return [...filtered].sort((a, b) => {
+      const aTime = getTime(a);
+      const bTime = getTime(b);
+      if (aTime !== bTime) {
+        return internalSortOrder === 'asc' ? aTime - bTime : bTime - aTime;
+      }
+      return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
+    });
+  }, [
+    activeAssets,
+    scopedFolderIds,
+    isExternalRootSelected,
+    keyword,
+    activeTypeTab,
+    internalFormatFilters,
+    internalAuthorFilters,
+    internalTagFilters,
+    internalOrgFilters,
+    internalStatusFilters,
+    internalShapeFilters,
+    internalColorFilters,
+    internalCreatedFrom,
+    internalCreatedTo,
+    internalSizeMin,
+    internalSizeMax,
+    internalFileSizeMin,
+    internalFileSizeMax,
+    internalDurationMin,
+    internalDurationMax,
+    internalSortOrder,
+    imageSearchQuery,
+    imageSimilarityById,
+    assetColorVersion
+  ]);
+  const filteredExternalAssets = useMemo(() => {
+    const normalizedKeyword = externalKeyword.trim().toLowerCase();
+    const isImageSearch = imageSearchQuery !== null;
+    const createdFromTs = externalCreatedFrom
+      ? new Date(`${externalCreatedFrom}T00:00:00`).getTime()
+      : null;
+    const createdToTs = externalCreatedTo
+      ? new Date(`${externalCreatedTo}T23:59:59`).getTime()
+      : null;
+    const parsedMinEdge = externalSizeMin.trim() === '' ? null : Number(externalSizeMin);
+    const parsedMaxEdge = externalSizeMax.trim() === '' ? null : Number(externalSizeMax);
+    const hasMinEdge = parsedMinEdge !== null && Number.isFinite(parsedMinEdge);
+    const hasMaxEdge = parsedMaxEdge !== null && Number.isFinite(parsedMaxEdge);
+    const parsedMinFileSize = externalFileSizeMin.trim() === '' ? null : Number(externalFileSizeMin);
+    const parsedMaxFileSize = externalFileSizeMax.trim() === '' ? null : Number(externalFileSizeMax);
+    const hasMinFileSize = parsedMinFileSize !== null && Number.isFinite(parsedMinFileSize);
+    const hasMaxFileSize = parsedMaxFileSize !== null && Number.isFinite(parsedMaxFileSize);
+    const parsedMinDuration = externalDurationMin.trim() === '' ? null : Number(externalDurationMin);
+    const parsedMaxDuration = externalDurationMax.trim() === '' ? null : Number(externalDurationMax);
+    const hasMinDuration = parsedMinDuration !== null && Number.isFinite(parsedMinDuration);
+    const hasMaxDuration = parsedMaxDuration !== null && Number.isFinite(parsedMaxDuration);
+    void assetColorVersion;
+
+    const filtered = EXTERNAL_ASSETS.filter((asset) => {
+      if (!isImageSearch && normalizedKeyword) {
+        const matchName = asset.name.toLowerCase().includes(normalizedKeyword);
+        const matchTags = asset.tags.some(tag => tag.toLowerCase().includes(normalizedKeyword));
+        if (!matchName && !matchTags) return false;
+      }
+
+      if (activeTypeTab !== 'all' && getAssetTypeTab(asset.format) !== activeTypeTab) return false;
+      if (externalFormatFilters.size > 0 && !externalFormatFilters.has(asset.format)) return false;
+      if (externalSourceFilters.size > 0 && !externalSourceFilters.has(asset.source)) return false;
+      if (externalAuthorFilters.size > 0 && !externalAuthorFilters.has(asset.author)) return false;
+      if (externalTagFilters.size > 0 && !asset.tags.some(t => externalTagFilters.has(t))) return false;
+      if (externalOrgFilters.size > 0 && (!asset.org || !externalOrgFilters.has(asset.org))) return false;
+      if (externalStatusFilters.size > 0 && (!asset.taskStatus || !externalStatusFilters.has(asset.taskStatus))) return false;
+      if (externalShapeFilters.size > 0) {
+        const shape = getAssetShape(asset);
+        if (!shape || !externalShapeFilters.has(shape)) return false;
+      }
+      if (externalColorFilters.size > 0 && !externalColorFilters.has(nearestColorSwatchId(getAssetColor(asset)))) return false;
+
+      const createdAtTs = new Date(asset.createdAt).getTime();
+      if (createdFromTs !== null && Number.isFinite(createdFromTs) && createdAtTs < createdFromTs) return false;
+      if (createdToTs !== null && Number.isFinite(createdToTs) && createdAtTs > createdToTs) return false;
+
+      const longestEdge = Math.max(asset.width, asset.height);
+      if (hasMinEdge && longestEdge < (parsedMinEdge as number)) return false;
+      if (hasMaxEdge && longestEdge > (parsedMaxEdge as number)) return false;
+
+      if (hasMinFileSize && asset.sizeMB < (parsedMinFileSize as number)) return false;
+      if (hasMaxFileSize && asset.sizeMB > (parsedMaxFileSize as number)) return false;
+
+      if (hasMinDuration || hasMaxDuration) {
+        if (asset.durationSec === undefined) return false;
+        if (hasMinDuration && asset.durationSec < (parsedMinDuration as number)) return false;
+        if (hasMaxDuration && asset.durationSec > (parsedMaxDuration as number)) return false;
+      }
+
+      return true;
+    });
+
+    if (isImageSearch) {
+      return [...filtered].sort((a, b) => (
+        (imageSimilarityById.get(b.id) ?? 0) - (imageSimilarityById.get(a.id) ?? 0)
+      ));
+    }
+
+    filtered.sort((a, b) => {
+      const aTime = new Date(a.createdAt).getTime();
+      const bTime = new Date(b.createdAt).getTime();
+      if (aTime !== bTime) {
+        return externalSortOrder === 'asc' ? aTime - bTime : bTime - aTime;
+      }
+      return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
+    });
+
+    return filtered;
+  }, [
+    externalKeyword,
+    activeTypeTab,
+    externalFormatFilters,
+    externalSourceFilters,
+    externalAuthorFilters,
+    externalTagFilters,
+    externalOrgFilters,
+    externalStatusFilters,
+    externalShapeFilters,
+    externalColorFilters,
+    externalCreatedFrom,
+    externalCreatedTo,
+    externalSizeMin,
+    externalSizeMax,
+    externalFileSizeMin,
+    externalFileSizeMax,
+    externalDurationMin,
+    externalDurationMax,
+    externalSortOrder,
+    imageSearchQuery,
+    imageSimilarityById,
+    assetColorVersion
+  ]);
+  const hasExternalActiveFilters = (
+    externalKeyword.trim() !== '' ||
+    activeTypeTab !== 'all' ||
+    externalFormatFilters.size > 0 ||
+    externalSourceFilters.size > 0 ||
+    externalAuthorFilters.size > 0 ||
+    externalTagFilters.size > 0 ||
+    externalOrgFilters.size > 0 ||
+    externalStatusFilters.size > 0 ||
+    externalShapeFilters.size > 0 ||
+    externalColorFilters.size > 0 ||
+    externalCreatedFrom !== '' ||
+    externalCreatedTo !== '' ||
+    externalSizeMin.trim() !== '' ||
+    externalSizeMax.trim() !== '' ||
+    externalFileSizeMin.trim() !== '' ||
+    externalFileSizeMax.trim() !== '' ||
+    externalDurationMin.trim() !== '' ||
+    externalDurationMax.trim() !== '' ||
+    externalSortOrder !== 'desc'
+  );
+
+  const externalCreatedCount = (externalCreatedFrom !== '' ? 1 : 0) + (externalCreatedTo !== '' ? 1 : 0);
+  const externalSizeCount = (externalSizeMin.trim() !== '' ? 1 : 0)
+    + (externalSizeMax.trim() !== '' ? 1 : 0)
+    + (externalSortOrder !== 'desc' ? 1 : 0);
+  const externalFileSizeCount = (externalFileSizeMin.trim() !== '' ? 1 : 0) + (externalFileSizeMax.trim() !== '' ? 1 : 0);
+  const externalDurationCount = (externalDurationMin.trim() !== '' ? 1 : 0) + (externalDurationMax.trim() !== '' ? 1 : 0);
+
+  const hasInternalActiveFilters = (
+    keyword.trim() !== '' ||
+    activeTypeTab !== 'all' ||
+    internalFormatFilters.size > 0 ||
+    internalAuthorFilters.size > 0 ||
+    internalTagFilters.size > 0 ||
+    internalOrgFilters.size > 0 ||
+    internalStatusFilters.size > 0 ||
+    internalShapeFilters.size > 0 ||
+    internalColorFilters.size > 0 ||
+    internalCreatedFrom !== '' ||
+    internalCreatedTo !== '' ||
+    internalSizeMin.trim() !== '' ||
+    internalSizeMax.trim() !== '' ||
+    internalFileSizeMin.trim() !== '' ||
+    internalFileSizeMax.trim() !== '' ||
+    internalDurationMin.trim() !== '' ||
+    internalDurationMax.trim() !== '' ||
+    internalSortOrder !== 'desc'
+  );
+  const internalCreatedCount = (internalCreatedFrom !== '' ? 1 : 0) + (internalCreatedTo !== '' ? 1 : 0);
+  const internalSizeCount = (internalSizeMin.trim() !== '' ? 1 : 0)
+    + (internalSizeMax.trim() !== '' ? 1 : 0)
+    + (internalSortOrder !== 'desc' ? 1 : 0);
+  const internalFileSizeCount = (internalFileSizeMin.trim() !== '' ? 1 : 0) + (internalFileSizeMax.trim() !== '' ? 1 : 0);
+  const internalDurationCount = (internalDurationMin.trim() !== '' ? 1 : 0) + (internalDurationMax.trim() !== '' ? 1 : 0);
 
   const personalReadyTaggingCount = personalUploadDraft
     ? personalUploadDraft.items.filter(item => item.status === 'ready').length
     : 0;
 
-  const totalItems = filteredAssets.length;
+  const totalItems = isExternalRootSelected ? filteredExternalAssets.length : filteredInternalAssets.length;
   const totalPages = Math.ceil(totalItems / itemsPerPage);
   const effectivePage = totalPages === 0 ? 1 : Math.min(currentPage, totalPages);
   const startIndex = (effectivePage - 1) * itemsPerPage;
   const endIndexExclusive = startIndex + itemsPerPage;
   const pageTokens = buildPaginationTokens(effectivePage, totalPages);
-  const paginatedAssets = filteredAssets.slice(startIndex, endIndexExclusive);
+  const paginatedInternalAssets = isExternalRootSelected
+    ? []
+    : filteredInternalAssets.slice(startIndex, endIndexExclusive);
+  const paginatedExternalAssets = isExternalRootSelected
+    ? filteredExternalAssets.slice(startIndex, endIndexExclusive)
+    : [];
 
   useEffect(() => {
     if (totalPages === 0) {
@@ -1675,27 +3809,131 @@ export default function AssetLibrary({
     }
   }, [currentPage, totalPages]);
 
-  const selectedAssetTask = selectedAsset
+  const selectedExternalAsset = selectedAsset
+    ? externalAssetById.get(selectedAsset.id) ?? null
+    : null;
+  const isSelectedExternalAsset = !!selectedExternalAsset;
+  const selectedExternalSourceMeta = selectedExternalAsset
+    ? EXTERNAL_SOURCE_META[selectedExternalAsset.source]
+    : null;
+  const selectedAssetTask = selectedAsset && !isSelectedExternalAsset
     ? activeDownloads.find(task => task.assetId === selectedAsset.id)
     : null;
-  const selectedAssetCategoryName = selectedAsset
-    ? categoryTabs.find(tab => tab.id === selectedAsset.category)?.name ?? selectedAsset.category
+  const projectDetailTimestampLabel = useMemo(() => formatDetailDateTime(new Date().toISOString()), []);
+  const selectedPersonalAsset = selectedAsset
+    ? personalAssets.find(asset => asset.id === selectedAsset.id) ?? null
+    : null;
+  const selectedAssetResolutionFromTag = selectedAsset
+    ? selectedAsset.tags.find(tag => /^\d{2,5}[xX]\d{2,5}$/.test(tag))
     : '';
+  const selectedAssetDimensionLabel = selectedExternalAsset
+    ? `${selectedExternalAsset.width}*${selectedExternalAsset.height}`
+    : (
+      previewNaturalSize.width > 0 && previewNaturalSize.height > 0
+        ? `${previewNaturalSize.width}*${previewNaturalSize.height}`
+        : (selectedAssetResolutionFromTag ? selectedAssetResolutionFromTag.replace(/[xX]/, '*') : '--')
+    );
+  const selectedAssetImportedAtLabel = selectedExternalAsset
+    ? formatDetailDateTime(selectedExternalAsset.createdAt)
+    : (
+      selectedPersonalAsset
+        ? formatDetailDateTime(selectedPersonalAsset.uploadedAt)
+        : projectDetailTimestampLabel
+    );
+  const selectedAssetCreatedAtLabel = selectedAssetImportedAtLabel;
+  const selectedAssetUpdatedAtLabel = selectedAssetImportedAtLabel;
   const contextMenuAsset = assetContextMenu
     ? activeAssets.find(asset => asset.id === assetContextMenu.assetId)
     : null;
+  const contextMenuFolder = folderContextMenu
+    ? folderById[folderContextMenu.folderId] ?? null
+    : null;
+  const canCreateSiblingFolder = !!contextMenuFolder
+    && !isSystemFolder(contextMenuFolder.id)
+    && contextMenuFolder.parentId !== null;
+  const canCreateChildFolder = !!contextMenuFolder
+    && getFolderSpaceId(contextMenuFolder.id) !== null;
+  const canMutateContextFolder = !!contextMenuFolder && !isSystemFolder(contextMenuFolder.id);
+
+  const renderInlineFolderCreateEditor = (depth: number): React.ReactNode => {
+    if (!folderEditor || folderEditor.mode !== 'create') return null;
+
+    return (
+      <div className="py-1 pr-2" style={{ paddingLeft: `${8 + depth * 16}px` }}>
+        <div className="flex items-center gap-1.5">
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center text-zinc-700">
+            <CornerDownRight size={12} />
+          </span>
+          <Folder size={14} className="shrink-0 text-zinc-500" />
+          <input
+            autoFocus
+            maxLength={FOLDER_NAME_MAX_LENGTH}
+            value={folderEditor.name}
+            onChange={(event) => setFolderEditor(prev => prev ? { ...prev, name: event.target.value } : prev)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') submitFolderEditor();
+              if (event.key === 'Escape') closeFolderEditor();
+            }}
+            placeholder="文件夹名称"
+            className={`min-w-0 flex-1 rounded border bg-[#0c0c0e] px-2 py-1 text-xs text-zinc-200 outline-none transition-colors ${
+              shouldShowFolderEditorError
+                ? 'border-red-500/70 focus:border-red-500'
+                : 'border-zinc-800 focus:border-[#00ff00]'
+            }`}
+          />
+          <button
+            type="button"
+            title={shouldShowFolderEditorError ? folderEditorValidationError : '确认'}
+            disabled={shouldShowFolderEditorError}
+            onClick={submitFolderEditor}
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${
+              shouldShowFolderEditorError
+                ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+                : 'bg-[#00ff00] text-black'
+            }`}
+          >
+            <Check size={12} />
+          </button>
+          <button
+            type="button"
+            title="取消"
+            onClick={closeFolderEditor}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-zinc-800 text-zinc-500 hover:text-white"
+          >
+            <X size={12} />
+          </button>
+        </div>
+        {shouldShowFolderEditorError && (
+          <p className="mt-1 pl-6 text-[10px] font-mono leading-relaxed text-red-400">
+            {folderEditorValidationError}
+          </p>
+        )}
+      </div>
+    );
+  };
 
   const renderFolderTree = (parentId: string | null, depth = 0): React.ReactNode => {
     const childFolders = (foldersByParent.get(parentId) ?? []).filter(folder => (
       !visibleFolderIds || visibleFolderIds.has(folder.id)
     ));
+    // Inline create-editor renders as the last child of its target parent.
+    const isCreatingHere = folderEditor?.mode === 'create' && folderEditor.parentId === parentId;
 
-    return childFolders.map((folder) => {
+    const renderedChildren = childFolders.map((folder) => {
       const children = foldersByParent.get(folder.id) ?? [];
       const hasChildren = children.length > 0;
       const isExpanded = expandedFolderIds.has(folder.id);
       const isSelected = selectedFolderId === folder.id;
       const nestedCount = getFolderAssetCount(folder.id);
+      // Force-expand the subtree when the inline create-editor targets this folder,
+      // even if it currently has no children, so the input row is visible.
+      const isCreatingInThisFolder = folderEditor?.mode === 'create' && folderEditor.parentId === folder.id;
+      const shouldRenderSubtree = (isExpanded && hasChildren) || isCreatingInThisFolder;
+
+      const isRoot = depth === 0;
+      const rootVisual = isRoot ? ROOT_FOLDER_VISUALS[folder.id] : undefined;
+      const accent = rootVisual?.accent ?? '#00ff00';
+      const RootIcon = rootVisual?.icon;
 
       return (
         <div key={folder.id}>
@@ -1703,12 +3941,17 @@ export default function AssetLibrary({
             type="button"
             onClick={() => setSelectedFolderId(folder.id)}
             onContextMenu={(event) => openFolderContextMenu(event, folder.id)}
-            className={`group/folder flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-xs transition-all ${
+            className={`group/folder flex w-full items-center gap-1.5 rounded text-left transition-all px-2 ${
+              isRoot ? 'py-2 text-[13px] font-semibold' : 'py-1.5 text-xs'
+            } ${
               isSelected
-                ? 'bg-[#18181b] text-white border border-transparent'
-                : 'text-zinc-400 border border-transparent hover:bg-[#0c0c0e] hover:text-white'
+                ? 'bg-[#18181b] text-white border-l-2'
+                : `border-l-2 border-transparent ${isRoot ? 'text-zinc-300' : 'text-zinc-400'} hover:bg-[#0c0c0e] hover:text-white`
             }`}
-            style={{ paddingLeft: `${8 + depth * 16}px` }}
+            style={{
+              paddingLeft: `${8 + depth * 16}px`,
+              borderLeftColor: isSelected ? accent : undefined
+            }}
           >
             <span
               role="button"
@@ -1735,36 +3978,294 @@ export default function AssetLibrary({
                 <span className="h-1 w-1 rounded-full bg-current" />
               )}
             </span>
-            {isExpanded && hasChildren ? (
-              <FolderOpen size={15} className={isSelected ? 'text-[#00ff00]' : 'text-zinc-400 group-hover/folder:text-[#00ff00]'} />
+            {isRoot && RootIcon ? (
+              <RootIcon size={15} style={{ color: accent }} className="shrink-0" />
+            ) : isExpanded && hasChildren ? (
+              <FolderOpen size={14} className={isSelected ? 'text-zinc-300' : 'text-zinc-500 group-hover/folder:text-zinc-300'} />
             ) : (
-              <Folder size={15} className={isSelected ? 'text-[#00ff00]' : 'text-zinc-400 group-hover/folder:text-[#00ff00]'} />
+              <Folder size={14} className={isSelected ? 'text-zinc-300' : 'text-zinc-500 group-hover/folder:text-zinc-300'} />
             )}
             <span className="min-w-0 flex-1 truncate">{folder.name}</span>
-            <span className={`font-mono text-[10px] ${isSelected ? 'text-[#00ff00]' : 'text-zinc-500'}`}>
-              {nestedCount}
+            <span
+              className="font-mono text-[10px]"
+              style={{ color: isSelected ? accent : undefined }}
+            >
+              <span className={isSelected ? '' : 'text-zinc-500'}>{nestedCount}</span>
             </span>
           </button>
-          {hasChildren && isExpanded && renderFolderTree(folder.id, depth + 1)}
+          {shouldRenderSubtree && renderFolderTree(folder.id, depth + 1)}
         </div>
       );
     });
+
+    if (!isCreatingHere) return renderedChildren;
+
+    return (
+      <>
+        {renderedChildren}
+        {renderInlineFolderCreateEditor(depth)}
+      </>
+    );
+  };
+
+  // Generic filter trigger button + popover wrapper for the toolbar.
+  const renderFilterDropdown = (
+    scope: 'internal' | 'external',
+    key: FilterKey,
+    label: string,
+    count: number,
+    panel: React.ReactNode
+  ) => {
+    const open = scope === 'internal' ? openInternalFilter : openExternalFilter;
+    const setOpen = scope === 'internal' ? setOpenInternalFilter : setOpenExternalFilter;
+    const isOpen = open === key;
+    const active = count > 0 || isOpen;
+    return (
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen(prev => (prev === key ? null : key))}
+          className={`inline-flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-[10.5px] transition-colors ${
+            active
+              ? 'border-[#00ff00]/60 bg-[#00ff00]/10 text-[#00ff00]'
+              : 'border-zinc-800 bg-black text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+          }`}
+        >
+          <span>{label}</span>
+          {count > 0 && (
+            <span className="rounded-full bg-[#00ff00]/20 px-1 text-[9px] leading-none py-0.5">{count}</span>
+          )}
+          <ChevronDown size={12} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </button>
+        {isOpen && panel}
+      </div>
+    );
+  };
+
+  // The unified general-filter toolbar (内容类型 tab 行 + 通用筛选行). Shared by internal & external.
+  const renderFilterToolbar = (scope: 'internal' | 'external') => {
+    const isInternal = scope === 'internal';
+    const barRef = isInternal ? internalFilterBarRef : externalFilterBarRef;
+
+    // Per-scope state bindings
+    const formatFilters = isInternal ? internalFormatFilters : externalFormatFilters;
+    const toggleFormat = isInternal ? toggleInternalFormatFilter : toggleExternalFormatFilter;
+    const formatKeyword = isInternal ? internalFormatKeyword : externalFormatKeyword;
+    const setFormatKeyword = isInternal ? setInternalFormatKeyword : setExternalFormatKeyword;
+    const formatOptions = isInternal ? internalFormatFilterOptions : externalFormatFilterOptions;
+    const authorFilters = isInternal ? internalAuthorFilters : externalAuthorFilters;
+    const toggleAuthor = isInternal ? toggleInternalAuthorFilter : toggleExternalAuthorFilter;
+    const authorOptions = isInternal ? internalAuthorOptions : externalAuthorOptions;
+    const authorKeyword = isInternal ? internalAuthorKeyword : externalAuthorKeyword;
+    const setAuthorKeyword = isInternal ? setInternalAuthorKeyword : setExternalAuthorKeyword;
+    const tagFilters = isInternal ? internalTagFilters : externalTagFilters;
+    const toggleTag = isInternal ? toggleInternalTagFilter : toggleExternalTagFilter;
+    const tagKeyword = isInternal ? internalTagKeyword : externalTagKeyword;
+    const setTagKeyword = isInternal ? setInternalTagKeyword : setExternalTagKeyword;
+    const tagOptions = isInternal ? internalTagOptions : externalTagOptions;
+    const orgFilters = isInternal ? internalOrgFilters : externalOrgFilters;
+    const toggleOrg = isInternal ? toggleInternalOrgFilter : toggleExternalOrgFilter;
+    const orgOptions = isInternal ? internalOrgOptions : externalOrgOptions;
+    const statusFilters = isInternal ? internalStatusFilters : externalStatusFilters;
+    const toggleStatus = isInternal ? toggleInternalStatusFilter : toggleExternalStatusFilter;
+    const shapeFilters = isInternal ? internalShapeFilters : externalShapeFilters;
+    const toggleShape = isInternal ? toggleInternalShapeFilter : toggleExternalShapeFilter;
+    const colorFilters = isInternal ? internalColorFilters : externalColorFilters;
+    const toggleColor = isInternal ? toggleInternalColorFilter : toggleExternalColorFilter;
+    const createdFrom = isInternal ? internalCreatedFrom : externalCreatedFrom;
+    const createdTo = isInternal ? internalCreatedTo : externalCreatedTo;
+    const setCreatedFrom = isInternal ? setInternalCreatedFrom : setExternalCreatedFrom;
+    const setCreatedTo = isInternal ? setInternalCreatedTo : setExternalCreatedTo;
+    const fileSizeMin = isInternal ? internalFileSizeMin : externalFileSizeMin;
+    const fileSizeMax = isInternal ? internalFileSizeMax : externalFileSizeMax;
+    const setFileSizeMin = isInternal ? setInternalFileSizeMin : setExternalFileSizeMin;
+    const setFileSizeMax = isInternal ? setInternalFileSizeMax : setExternalFileSizeMax;
+    const sizeMin = isInternal ? internalSizeMin : externalSizeMin;
+    const sizeMax = isInternal ? internalSizeMax : externalSizeMax;
+    const setSizeMin = isInternal ? setInternalSizeMin : setExternalSizeMin;
+    const setSizeMax = isInternal ? setInternalSizeMax : setExternalSizeMax;
+    const durationMin = isInternal ? internalDurationMin : externalDurationMin;
+    const durationMax = isInternal ? internalDurationMax : externalDurationMax;
+    const setDurationMin = isInternal ? setInternalDurationMin : setExternalDurationMin;
+    const setDurationMax = isInternal ? setInternalDurationMax : setExternalDurationMax;
+    const sortOrder = isInternal ? internalSortOrder : externalSortOrder;
+    const setSortOrder = isInternal ? setInternalSortOrder : setExternalSortOrder;
+    const createdCount = isInternal ? internalCreatedCount : externalCreatedCount;
+    const fileSizeCount = isInternal ? internalFileSizeCount : externalFileSizeCount;
+    const sizeCount = isInternal ? internalSizeCount : externalSizeCount;
+    const durationCount = isInternal ? internalDurationCount : externalDurationCount;
+    const hasActive = isInternal ? hasInternalActiveFilters : hasExternalActiveFilters;
+    const clearAll = isInternal ? clearInternalFilters : clearExternalFilters;
+
+    const dd = (key: FilterKey, label: string, count: number, panel: React.ReactNode) =>
+      renderFilterDropdown(scope, key, label, count, panel);
+
+    return (
+      <div ref={barRef} className="flex flex-col gap-2 font-mono">
+        {/* 内容类型 tab 行 */}
+        <div className="flex flex-wrap items-center gap-1">
+          {ASSET_TYPE_TABS.map((tab) => {
+            const isActive = activeTypeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTypeTab(tab.id)}
+                className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
+                  isActive ? 'bg-[#00ff00]/15 text-[#00ff00] font-semibold' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 通用筛选行 */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10.5px] text-zinc-500">通用筛选</span>
+          {dd('author', '创建人', authorFilters.size, (
+            <MultiSelectFilterPanel
+              options={authorOptions.map(a => ({ value: a, label: a }))}
+              selected={authorFilters}
+              onToggle={toggleAuthor}
+              searchable
+              searchValue={authorKeyword}
+              onSearchChange={setAuthorKeyword}
+              searchPlaceholder="搜索创建人"
+              emptyText="没有匹配的创建人"
+            />
+          ))}
+          {dd('format', '后缀', formatFilters.size, (
+            <MultiSelectFilterPanel
+              options={formatOptions.map(f => ({ value: f, label: f.toUpperCase() }))}
+              selected={formatFilters}
+              onToggle={toggleFormat}
+              searchable
+              searchValue={formatKeyword}
+              onSearchChange={setFormatKeyword}
+              searchPlaceholder="搜索格式"
+              emptyText="没有匹配的格式"
+            />
+          ))}
+          {dd('tag', '标签', tagFilters.size, (
+            <MultiSelectFilterPanel
+              options={tagOptions.map(t => ({ value: t, label: t }))}
+              selected={tagFilters}
+              onToggle={toggleTag}
+              searchable
+              searchValue={tagKeyword}
+              onSearchChange={setTagKeyword}
+              searchPlaceholder="搜索标签"
+              emptyText="没有匹配的标签"
+            />
+          ))}
+          {dd('org', '组织架构', orgFilters.size, (
+            <MultiSelectFilterPanel
+              options={orgOptions.map(o => ({ value: o, label: o }))}
+              selected={orgFilters}
+              onToggle={toggleOrg}
+              emptyText="暂无组织架构"
+            />
+          ))}
+          {dd('created', '日期', createdCount, (
+            <CreatedRangePanel
+              from={createdFrom}
+              to={createdTo}
+              onChange={({ from, to }) => { setCreatedFrom(from); setCreatedTo(to); }}
+            />
+          ))}
+          {dd('fileSize', '文件大小', fileSizeCount, (
+            <RangeFilterPanel
+              min={fileSizeMin}
+              max={fileSizeMax}
+              onMinChange={setFileSizeMin}
+              onMaxChange={setFileSizeMax}
+              minPlaceholder="最小 MB"
+              maxPlaceholder="最大 MB"
+              hint="按文件大小（MB）筛选"
+            />
+          ))}
+          {dd('status', '任务状态', statusFilters.size, (
+            <MultiSelectFilterPanel
+              options={(Object.keys(ASSET_TASK_STATUS_LABELS) as AssetTaskStatus[]).map(s => ({ value: s, label: ASSET_TASK_STATUS_LABELS[s] }))}
+              selected={statusFilters}
+              onToggle={toggleStatus}
+              width="w-40"
+            />
+          ))}
+          {dd('size', '尺寸', sizeCount, (
+            <RangeFilterPanel
+              min={sizeMin}
+              max={sizeMax}
+              onMinChange={setSizeMin}
+              onMaxChange={setSizeMax}
+              minPlaceholder="最小边长"
+              maxPlaceholder="最大边长"
+              hint="按最长边（px）筛选"
+            />
+          ))}
+          {dd('shape', '形状', shapeFilters.size, (
+            <MultiSelectFilterPanel
+              options={ASSET_SHAPE_OPTIONS.map(s => ({ value: s.id, label: s.label }))}
+              selected={shapeFilters}
+              onToggle={toggleShape}
+              width="w-36"
+            />
+          ))}
+          {dd('duration', '时长', durationCount, (
+            <RangeFilterPanel
+              min={durationMin}
+              max={durationMax}
+              onMinChange={setDurationMin}
+              onMaxChange={setDurationMax}
+              minPlaceholder="最短(秒)"
+              maxPlaceholder="最长(秒)"
+              hint="仅视频/音频含时长"
+            />
+          ))}
+          {dd('color', '颜色', colorFilters.size, (
+            <ColorFilterPanel selected={colorFilters} onToggle={toggleColor} />
+          ))}
+          {!isInternal && dd('source', '来源', externalSourceFilters.size, (
+            <MultiSelectFilterPanel
+              options={EXTERNAL_SOURCE_OPTIONS.map(o => ({ value: o.id, label: o.label }))}
+              selected={externalSourceFilters as Set<string>}
+              onToggle={(v) => toggleExternalSourceFilter(v as ExternalAssetSource)}
+              width="w-40"
+            />
+          ))}
+          {dd('sort', '排序', sortOrder !== 'desc' ? 1 : 0, (
+            <div className="absolute left-0 top-full z-30 mt-1.5 w-44 rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60">
+              <select
+                value={sortOrder}
+                onChange={(event) => setSortOrder(event.target.value as 'asc' | 'desc')}
+                className="w-full rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]"
+              >
+                <option value="desc">创建时间降序（默认）</option>
+                <option value="asc">创建时间升序</option>
+              </select>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={clearAll}
+            disabled={!hasActive}
+            className={`rounded border px-2.5 py-1.5 text-[10.5px] transition-colors ${
+              hasActive
+                ? 'border-zinc-700 bg-black text-zinc-300 hover:border-[#00ff00]/60 hover:text-white'
+                : 'border-zinc-800 bg-black text-zinc-600 cursor-not-allowed'
+            }`}
+          >
+            重置筛选
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col font-sans">
-      
-      {/* Top section: Title */}
-      <div className="p-6 pb-4 border-b border-[#27272a] shrink-0">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-bold font-display tracking-tight text-white flex items-center gap-2">
-              <FolderOpen size={22} className="text-[#00ff00]" />
-              {isPersonalSpace ? '个人空间素材库' : '项目美术素材库'}
-            </h1>
-          </div>
-        </div>
-      </div>
 
       <input
         ref={personalUploadInputRef}
@@ -1775,22 +4276,16 @@ export default function AssetLibrary({
         className="hidden"
       />
 
+      <input
+        ref={imageSearchInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleImageSearchSelection}
+        className="hidden"
+      />
+
       {/* Main body content */}
-      {!(isProjectA || isPersonalSpace) ? (
-        /* Empty status for space B, Shared */
-        <div className="flex-1 overflow-y-auto p-12 flex flex-col items-center justify-center text-center select-none">
-          <div className="w-16 h-16 rounded-full bg-zinc-900 border border-[#27272a] flex items-center justify-center text-zinc-500 mb-4/5 text-zinc-600">
-            <FolderDot size={28} />
-          </div>
-          <h3 className="text-sm font-bold text-zinc-300 font-display mt-4">该空间无可用素材</h3>
-          <p className="text-xs text-zinc-500 mt-2 max-w-sm leading-relaxed font-mono">
-            【{currentSpace.name}】目前暂无管理员预置和发布的 3D/2D 资产大包。
-            <br/>
-            请通过边栏顶级空间下拉菜单，快捷切到 <span className="text-[#00ff00] underline font-bold cursor-pointer hover:text-white" onClick={() => setSelectedCat(AssetCategory.All)}>项目空间 A (三国奇幻RPG)</span> 提取并调用模型。
-          </p>
-        </div>
-      ) : (
-        <div ref={assetLayoutRef} className="flex-1 overflow-hidden flex flex-col lg:flex-row min-h-0">
+      <div ref={assetLayoutRef} className="flex-1 overflow-hidden flex flex-col lg:flex-row min-h-0">
           {assetContextMenu && contextMenuAsset && (
             <div
               className="fixed z-50 w-44 overflow-hidden rounded border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl font-mono text-[11px]"
@@ -1798,6 +4293,23 @@ export default function AssetLibrary({
               onClick={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
             >
+              <button
+                type="button"
+                onClick={() => openPersonalAssetMoveEditor(contextMenuAsset.id)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+              >
+                <FolderInput size={12} className="text-zinc-400" />
+                移动
+              </button>
+              <button
+                type="button"
+                onClick={() => openPersonalAssetRenameEditor(contextMenuAsset.id)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+              >
+                <Pencil size={12} className="text-zinc-400" />
+                重命名
+              </button>
+              <div className="my-1 border-t border-zinc-900" />
               <button
                 type="button"
                 onClick={() => openPersonalAssetDeleteConfirm(contextMenuAsset.id)}
@@ -1809,46 +4321,55 @@ export default function AssetLibrary({
             </div>
           )}
 
-          {folderContextMenu && (
+          {folderContextMenu && contextMenuFolder && (canCreateSiblingFolder || canCreateChildFolder || canMutateContextFolder) && (
             <div
               className="fixed z-50 w-44 overflow-hidden rounded border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl font-mono text-[11px]"
               style={{ left: folderContextMenu.x, top: folderContextMenu.y }}
               onClick={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <button
-                type="button"
-                onClick={() => openCreateFolderEditor(folderById[folderContextMenu.folderId]?.parentId ?? null)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
-              >
-                <Plus size={12} className="text-[#00ff00]" />
-                新建同级文件夹
-              </button>
-              <button
-                type="button"
-                onClick={() => openCreateFolderEditor(folderContextMenu.folderId)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
-              >
-                <FolderPlus size={12} className="text-[#00ff00]" />
-                新建子文件夹
-              </button>
-              <button
-                type="button"
-                onClick={() => openRenameFolderEditor(folderContextMenu.folderId)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
-              >
-                <Pencil size={12} className="text-zinc-400" />
-                重命名
-              </button>
-              <div className="my-1 border-t border-zinc-900" />
-              <button
-                type="button"
-                onClick={() => openDeleteFolderConfirm(folderContextMenu.folderId)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-400 transition-colors hover:bg-red-950/30 hover:text-red-300"
-              >
-                <Trash2 size={12} />
-                删除文件夹
-              </button>
+              {canCreateSiblingFolder && (
+                <button
+                  type="button"
+                  onClick={() => openCreateFolderEditor(contextMenuFolder.parentId)}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                >
+                  <Plus size={12} className="text-[#00ff00]" />
+                  新建同级文件夹
+                </button>
+              )}
+              {canCreateChildFolder && (
+                <button
+                  type="button"
+                  onClick={() => openCreateFolderEditor(contextMenuFolder.id)}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                >
+                  <FolderPlus size={12} className="text-[#00ff00]" />
+                  新建子文件夹
+                </button>
+              )}
+              {canMutateContextFolder && (
+                <>
+                  {(canCreateSiblingFolder || canCreateChildFolder) && <div className="my-1 border-t border-zinc-900" />}
+                  <button
+                    type="button"
+                    onClick={() => openRenameFolderEditor(contextMenuFolder.id)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                  >
+                    <Pencil size={12} className="text-zinc-400" />
+                    重命名
+                  </button>
+                  <div className="my-1 border-t border-zinc-900" />
+                  <button
+                    type="button"
+                    onClick={() => openDeleteFolderConfirm(contextMenuFolder.id)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-400 transition-colors hover:bg-red-950/30 hover:text-red-300"
+                  >
+                    <Trash2 size={12} />
+                    删除文件夹
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -1896,7 +4417,7 @@ export default function AssetLibrary({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <Archive size={15} className="text-[#00ff00]" />
-                    <span className="text-xs font-bold text-white truncate">文件夹目录</span>
+                    <span className="text-xs font-bold text-white truncate">文件目录</span>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <button
@@ -1909,9 +4430,10 @@ export default function AssetLibrary({
                     </button>
                     <button
                       type="button"
-                      title="新建一级文件夹"
-                      onClick={() => openCreateFolderEditor(null)}
-                      className="flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-[#0c0c0e] text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
+                      title={canCreateChildOfSelected ? `在「${selectedFolder?.name ?? '当前目录'}」下新建子文件夹` : '当前目录不支持新建文件夹'}
+                      disabled={!canCreateChildOfSelected}
+                      onClick={() => openCreateFolderEditor(selectedFolderId)}
+                      className="flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-[#0c0c0e] text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-800 disabled:hover:text-zinc-400"
                     >
                       <Plus size={13} />
                     </button>
@@ -1919,7 +4441,7 @@ export default function AssetLibrary({
                 </div>
               )}
 
-              {folderEditor && (
+              {folderEditor && folderEditor.mode === 'rename' && (
                 <div className="mt-3 rounded border border-[#27272a] bg-black p-2">
                   <div className="flex items-center gap-2">
                     <input
@@ -1931,7 +4453,7 @@ export default function AssetLibrary({
                         if (event.key === 'Enter') submitFolderEditor();
                         if (event.key === 'Escape') closeFolderEditor();
                       }}
-                      placeholder={folderEditor.mode === 'create' ? '文件夹名称' : '重命名'}
+                      placeholder="重命名"
                       className={`min-w-0 flex-1 rounded border bg-[#0c0c0e] px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors ${
                         shouldShowFolderEditorError
                           ? 'border-red-500/70 focus:border-red-500'
@@ -1996,9 +4518,20 @@ export default function AssetLibrary({
 
           <section className="flex-1 overflow-hidden flex flex-col min-w-0">
             <div className="asset-content-toolbar shrink-0 border-b border-[#27272a] bg-[#0c0c0e]/60 px-4 py-2">
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2.5">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 flex-1 items-center gap-2">
+                    {/* 返回上一个目录功能暂时停用
+                    <button
+                      type="button"
+                      onClick={goToPreviousFolder}
+                      disabled={folderHistory.length === 0}
+                      title={previousFolderName ? `返回上一个目录：${previousFolderName}` : '没有可返回的目录'}
+                      className="inline-flex shrink-0 items-center justify-center rounded border border-zinc-800 bg-black p-1.5 text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-800 disabled:hover:text-zinc-400"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    */}
                     <div className="flex min-w-0 items-center gap-2 text-sm font-bold text-white">
                       <FolderOpen size={16} className="text-[#00ff00]" />
                       <span className="truncate">{selectedFolder?.name ?? '未选择文件夹'}</span>
@@ -2006,7 +4539,7 @@ export default function AssetLibrary({
                   </div>
 
                   <div className="ml-auto flex items-center gap-2 shrink-0">
-                    {isPersonalSpace && (
+                    {isPersonalSpace && !isExternalRootSelected && (
                       <button
                         type="button"
                         onClick={openPersonalUploadInfo}
@@ -2019,219 +4552,363 @@ export default function AssetLibrary({
 
                     <div className="relative w-56 sm:w-72 xl:w-80">
                       <Search size={13} className="absolute left-3 top-2 text-zinc-500" />
-                      <input 
-                        type="text" 
-                        value={keyword}
-                        onChange={e => setKeyword(e.target.value)}
-                        placeholder="搜索素材名或标签"
-                        className="w-full bg-zinc-950 border border-zinc-900 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-1.5 pl-9 pr-3 text-zinc-200 font-mono"
+                      <input
+                        type="text"
+                        value={isExternalRootSelected ? externalKeyword : keyword}
+                        disabled={imageSearchQuery !== null}
+                        onChange={event => (
+                          isExternalRootSelected
+                            ? setExternalKeyword(event.target.value)
+                            : setKeyword(event.target.value)
+                        )}
+                        placeholder={imageSearchQuery !== null ? '以图搜图进行中…' : (isExternalRootSelected ? '搜索外部素材名或标签' : '搜索素材名或标签')}
+                        className="w-full bg-zinc-950 border border-zinc-900 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-1.5 pl-9 pr-3 text-zinc-200 font-mono disabled:cursor-not-allowed disabled:opacity-50"
                       />
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={openImageSearchPicker}
+                      disabled={isImageSearchProcessing}
+                      title="以图搜图：上传参考图按视觉相似度匹配素材"
+                      className={`inline-flex shrink-0 items-center gap-1.5 rounded border px-2.5 py-1.5 text-[10.5px] font-mono transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                        imageSearchQuery !== null
+                          ? 'border-[#00ff00]/60 bg-[#00ff00]/10 text-[#00ff00]'
+                          : 'border-zinc-700 bg-black text-zinc-300 hover:border-[#00ff00]/60 hover:text-white'
+                      }`}
+                    >
+                      {isImageSearchProcessing ? <Loader2 size={12} className="animate-spin" /> : <ScanSearch size={12} />}
+                      以图搜图
+                    </button>
+
+                    {isExternalRootSelected && (
+                      <button
+                        type="button"
+                        onClick={clearExternalFilters}
+                        disabled={!hasExternalActiveFilters}
+                        className={`rounded border px-2.5 py-1.5 text-[10.5px] font-mono transition-colors ${
+                          hasExternalActiveFilters
+                            ? 'border-zinc-700 bg-black text-zinc-300 hover:border-[#00ff00]/60 hover:text-white'
+                            : 'border-zinc-800 bg-black text-zinc-600 cursor-not-allowed'
+                        }`}
+                      >
+                        重置筛选
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-2 2xl:flex-row 2xl:items-center 2xl:justify-between">
-                  <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-none font-mono">
-                    {categoryTabs.map((tab) => {
-                      const isSelected = selectedCat === tab.id;
-                      return (
-                        <button
-                          key={tab.id}
-                          onClick={() => setSelectedCat(tab.id)}
-                          className={`px-3 py-1 font-mono text-[10.5px] rounded whitespace-nowrap cursor-pointer transition-all border cat-tab-btn ${
-                            isSelected 
-                              ? 'bg-white text-black font-semibold border-white shadow is-selected' 
-                              : 'bg-transparent border-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700'
-                          }`}
-                        >
-                          {tab.name}
-                        </button>
-                      );
-                    })}
+                {imageSearchQuery && (
+                  <div className="flex items-center gap-3 rounded border border-[#00ff00]/40 bg-[#00ff00]/5 px-3 py-2">
+                    <img
+                      src={imageSearchQuery.previewUrl}
+                      alt="参考图"
+                      className="h-10 w-10 shrink-0 rounded border border-[#00ff00]/40 object-cover"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="flex items-center gap-1.5 text-[11px] font-semibold text-[#00ff00]">
+                        <ScanSearch size={12} />
+                        以图搜图进行中
+                      </p>
+                      <p className="truncate font-mono text-[10px] text-zinc-400">参考图：{imageSearchQuery.fileName}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={clearImageSearch}
+                      className="inline-flex shrink-0 items-center gap-1 rounded border border-zinc-700 bg-black px-2 py-1 text-[10px] font-mono text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-white"
+                    >
+                      <X size={11} />
+                      退出图片搜索
+                    </button>
                   </div>
+                )}
 
-                </div>
+                {renderFilterToolbar(isExternalRootSelected ? 'external' : 'internal')}
               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-7">
-              <section>
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 text-sm font-bold text-white">
-                    <Folder size={16} className="text-[#00ff00]" />
-                    <span>子文件夹</span>
-                    <span className="font-mono text-xs text-zinc-500">({directChildFolders.length})</span>
+              {!isExternalRootSelected && (
+                <section>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-sm font-bold text-white">
+                      <Folder size={16} className="text-[#00ff00]" />
+                      <span>子文件夹</span>
+                      <span className="font-mono text-xs text-zinc-500">({directChildFolders.length})</span>
+                    </div>
                   </div>
-                </div>
 
-                {directChildFolders.length > 0 ? (
-                  <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                    {directChildFolders.map((folder) => (
-                      <button
-                        key={folder.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedFolderId(folder.id);
-                          setExpandedFolderIds(prev => new Set(prev).add(selectedFolderId));
-                        }}
-                        className="group/folderCard min-h-[128px] rounded border border-[#27272a] bg-[#0c0c0e] p-4 text-left transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <FolderOpen size={42} className="text-zinc-500 transition-colors group-hover/folderCard:text-[#00ff00]" />
-                          <span className="rounded border border-zinc-800 bg-black px-1.5 py-0.5 text-[10px] font-mono text-zinc-500">
-                            {getFolderAssetCount(folder.id)}
-                          </span>
-                        </div>
-                        <div className="mt-3 min-w-0">
-                          <p className="truncate text-sm font-semibold text-zinc-200 group-hover/folderCard:text-white">
-                            {folder.name}
-                          </p>
-                          <p className="mt-1 text-[10px] font-mono text-zinc-500">
-                            {foldersByParent.get(folder.id)?.length ?? 0} 个子目录
-                          </p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded border border-dashed border-[#27272a] bg-[#0c0c0e]/30 px-4 py-5 text-xs text-zinc-500">
-                    当前文件夹没有子文件夹。
-                  </div>
-                )}
-              </section>
+                  {directChildFolders.length > 0 ? (
+                    <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                      {directChildFolders.map((folder) => (
+                        <button
+                          key={folder.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedFolderId(folder.id);
+                            setExpandedFolderIds(prev => new Set(prev).add(selectedFolderId));
+                          }}
+                          className="group/folderCard min-h-[128px] rounded border border-[#27272a] bg-[#0c0c0e] p-4 text-left transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <FolderOpen size={42} className="text-zinc-500 transition-colors group-hover/folderCard:text-[#00ff00]" />
+                            <span className="rounded border border-zinc-800 bg-black px-1.5 py-0.5 text-[10px] font-mono text-zinc-500">
+                              {getFolderAssetCount(folder.id)}
+                            </span>
+                          </div>
+                          <div className="mt-3 min-w-0">
+                            <p className="truncate text-sm font-semibold text-zinc-200 group-hover/folderCard:text-white">
+                              {folder.name}
+                            </p>
+                            <p className="mt-1 text-[10px] font-mono text-zinc-500">
+                              {foldersByParent.get(folder.id)?.length ?? 0} 个子目录
+                            </p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded border border-dashed border-[#27272a] bg-[#0c0c0e]/30 px-4 py-5 text-xs text-zinc-500">
+                      当前文件夹没有子文件夹。
+                    </div>
+                  )}
+                </section>
+              )}
 
               <section>
                 <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-2 text-sm font-bold text-white">
                     <Files size={16} className="text-[#00ff00]" />
                     <span>素材</span>
-                    <span className="font-mono text-xs text-zinc-500">({filteredAssets.length})</span>
+                    <span className="font-mono text-xs text-zinc-500">({totalItems})</span>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={includeSubfolderAssets}
-                      onClick={() => setIncludeSubfolderAssets(prev => !prev)}
-                      className={`subfolder-assets-toggle inline-flex items-center gap-2 rounded border px-2.5 py-1.5 text-[10.5px] font-mono transition-colors ${
-                        includeSubfolderAssets
-                          ? 'is-active border-zinc-700 bg-zinc-900/70 text-zinc-200'
-                          : 'border-zinc-800 bg-black text-zinc-500 hover:text-zinc-300'
-                      }`}
-                    >
-                      <span className={`subfolder-assets-toggle-indicator flex h-3.5 w-3.5 items-center justify-center rounded-full border ${
-                        includeSubfolderAssets ? 'is-active border-zinc-500 bg-zinc-200 text-black' : 'border-zinc-700'
-                      }`}>
-                        {includeSubfolderAssets && <Check size={10} />}
-                      </span>
-                      显示子文件夹素材
-                    </button>
-                  </div>
+                  {!isExternalRootSelected && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={includeSubfolderAssets}
+                        onClick={() => setIncludeSubfolderAssets(prev => !prev)}
+                        className={`subfolder-assets-toggle inline-flex items-center gap-2 rounded border px-2.5 py-1.5 text-[10.5px] font-mono transition-colors ${
+                          includeSubfolderAssets
+                            ? 'is-active border-zinc-700 bg-zinc-900/70 text-zinc-200'
+                            : 'border-zinc-800 bg-black text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        <span className={`subfolder-assets-toggle-indicator flex h-3.5 w-3.5 items-center justify-center rounded-full border ${
+                          includeSubfolderAssets ? 'is-active border-zinc-500 bg-zinc-200 text-black' : 'border-zinc-700'
+                        }`}>
+                          {includeSubfolderAssets && <Check size={10} />}
+                        </span>
+                        显示子文件夹素材
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                {filteredAssets.length === 0 ? (
+                {totalItems === 0 ? (
                   <div className="h-64 border border-dashed border-[#27272a] rounded flex flex-col items-center justify-center p-8 text-center text-zinc-500 text-xs">
-                    {folders.length === 0
-                      ? '当前没有文件夹，请新建文件夹后在此查看素材。'
-                      : `没有找到匹配 “${keyword}” 描述的美术内容包。`}
+                    {imageSearchQuery
+                      ? '没有找到与参考图相似的素材。'
+                      : isExternalRootSelected
+                      ? (hasExternalActiveFilters
+                        ? '没有找到匹配筛选条件的外部素材。'
+                        : '暂无外部素材。')
+                      : (
+                        folders.length === 0
+                          ? '当前没有文件夹，请新建文件夹后在此查看素材。'
+                          : keyword.trim()
+                            ? `没有找到匹配 “${keyword}” 描述的美术内容包。`
+                            : (!isProjectA && !isPersonalSpace
+                              ? `【${currentSpace.name}】暂无预置素材。`
+                              : '当前目录暂无素材。')
+                      )}
                   </div>
                 ) : (
-                  <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                    {paginatedAssets.map((asset) => {
-                      const isCurSelected = selectedAsset?.id === asset.id;
-                      const isDownloaded = downloadedAssetIds.has(asset.id);
+                  isExternalRootSelected ? (
+                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                      {paginatedExternalAssets.map((asset) => {
+                        const sourceMeta = EXTERNAL_SOURCE_META[asset.source];
+                        const isCurSelected = selectedAsset?.id === asset.id;
 
-                      // Check if currently downloading/queued
-                      const activeTask = activeDownloads.find(task => task.assetId === asset.id);
-
-                      return (
-                        <div
-                          key={asset.id}
-                          onClick={() => {
-                            setSelectedAsset(asset);
-                          }}
-                          onContextMenu={(event) => openAssetContextMenu(event, asset.id)}
-                          className={`group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
-                            isCurSelected
-                              ? 'border-[#00ff00]'
-                              : 'border-[#27272a] hover:border-zinc-700'
-                          }`}
-                        >
-                          {/* Thumbnail wrapper */}
-                          <div className="aspect-video relative overflow-hidden bg-black/60 shrink-0 select-none border-b border-[#18181b]">
-                            <img
-                              src={asset.thumbnail}
-                              alt={asset.name}
-                              className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
-                              referrerPolicy="no-referrer"
-                            />
-
-                            {/* Format sticker and category indicator */}
-                            <div className="absolute top-2 left-2 flex items-center gap-1">
-                              <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded uppercase">
+                        return (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            onClick={() => setSelectedAsset(asset)}
+                            className={`group/card rounded border overflow-hidden bg-[#0c0c0e] text-left transition-all ${
+                              isCurSelected
+                                ? 'border-[#00ff00]'
+                                : 'border-[#27272a] hover:border-zinc-700'
+                            }`}
+                          >
+                            <div className="aspect-video relative overflow-hidden border-b border-[#18181b] bg-black/60">
+                              <img
+                                src={asset.thumbnail}
+                                alt={asset.name}
+                                className="h-full w-full object-cover transition-transform duration-500 group-hover/card:scale-105"
+                                referrerPolicy="no-referrer"
+                              />
+                              <span className="absolute left-2 top-2 rounded border border-zinc-800 bg-black/85 px-1.5 py-0.5 text-[9.5px] font-mono font-bold uppercase text-[#00ff00]">
                                 .{asset.format}
                               </span>
+                              <span className={`absolute right-2 top-2 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-mono ${sourceMeta.badgeClassName}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${sourceMeta.dotClassName}`} />
+                                <span>{sourceMeta.logo}</span>
+                              </span>
+                              {imageSearchQuery && (
+                                <span className="absolute bottom-2 left-2 rounded border border-[#00ff00]/50 bg-black/85 px-1.5 py-0.5 text-[9.5px] font-mono font-bold text-[#00ff00]">
+                                  相似度 {imageSimilarityById.get(asset.id) ?? 0}%
+                                </span>
+                              )}
+                            </div>
+                            <div className="p-3">
+                              <p className="truncate text-xs font-semibold text-zinc-200 transition-colors group-hover/card:text-white">
+                                {asset.name}
+                              </p>
+                              <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-zinc-500">
+                                <span>{EXTERNAL_TYPE_LABELS[asset.externalType]}</span>
+                                <span>{asset.width}×{asset.height}</span>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                      {paginatedInternalAssets.map((asset) => {
+                        const isCurSelected = selectedAsset?.id === asset.id;
+
+                        // Check if currently downloading/queued
+                        const activeTask = activeDownloads.find(task => task.assetId === asset.id);
+
+                        return (
+                          <div
+                            key={asset.id}
+                            onClick={() => {
+                              setSelectedAsset(asset);
+                            }}
+                            onContextMenu={(event) => openAssetContextMenu(event, asset.id)}
+                            className={`group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
+                              isCurSelected
+                                ? 'border-[#00ff00]'
+                                : 'border-[#27272a] hover:border-zinc-700'
+                            }`}
+                          >
+                            {/* Thumbnail wrapper */}
+                            <div className="group/cover aspect-video relative overflow-hidden bg-black/60 shrink-0 select-none border-b border-[#18181b]">
+                              <img
+                                src={asset.thumbnail}
+                                alt={asset.name}
+                                className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
+                                referrerPolicy="no-referrer"
+                              />
+
+                              {/* Format sticker and category indicator */}
+                              <div className="absolute top-2 left-2 flex items-center gap-1">
+                                <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded uppercase">
+                                  .{asset.format}
+                                </span>
+                              </div>
+
+                              {imageSearchQuery && (
+                                <span className="absolute bottom-2 left-2 z-10 rounded border border-[#00ff00]/50 bg-black/85 px-1.5 py-0.5 text-[9.5px] font-mono font-bold text-[#00ff00]">
+                                  相似度 {imageSimilarityById.get(asset.id) ?? 0}%
+                                </span>
+                              )}
+
+                              {(isPersonalSpace || isProjectA) && (
+                                <div className="asset-cover-actions absolute right-2 top-2 z-20 flex items-center gap-1 rounded-md px-1 py-1 opacity-0 transition-all duration-200 pointer-events-none group-hover/cover:opacity-100 group-hover/cover:pointer-events-auto group-focus-within/cover:opacity-100 group-focus-within/cover:pointer-events-auto">
+                                  {isPersonalSpace && (
+                                    <button
+                                      type="button"
+                                      title="分享素材"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void handleSharePersonalAsset(asset);
+                                      }}
+                                      className="asset-cover-action-btn asset-cover-action-btn-share flex h-7 w-7 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-100 transition-colors hover:bg-emerald-400/30 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-300/80"
+                                    >
+                                      <Send size={12} />
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    title="复制链接"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void handleCopyPersonalAssetLink(asset);
+                                    }}
+                                    className="asset-cover-action-btn asset-cover-action-btn-copy flex h-7 w-7 items-center justify-center rounded-md bg-cyan-500/22 text-cyan-100 transition-colors hover:bg-cyan-400/34 focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-300/80"
+                                  >
+                                    <Link2 size={12} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="更多操作"
+                                    onClick={(event) => openAssetMoreMenu(event, asset.id)}
+                                    className="asset-cover-action-btn asset-cover-action-btn-more flex h-7 w-7 items-center justify-center rounded-md bg-zinc-800/85 text-zinc-200 transition-colors hover:bg-zinc-700/90 focus:outline-none focus-visible:ring-1 focus-visible:ring-zinc-200/70"
+                                  >
+                                    <MoreHorizontal size={12} />
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Status overlays (Download Status / Queued) */}
+                              {activeTask && (
+                                <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center p-3 text-center">
+                                  {activeTask.status === 'queued' ? (
+                                    <div className="flex flex-col items-center gap-1.5 animate-pulse">
+                                      <Clock size={16} className="text-amber-400" />
+                                      <span className="text-[10px] font-mono text-amber-400 font-bold">排队等候中...</span>
+                                    </div>
+                                  ) : (
+                                    <div className="w-full px-4 flex flex-col items-center">
+                                      <div className="w-6 h-6 rounded-full border-2 border-t-transparent border-[#00ff00] animate-spin mb-1.5"></div>
+                                      <span className="text-[10px] font-mono text-zinc-300">后台高速并行拉取中</span>
+                                      <span className="text-[12px] font-mono text-[#00ff00] font-bold mt-0.5">{activeTask.progress}%</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
 
-                            {/* Status overlays (Download Status / Queued) */}
-                            {isDownloaded && (
-                              <div className="absolute top-2 right-2 bg-[#00ff00] text-black rounded-full p-1 shadow-lg">
-                                <CheckCircle size={12} fill="currentColor" className="text-black" />
-                              </div>
-                            )}
+                            {showAssetCardInfo && (
+                              <div className="p-3.5 flex-1 flex flex-col justify-between">
+                                <div>
+                                  <h3 className="text-xs font-bold text-white tracking-wide font-sans line-clamp-1 truncate block group-hover/card:text-[#00ff00] transition-colors">
+                                    {asset.name}
+                                  </h3>
+                                  <div className="flex items-center gap-2 mt-1 px-0.5">
+                                    <span className="text-[9.2px] font-mono text-zinc-500 uppercase">
+                                      类别: {asset.category.replace('_', ' ')}
+                                    </span>
+                                  </div>
+                                </div>
 
-                            {activeTask && (
-                              <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center p-3 text-center">
-                                {activeTask.status === 'queued' ? (
-                                  <div className="flex flex-col items-center gap-1.5 animate-pulse">
-                                    <Clock size={16} className="text-amber-400" />
-                                    <span className="text-[10px] font-mono text-amber-400 font-bold">排队等候中...</span>
-                                  </div>
-                                ) : (
-                                  <div className="w-full px-4 flex flex-col items-center">
-                                    <div className="w-6 h-6 rounded-full border-2 border-t-transparent border-[#00ff00] animate-spin mb-1.5"></div>
-                                    <span className="text-[10px] font-mono text-zinc-300">后台高速并行拉取中</span>
-                                    <span className="text-[12px] font-mono text-[#00ff00] font-bold mt-0.5">{activeTask.progress}%</span>
-                                  </div>
-                                )}
+                                <div className="mt-3.5 pt-2 border-t border-zinc-900 flex justify-between items-center text-[10px] font-mono text-zinc-500">
+                                  <span>大小: {asset.sizeMB} MB</span>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setSelectedAsset(asset);
+                                    }}
+                                    className="text-zinc-400 text-[10.5px] group-hover/card:text-[#00ff00] flex items-center transition-colors cursor-pointer"
+                                  >
+                                    查看素材详情
+                                    <ExternalLink size={10} className="ml-1" />
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>
-
-                          {showAssetCardInfo && (
-                            <div className="p-3.5 flex-1 flex flex-col justify-between">
-                              <div>
-                                <h3 className="text-xs font-bold text-white tracking-wide font-sans line-clamp-1 truncate block group-hover/card:text-[#00ff00] transition-colors">
-                                  {asset.name}
-                                </h3>
-                                <div className="flex items-center gap-2 mt-1 px-0.5">
-                                  <span className="text-[9.2px] font-mono text-zinc-500 uppercase">
-                                    类别: {asset.category.replace('_', ' ')}
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="mt-3.5 pt-2 border-t border-zinc-900 flex justify-between items-center text-[10px] font-mono text-zinc-500">
-                                <span>大小: {asset.sizeMB} MB</span>
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setSelectedAsset(asset);
-                                  }}
-                                  className="text-zinc-400 text-[10.5px] group-hover/card:text-[#00ff00] flex items-center transition-colors cursor-pointer"
-                                >
-                                  查看素材详情
-                                  <ExternalLink size={10} className="ml-1" />
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )
                 )}
               </section>
             </div>
@@ -2323,7 +5000,6 @@ export default function AssetLibrary({
             )}
           </section>
         </div>
-      )}
 
       {isPersonalUploadInfoOpen && (
         <div className="personal-upload-info-modal fixed inset-0 z-50 bg-black/80 backdrop-blur-sm p-4 flex items-center justify-center">
@@ -2393,6 +5069,163 @@ export default function AssetLibrary({
         </div>
       )}
 
+      {personalAssetMoveEditor && moveEditorAsset && (
+        <div
+          className="delete-folder-modal fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm p-4 flex items-center justify-center"
+          onClick={() => setPersonalAssetMoveEditor(null)}
+        >
+          <div
+            className="delete-folder-modal-panel w-full max-w-[520px] rounded-xl border border-[#27272a] bg-[#0c0c0e] p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-900 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                  <FolderInput size={14} className="text-[#00ff00]" />
+                  移动素材
+                </h3>
+                <p className="mt-1 text-[11px] text-zinc-500 font-mono">
+                  选择素材的目标文件夹。
+                </p>
+              </div>
+              <button
+                type="button"
+                title="关闭"
+                onClick={() => setPersonalAssetMoveEditor(null)}
+                className="delete-folder-modal-close flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 hover:border-zinc-600 hover:text-white"
+              >
+                <X size={13} />
+              </button>
+            </div>
+
+            <div className="delete-folder-modal-body mt-4 rounded border border-zinc-800 bg-black/40 p-3.5 text-[11px] font-mono text-zinc-300 space-y-2">
+              <p>当前素材：{moveEditorAsset.name}</p>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-zinc-500">目标目录</span>
+                <select
+                  value={personalAssetMoveEditor.targetFolderId}
+                  onChange={(event) => {
+                    const nextFolderId = event.target.value;
+                    setPersonalAssetMoveEditor(prev => (
+                      prev ? { ...prev, targetFolderId: nextFolderId } : prev
+                    ));
+                  }}
+                  className="rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#00ff00]"
+                >
+                  {[...folders]
+                    .sort((a, b) => (
+                      getFolderPathLabel(a.id).localeCompare(getFolderPathLabel(b.id), 'zh-Hans-CN', { numeric: true })
+                    ))
+                    .map(folder => (
+                      <option key={folder.id} value={folder.id}>
+                        {getFolderPathLabel(folder.id)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setPersonalAssetMoveEditor(null)}
+                className="delete-folder-modal-cancel rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={submitPersonalAssetMove}
+                className="rounded border border-[#00ff00]/60 bg-[#00ff00]/10 px-4 py-1.5 text-xs font-semibold text-[#00ff00] transition-colors hover:border-[#00ff00] hover:bg-[#00ff00]/20"
+              >
+                确认移动
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {personalAssetRenameEditor && renameEditorAsset && (
+        <div
+          className="delete-folder-modal fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm p-4 flex items-center justify-center"
+          onClick={closePersonalAssetRenameEditor}
+        >
+          <div
+            className="delete-folder-modal-panel w-full max-w-[520px] rounded-xl border border-[#27272a] bg-[#0c0c0e] p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-900 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                  <Pencil size={14} className="text-[#00ff00]" />
+                  重命名素材
+                </h3>
+                <p className="mt-1 text-[11px] text-zinc-500 font-mono">
+                  为素材填写一个新的名称。
+                </p>
+              </div>
+              <button
+                type="button"
+                title="关闭"
+                onClick={closePersonalAssetRenameEditor}
+                className="delete-folder-modal-close flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 hover:border-zinc-600 hover:text-white"
+              >
+                <X size={13} />
+              </button>
+            </div>
+
+            <div className="delete-folder-modal-body mt-4 rounded border border-zinc-800 bg-black/40 p-3.5 text-[11px] font-mono text-zinc-300 space-y-2">
+              <p>当前素材：{renameEditorAsset.name}</p>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-zinc-500">新名称</span>
+                <input
+                  autoFocus
+                  maxLength={PERSONAL_ASSET_NAME_MAX_LENGTH}
+                  value={personalAssetRenameEditor.name}
+                  onChange={(event) => {
+                    const nextName = event.target.value;
+                    setPersonalAssetRenameEditor(prev => (
+                      prev ? { ...prev, name: nextName } : prev
+                    ));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') submitPersonalAssetRename();
+                    if (event.key === 'Escape') closePersonalAssetRenameEditor();
+                  }}
+                  className={`rounded border bg-[#0c0c0e] px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors ${
+                    shouldShowPersonalAssetRenameError
+                      ? 'border-red-500/70 focus:border-red-500'
+                      : 'border-zinc-800 focus:border-[#00ff00]'
+                  }`}
+                />
+              </label>
+              {shouldShowPersonalAssetRenameError && (
+                <p className="text-[10px] leading-relaxed text-red-400">
+                  {personalAssetRenameValidationError}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={closePersonalAssetRenameEditor}
+                className="delete-folder-modal-cancel rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={submitPersonalAssetRename}
+                className="rounded border border-[#00ff00]/60 bg-[#00ff00]/10 px-4 py-1.5 text-xs font-semibold text-[#00ff00] transition-colors hover:border-[#00ff00] hover:bg-[#00ff00]/20"
+              >
+                确认重命名
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingPersonalAssetDelete && (
         <div
           className="delete-folder-modal fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm p-4 flex items-center justify-center"
@@ -2424,7 +5257,11 @@ export default function AssetLibrary({
 
             <div className="delete-folder-modal-body mt-4 rounded border border-zinc-800 bg-black/40 p-3.5 text-[11px] font-mono text-zinc-300 space-y-1.5">
               <p>即将删除素材「{pendingPersonalAssetDelete.assetName}」。</p>
-              <p className="delete-folder-modal-warning text-amber-400">此素材将从个人空间中移除，且不再出现在当前目录。</p>
+              <p className="delete-folder-modal-warning text-amber-400">
+                {isPersonalSpace
+                  ? '此素材将从个人空间中移除，且不再出现在当前目录。'
+                  : `此素材将从「${currentSpace.name}」中移除，且不再出现在当前目录。`}
+              </p>
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-3">
@@ -2759,7 +5596,14 @@ export default function AssetLibrary({
 
               <div className="asset-source-badge absolute bottom-4 right-4 flex bg-black/95 border border-zinc-800 rounded px-2 py-1 text-[10px] font-mono text-zinc-400 items-center gap-1">
                 <span>来源:</span>
-                <span className="text-white font-bold force-text-white">{selectedAsset.platform}</span>
+                {selectedExternalSourceMeta ? (
+                  <span className="inline-flex items-center gap-1 rounded border border-zinc-700 bg-black px-1.5 py-0.5 text-zinc-200">
+                    <span className={`h-1.5 w-1.5 rounded-full ${selectedExternalSourceMeta.dotClassName}`} />
+                    <span className="font-bold force-text-white">{selectedExternalSourceMeta.label}</span>
+                  </span>
+                ) : (
+                  <span className="text-white font-bold force-text-white">{selectedAsset.platform}</span>
+                )}
               </div>
 
               <div className="absolute left-4 bottom-4 flex items-center gap-2 rounded border border-zinc-800 bg-black/90 px-2 py-1 text-[10px] font-mono text-zinc-300">
@@ -2793,7 +5637,7 @@ export default function AssetLibrary({
               </div>
             </div>
 
-            <div className="w-full lg:w-[390px] xl:w-[420px] bg-[#0a0a0c] border-t lg:border-t-0 lg:border-l border-[#27272a] p-5 overflow-y-auto flex flex-col">
+            <div className="asset-detail-sidebar w-full lg:w-[320px] xl:w-[336px] bg-[#0a0a0c] border-t lg:border-t-0 lg:border-l border-[#27272a] p-5 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between gap-3 border-b border-zinc-900 pb-3 shrink-0">
                 <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">
                   素材详情
@@ -2810,44 +5654,91 @@ export default function AssetLibrary({
               </div>
 
               <div className="mt-4 space-y-4">
-                <div>
-                  <h2 className="text-base font-bold text-white leading-snug font-display">
-                    {selectedAsset.name}
-                  </h2>
-                  <p className="mt-2 text-xs text-zinc-400 leading-relaxed font-sans bg-black p-2.5 border border-zinc-900 rounded select-text">
-                    {selectedAsset.desc}
-                  </p>
+                <div className="space-y-3">
+                  {isSelectedExternalAsset ? (
+                    <div className="asset-detail-form-field w-full rounded-xl border border-zinc-800 bg-black px-3.5 py-2.5 text-[14px] font-medium tracking-wide text-zinc-200">
+                      {selectedAsset.name}
+                    </div>
+                  ) : (
+                    <input
+                      value={assetDetailNameDraft}
+                      onChange={(event) => setAssetDetailNameDraft(event.target.value)}
+                      onBlur={submitAssetDetailNameEdit}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          submitAssetDetailNameEdit();
+                        }
+                        if (event.key === 'Escape') {
+                          setAssetDetailNameDraft(selectedAsset.name);
+                        }
+                      }}
+                      className="asset-detail-form-field w-full rounded-xl border border-zinc-800 bg-black px-3.5 py-2.5 text-[14px] font-medium tracking-wide text-zinc-300 outline-none focus:border-[#00ff00]"
+                    />
+                  )}
+                  <div className="asset-detail-form-field min-h-[56px] rounded-xl border border-zinc-800 bg-black px-3.5 py-2.5">
+                    {selectedAsset.tags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedAsset.tags.map((tag, index) => (
+                          <span
+                            key={`detail-tag-${index}-${tag}`}
+                            className="rounded-md border border-[#00ff00]/30 bg-[#00ff00]/8 px-2 py-0.5 text-[11px] font-mono text-[#00ff00]"
+                          >
+                            #{tag}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-zinc-500">暂无标签</span>
+                    )}
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                  <div className="bg-black border border-zinc-900 rounded p-2.5">
-                    <p className="text-zinc-500 text-[10px]">文件格式</p>
-                    <p className="mt-1 text-[#00ff00] font-bold">.{selectedAsset.format.toUpperCase()}</p>
+                <div className="pt-1">
+                  <h3 className="text-sm font-semibold text-zinc-200">素材信息</h3>
+                  <div className="mt-3 space-y-2.5 font-mono">
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">类型</span>
+                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAsset.format.toLowerCase()}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">尺寸</span>
+                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetDimensionLabel}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">文件大小</span>
+                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAsset.sizeMB} MB</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">导入时间</span>
+                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetImportedAtLabel}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">创建时间</span>
+                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetCreatedAtLabel}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">修改时间</span>
+                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetUpdatedAtLabel}</span>
+                    </div>
+                    {selectedExternalAsset && (
+                      <>
+                        <div className="flex items-center justify-between gap-3 text-xs">
+                          <span className="w-[68px] shrink-0 text-left text-zinc-500">来源平台</span>
+                          <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedExternalSourceMeta?.label}</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3 text-xs">
+                          <span className="w-[68px] shrink-0 pt-0.5 text-left text-zinc-500">商用信息</span>
+                          <span className="min-w-0 flex-1 text-right leading-relaxed text-amber-300">{selectedExternalAsset.nonCommercialNotice}</span>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  <div className="bg-black border border-zinc-900 rounded p-2.5">
-                    <p className="text-zinc-500 text-[10px]">资产大小</p>
-                    <p className="mt-1 text-zinc-300 font-bold">{selectedAsset.sizeMB} MB</p>
-                  </div>
-                  <div className="bg-black border border-zinc-900 rounded p-2.5">
-                    <p className="text-zinc-500 text-[10px]">分类</p>
-                    <p className="mt-1 text-zinc-300 font-bold">{selectedAssetCategoryName}</p>
-                  </div>
-                  <div className="bg-black border border-zinc-900 rounded p-2.5">
-                    <p className="text-zinc-500 text-[10px]">分发创作者</p>
-                    <p className="mt-1 text-zinc-300 font-bold truncate" title={selectedAsset.author}>{selectedAsset.author}</p>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedAsset.tags.map((tag) => (
-                    <span key={tag} className="text-[10px] font-mono bg-[#00ff00]/5 border border-[#00ff00]/20 text-[#00ff00] px-2 py-0.5 rounded">
-                      #{tag}
-                    </span>
-                  ))}
                 </div>
 
                 {/* ACTION BUTTONS (F9 Paths) */}
-                <div className="pt-3.5 border-t border-zinc-900 space-y-3">
+                {!isSelectedExternalAsset ? (
+                  <div className="pt-4 border-t border-zinc-900 space-y-3">
                   {/* Path A: Local high-speed download */}
                   <div>
                     <h4 className="text-[10.2px] text-zinc-500 font-mono uppercase mb-1.5 tracking-wide">
@@ -2954,7 +5845,27 @@ export default function AssetLibrary({
                     </div>
                   </div>
 
-                </div>
+                  </div>
+                ) : (
+                  <div className="pt-4 border-t border-zinc-900 space-y-3">
+                    <div className="rounded border border-zinc-800 bg-black/40 p-3.5 text-[11px] font-mono text-zinc-300 space-y-2">
+                      <p className="text-zinc-100 font-semibold">外部来源信息</p>
+                      <p>来源平台：{selectedExternalSourceMeta?.label ?? selectedAsset.platform}</p>
+                      <p className="leading-relaxed text-zinc-400">{selectedExternalAsset?.nonCommercialNotice}</p>
+                      {selectedExternalAsset?.sourceUrl && (
+                        <a
+                          href={selectedExternalAsset.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[#00ff00] transition-colors hover:text-[#7dff7d]"
+                        >
+                          打开来源页面
+                          <ExternalLink size={12} />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

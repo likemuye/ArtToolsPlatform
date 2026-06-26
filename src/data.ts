@@ -1,4 +1,4 @@
-import { SpaceId, ProjectSpace, AppId, AppStatus, AppConfig, DccExtension, ArtAsset, AssetCategory, AssetFolder } from './types';
+import { SpaceId, ProjectSpace, AppId, AppStatus, AppConfig, DccExtension, ArtAsset, AssetCategory, AssetFolder, PlatformUser, ProjectMember, AssetTaskStatus } from './types';
 
 export const PROJECT_SPACES: ProjectSpace[] = [
   {
@@ -33,37 +33,15 @@ export const PROJECT_SPACES: ProjectSpace[] = [
 
 export const INITIAL_APPS: AppConfig[] = [
   {
-    id: AppId.ComfyUI,
-    name: 'ComfyUI',
-    isPlatformHosted: true,
-    status: AppStatus.NotReady,
-    version: 'v1.4.0',
-    newVersion: 'v1.6.2', // Handles corner purple badge "有新版本"
-    diskRequiredGB: 15,
-    sizeGB: 15,
-    installPath: ''
-  },
-  {
     id: AppId.Blender,
     name: 'Blender',
     isPlatformHosted: true,
-    status: AppStatus.InstalledOffline,
+    status: AppStatus.Connected,
     version: 'v4.1.0',
     newVersion: 'v4.2.0', // corner purple badge
     diskRequiredGB: 4,
     sizeGB: 4.2,
     installPath: 'C:\\Program Files\\ArtPlatform\\managed\\blender'
-  },
-  {
-    id: AppId.Photoshop,
-    name: 'Adobe Photoshop',
-    isPlatformHosted: false,
-    status: AppStatus.InstalledOffline,
-    version: '2024 (v25.0)',
-    isOld: true, // orange "版本过旧" badge F4
-    diskRequiredGB: 5,
-    sizeGB: 4.8,
-    installPath: 'C:\\Program Files\\Adobe\\Adobe Photoshop 2024'
   },
   {
     id: AppId.Maya,
@@ -79,11 +57,21 @@ export const INITIAL_APPS: AppConfig[] = [
     id: AppId.Max3ds,
     name: 'Autodesk 3ds Max',
     isPlatformHosted: false,
-    status: AppStatus.NotReady, // To demonstrate manual validation
+    status: AppStatus.ConnectionFailed, // 演示「重新连接」
     version: '2025.0',
     isOld: true,
     diskRequiredGB: 10,
     sizeGB: 9.2,
+    installPath: 'C:\\Program Files\\Autodesk\\3ds Max 2025'
+  },
+  {
+    id: AppId.Houdini,
+    name: 'Houdini',
+    isPlatformHosted: false,
+    status: AppStatus.NotReady, // 未找到安装，演示手动设置路径流程
+    version: '20.5',
+    diskRequiredGB: 12,
+    sizeGB: 11.5,
     installPath: ''
   }
 ];
@@ -203,7 +191,7 @@ export const EXTENSIONS_PROJECT_A: DccExtension[] = [
 ];
 
 // Art assets for Project Space A (contains multiple categories to match matrix)
-export const ART_ASSETS_PROJECT_A: ArtAsset[] = [
+const RAW_ART_ASSETS_PROJECT_A: ArtAsset[] = [
   {
     id: 'asset-01',
     name: '【武将】赵云次世代全身盔甲设计',
@@ -986,6 +974,48 @@ export const ART_ASSETS_PROJECT_A: ArtAsset[] = [
   }
 ];
 
+// Deterministic mock 创建时间 + 尺寸 for project assets: spread evenly back from a
+// fixed anchor and cycle a few common art resolutions, so the 创建时间 / 尺寸 range
+// filters and sort have stable, demo-friendly data.
+const PROJECT_ASSET_CREATED_ANCHOR = Date.UTC(2026, 5, 20, 9, 0, 0); // 2026-06-20
+const PROJECT_ASSET_DIMENSIONS: Array<[number, number]> = [
+  [1920, 1080],
+  [2048, 2048],
+  [4096, 2160],
+  [3840, 2160],
+  [1024, 1024],
+  [2560, 1440],
+  [8192, 8192],
+  [1280, 720]
+];
+// Org (组织架构) + task status options, plus deterministic mock cycling so the
+// 组织架构 / 任务状态 / 时长 filters have stable demo data.
+export const ASSET_ORG_OPTIONS = ['角色组', '场景组', '特效组', 'UI 组', '外包团队'];
+export const ASSET_TASK_STATUS_LABELS: Record<AssetTaskStatus, string> = {
+  pending: '待处理',
+  producing: '制作中',
+  reviewing: '待审核',
+  approved: '已通过',
+  rejected: '已驳回'
+};
+const ASSET_TASK_STATUS_CYCLE: AssetTaskStatus[] = ['pending', 'producing', 'reviewing', 'approved', 'rejected'];
+const TIME_BASED_FORMATS = new Set(['MOV', 'MP4', 'AVI', 'MXF', 'WAV', 'MP3', 'OGG', 'AAC', 'FLAC']);
+const mockDurationForIndex = (index: number) => 5 + (index * 23) % 176; // 5~180s
+
+export const ART_ASSETS_PROJECT_A: ArtAsset[] = RAW_ART_ASSETS_PROJECT_A.map((asset, index) => {
+  const [width, height] = PROJECT_ASSET_DIMENSIONS[index % PROJECT_ASSET_DIMENSIONS.length];
+  const isTimeBased = TIME_BASED_FORMATS.has(asset.format.trim().toUpperCase());
+  return {
+    ...asset,
+    createdAt: new Date(PROJECT_ASSET_CREATED_ANCHOR - index * 36 * 60 * 60 * 1000).toISOString(),
+    width,
+    height,
+    org: ASSET_ORG_OPTIONS[index % ASSET_ORG_OPTIONS.length],
+    taskStatus: ASSET_TASK_STATUS_CYCLE[index % ASSET_TASK_STATUS_CYCLE.length],
+    durationSec: isTimeBased ? mockDurationForIndex(index) : undefined
+  };
+});
+
 export const INITIAL_ASSET_FOLDERS_PROJECT_A: AssetFolder[] = [
   { id: 'folder-primary', name: '一级文件夹', parentId: null },
   { id: 'folder-character', name: '二级文件夹', parentId: 'folder-primary' },
@@ -1023,3 +1053,44 @@ export const INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A = ART_ASSETS_PROJECT_A.r
   acc[asset.id] = byCategory[asset.category] ?? 'folder-primary';
   return acc;
 }, {});
+
+// --- 项目组权限管理：示例数据 ---------------------------------------------
+export const CURRENT_USER_EMAIL = 'likemuye@gmail.com';
+export const CURRENT_USER_NAME = '慕也';
+
+// 平台用户池：添加成员弹窗用于"从平台用户选择 / 模拟匹配"。
+export const PLATFORM_USERS: PlatformUser[] = [
+  { id: 'user-current', name: CURRENT_USER_NAME, email: CURRENT_USER_EMAIL },
+  { id: 'user-zhaoyun', name: '赵云', email: 'zhaoyun@studio.com' },
+  { id: 'user-liubei', name: '刘备', email: 'liubei@studio.com' },
+  { id: 'user-guanyu', name: '关羽', email: 'guanyu@studio.com' },
+  { id: 'user-zhangfei', name: '张飞', email: 'zhangfei@studio.com' },
+  { id: 'user-zhugeliang', name: '诸葛亮', email: 'kongming@studio.com' },
+  { id: 'user-sunshangxiang', name: '孙尚香', email: 'sunsx@studio.com' },
+  { id: 'user-zhouyu', name: '周瑜', email: 'zhouyu@studio.com' },
+  { id: 'user-lubu', name: '吕布', email: 'lubu@studio.com' },
+  { id: 'user-diaochan', name: '貂蝉', email: 'diaochan@studio.com' },
+  { id: 'user-caocao', name: '曹操', email: 'caocao@studio.com' },
+  { id: 'user-simayi', name: '司马懿', email: 'simayi@studio.com' },
+  { id: 'user-huangzhong', name: '黄忠', email: 'huangzhong@studio.com' },
+  { id: 'user-machao', name: '马超', email: 'machao@studio.com' }
+];
+
+// 仅项目类空间（ProjectA / ProjectB）拥有成员；个人/共享空间不参与项目组权限管理。
+export const INITIAL_PROJECT_MEMBERS: Record<SpaceId, ProjectMember[]> = {
+  [SpaceId.ProjectA]: [
+    { id: 'member-a-current', name: CURRENT_USER_NAME, email: CURRENT_USER_EMAIL, role: 'admin', joinedAt: '2026-01-08T09:20:00.000Z' },
+    { id: 'member-a-kongming', name: '诸葛亮', email: 'kongming@studio.com', role: 'admin', joinedAt: '2026-01-15T14:05:00.000Z' },
+    { id: 'member-a-zhaoyun', name: '赵云', email: 'zhaoyun@studio.com', role: 'member', joinedAt: '2026-02-02T10:30:00.000Z' },
+    { id: 'member-a-guanyu', name: '关羽', email: 'guanyu@studio.com', role: 'member', joinedAt: '2026-02-18T16:48:00.000Z' },
+    { id: 'member-a-zhangfei', name: '张飞', email: 'zhangfei@studio.com', role: 'member', joinedAt: '2026-03-06T08:12:00.000Z' },
+    { id: 'member-a-sunsx', name: '孙尚香', email: 'sunsx@studio.com', role: 'member', joinedAt: '2026-04-21T11:55:00.000Z' }
+  ],
+  [SpaceId.ProjectB]: [
+    { id: 'member-b-current', name: CURRENT_USER_NAME, email: CURRENT_USER_EMAIL, role: 'admin', joinedAt: '2026-03-01T09:00:00.000Z' },
+    { id: 'member-b-zhouyu', name: '周瑜', email: 'zhouyu@studio.com', role: 'member', joinedAt: '2026-03-12T13:20:00.000Z' }
+  ],
+  [SpaceId.Shared]: [],
+  [SpaceId.Personal]: []
+};
+
