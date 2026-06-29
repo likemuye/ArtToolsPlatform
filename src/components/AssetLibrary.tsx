@@ -33,10 +33,12 @@ import {
   Boxes,
   Globe,
   ScanSearch,
+  Camera,
+  Eye,
   Package
 } from 'lucide-react';
-import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType, AssetTaskStatus } from '../types';
-import { INITIAL_ASSET_FOLDERS_PROJECT_A, INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A, PROJECT_SPACES, ASSET_ORG_OPTIONS, ASSET_TASK_STATUS_LABELS } from '../data';
+import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType, AssetTaskStatus, PlatformUser, ProjectMember } from '../types';
+import { INITIAL_ASSET_FOLDERS_PROJECT_A, INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A, PROJECT_SPACES, ASSET_ORG_OPTIONS, ASSET_TASK_STATUS_LABELS, PLATFORM_USERS, INITIAL_PROJECT_MEMBERS, CURRENT_USER_EMAIL } from '../data';
 
 interface AssetLibraryProps {
   currentSpace: ProjectSpace;
@@ -49,7 +51,7 @@ interface AssetLibraryProps {
   setDownloadedAssetIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   simulatedDiskGB: number;
   setSimulatedDiskGB: React.Dispatch<React.SetStateAction<number>>;
-  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error') => void;
+  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
 }
 
 interface PendingPersonalUploadItem {
@@ -98,6 +100,8 @@ const ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v2';
 const ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY = 'art-launcher-asset-folder-assignments-v2';
 const ASSET_FOLDER_PANE_WIDTH_STORAGE_KEY = 'art-launcher-folder-pane-width-v1';
 const ASSET_ITEMS_PER_PAGE_STORAGE_KEY = 'art-launcher-items-per-page-v1';
+const ASSET_SHARES_STORAGE_KEY = 'art-launcher-asset-shares-v1';
+const PROJECT_MEMBERS_STORAGE_KEY = 'art-launcher-project-members-v1';
 const REMOVED_DEFAULT_FOLDER_IDS = new Set(['folder-browser', 'folder-cloud-local']);
 const REMOVED_SYSTEM_FOLDER_IDS = new Set(['space-root-project-group']);
 const FOLDER_SCOPE_SEPARATOR = '::';
@@ -159,6 +163,11 @@ const MAX_FOLDER_PANE_WIDTH = 520;
 const DEFAULT_ITEMS_PER_PAGE = 50;
 const ITEMS_PER_PAGE_OPTIONS = [20, 50, 100];
 const PREVIEW_ZOOM_STEP = 1.2;
+// 素材卡片宽度调节：滑动条区间 140~1200px，默认 240px。
+const CARD_WIDTH_STORAGE_KEY = 'art-launcher-card-width-v1';
+const CARD_WIDTH_MIN = 140;
+const CARD_WIDTH_MAX = 1200;
+const DEFAULT_CARD_WIDTH = 240;
 
 // Folder name validation rules: length cap, illegal chars, reserved names, sibling uniqueness
 const FOLDER_NAME_MAX_LENGTH = 32;
@@ -358,18 +367,113 @@ const getAssetTypeTab = (format: string): AssetTypeTab | null => (
 // All general-filter dropdown keys (shared union for internal & external open-filter state).
 type FilterKey = 'author' | 'format' | 'tag' | 'org' | 'created' | 'fileSize' | 'status' | 'size' | 'shape' | 'duration' | 'color' | 'source' | 'sort';
 
-// 形状（横版/竖版/方图）by width/height
-type AssetShape = 'landscape' | 'portrait' | 'square';
+// 形状：横图/竖图/方图/水平全景/垂直全景，by width/height ratio
+type AssetShape = 'landscape' | 'portrait' | 'square' | 'pano-h' | 'pano-v';
 const ASSET_SHAPE_OPTIONS: Array<{ id: AssetShape; label: string }> = [
-  { id: 'landscape', label: '横版' },
-  { id: 'portrait', label: '竖版' },
-  { id: 'square', label: '方图' }
+  { id: 'landscape', label: '横图' },
+  { id: 'portrait', label: '竖图' },
+  { id: 'square', label: '方图' },
+  { id: 'pano-h', label: '水平全景' },
+  { id: 'pano-v', label: '垂直全景' }
 ];
 const getAssetShape = (asset: ArtAsset): AssetShape | null => {
   if (!asset.width || !asset.height) return null;
-  if (asset.width > asset.height) return 'landscape';
-  if (asset.width < asset.height) return 'portrait';
+  const ratio = asset.width / asset.height;
+  if (ratio >= 2) return 'pano-h';
+  if (ratio <= 0.5) return 'pano-v';
+  if (ratio > 1) return 'landscape';
+  if (ratio < 1) return 'portrait';
   return 'square';
+};
+
+// AI 标签判定：个人上传打标用 'AI自动打标'，或以 AI 前缀的标签视为 AI 标签。
+const isAiTag = (tag: string): boolean => {
+  const t = tag.trim();
+  return t === 'AI自动打标' || /^ai/i.test(t);
+};
+
+// 文件大小预设桶（MB）
+const FILE_SIZE_BUCKETS: Array<{ id: string; label: string; test: (mb: number) => boolean }> = [
+  { id: 'lt1', label: '< 1MB', test: mb => mb < 1 },
+  { id: '1to10', label: '1MB - 10MB', test: mb => mb >= 1 && mb < 10 },
+  { id: '10to100', label: '10MB - 100MB', test: mb => mb >= 10 && mb < 100 },
+  { id: '100to1024', label: '100MB - 1GB', test: mb => mb >= 100 && mb < 1024 },
+  { id: 'gt1024', label: '> 1GB', test: mb => mb >= 1024 }
+];
+
+// 尺寸预设桶（按长边 px）
+const DIMENSION_BUCKETS: Array<{ id: string; label: string; test: (edge: number) => boolean }> = [
+  { id: 'sm', label: '小 (长边 < 640)', test: e => e < 640 },
+  { id: 'md', label: '中 (640 - 1920)', test: e => e >= 640 && e < 1920 },
+  { id: 'lg', label: '大 (1920 - 4096)', test: e => e >= 1920 && e < 4096 },
+  { id: 'xl', label: '超大 (> 4096)', test: e => e >= 4096 }
+];
+
+// 时长预设桶（秒）
+const DURATION_BUCKETS: Array<{ id: string; label: string; test: (s: number) => boolean }> = [
+  { id: 'lt30', label: '< 30s', test: s => s < 30 },
+  { id: '30to60', label: '30s - 1min', test: s => s >= 30 && s < 60 },
+  { id: '60to180', label: '1min - 3min', test: s => s >= 60 && s < 180 },
+  { id: '180to1800', label: '3min - 30min', test: s => s >= 180 && s < 1800 },
+  { id: 'gt1800', label: '> 30min', test: s => s >= 1800 }
+];
+
+// 日期预设（id → 相对今天的天数区间；'custom' 用自定义区间）
+const DATE_PRESETS: Array<{ id: string; label: string }> = [
+  { id: 'all', label: '全部' },
+  { id: 'today', label: '今天' },
+  { id: 'yesterday', label: '昨天' },
+  { id: '7d', label: '最近 7 天' },
+  { id: '30d', label: '最近 30 天' },
+  { id: '90d', label: '最近 90 天' },
+  { id: '1y', label: '最近一年' },
+  { id: 'custom', label: '自定义范围' }
+];
+
+// Shared bucket/size/shape predicate set for an asset against the active filter facets.
+interface FacetFilters {
+  fileSizeBuckets: Set<string>;
+  sizeBuckets: Set<string>;
+  sizeWMin: string; sizeWMax: string; sizeHMin: string; sizeHMax: string;
+  durationBuckets: Set<string>;
+  shapeFilters: Set<string>;
+}
+const passesFacetFilters = (asset: ArtAsset, f: FacetFilters): boolean => {
+  // 文件大小桶（任一命中）
+  if (f.fileSizeBuckets.size > 0) {
+    const ok = FILE_SIZE_BUCKETS.some(b => f.fileSizeBuckets.has(b.id) && b.test(asset.sizeMB));
+    if (!ok) return false;
+  }
+  // 尺寸预设桶（按长边）+ 宽高自定义区间（AND）
+  if (f.sizeBuckets.size > 0) {
+    const edge = getAssetLongestEdge(asset);
+    if (edge === null) return false;
+    const ok = DIMENSION_BUCKETS.some(b => f.sizeBuckets.has(b.id) && b.test(edge));
+    if (!ok) return false;
+  }
+  const wMin = f.sizeWMin.trim() === '' ? null : Number(f.sizeWMin);
+  const wMax = f.sizeWMax.trim() === '' ? null : Number(f.sizeWMax);
+  const hMin = f.sizeHMin.trim() === '' ? null : Number(f.sizeHMin);
+  const hMax = f.sizeHMax.trim() === '' ? null : Number(f.sizeHMax);
+  if (wMin !== null || wMax !== null || hMin !== null || hMax !== null) {
+    if (!asset.width || !asset.height) return false;
+    if (wMin !== null && Number.isFinite(wMin) && asset.width < wMin) return false;
+    if (wMax !== null && Number.isFinite(wMax) && asset.width > wMax) return false;
+    if (hMin !== null && Number.isFinite(hMin) && asset.height < hMin) return false;
+    if (hMax !== null && Number.isFinite(hMax) && asset.height > hMax) return false;
+  }
+  // 时长桶
+  if (f.durationBuckets.size > 0) {
+    if (asset.durationSec === undefined) return false;
+    const ok = DURATION_BUCKETS.some(b => f.durationBuckets.has(b.id) && b.test(asset.durationSec as number));
+    if (!ok) return false;
+  }
+  // 形状
+  if (f.shapeFilters.size > 0) {
+    const shape = getAssetShape(asset);
+    if (!shape || !f.shapeFilters.has(shape)) return false;
+  }
+  return true;
 };
 
 // 颜色色板：固定色相，资产主色按 RGB 距离归入最近色板。
@@ -1178,6 +1282,35 @@ const toLocalDateInputValue = (date: Date) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+// Resolve a date preset id to an inclusive [fromTs, toTs] (ms) range, or null for 'all'.
+// 'custom' uses the provided from/to date strings.
+const resolveDatePresetRange = (
+  preset: string,
+  customFrom: string,
+  customTo: string
+): { fromTs: number | null; toTs: number | null } => {
+  if (preset === 'all' || !preset) return { fromTs: null, toTs: null };
+  if (preset === 'custom') {
+    return {
+      fromTs: customFrom ? new Date(`${customFrom}T00:00:00`).getTime() : null,
+      toTs: customTo ? new Date(`${customTo}T23:59:59`).getTime() : null
+    };
+  }
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
+  const endOfToday = startOfToday + 24 * 60 * 60 * 1000 - 1;
+  const DAY = 24 * 60 * 60 * 1000;
+  switch (preset) {
+    case 'today': return { fromTs: startOfToday, toTs: endOfToday };
+    case 'yesterday': return { fromTs: startOfToday - DAY, toTs: startOfToday - 1 };
+    case '7d': return { fromTs: startOfToday - 6 * DAY, toTs: endOfToday };
+    case '30d': return { fromTs: startOfToday - 29 * DAY, toTs: endOfToday };
+    case '90d': return { fromTs: startOfToday - 89 * DAY, toTs: endOfToday };
+    case '1y': return { fromTs: startOfToday - 364 * DAY, toTs: endOfToday };
+    default: return { fromTs: null, toTs: null };
+  }
+};
+
 interface CreatedRangePreset {
   id: string;
   label: string;
@@ -1312,10 +1445,22 @@ const CreatedRangePanel: React.FC<CreatedRangePanelProps> = ({ from, to, onChang
 
 // Reusable multi-select dropdown body (创建人/标签/后缀/组织架构/任务状态/形状). Renders the
 // panel only (caller owns the trigger button + relative wrapper).
+interface FilterOption {
+  value: string;
+  label: string;
+  badge?: string;   // 如「已离职」
+  dimmed?: boolean; // 灰显
+}
+interface FilterOptionGroup {
+  title: string;
+  options: FilterOption[];
+}
 interface MultiSelectFilterPanelProps {
-  options: Array<{ value: string; label: string }>;
+  options?: FilterOption[];
+  groups?: FilterOptionGroup[]; // 分组渲染（后缀按类型 / 标签按 AI 分组）
   selected: Set<string>;
   onToggle: (value: string) => void;
+  singleSelect?: boolean; // 单选模式（创建人）：点选即唯一
   searchable?: boolean;
   searchValue?: string;
   onSearchChange?: (value: string) => void;
@@ -1325,35 +1470,133 @@ interface MultiSelectFilterPanelProps {
 }
 
 const MultiSelectFilterPanel: React.FC<MultiSelectFilterPanelProps> = ({
-  options, selected, onToggle, searchable, searchValue, onSearchChange, searchPlaceholder, emptyText, width
-}) => (
-  <div className={`absolute left-0 top-full z-30 mt-1.5 ${width ?? 'w-52'} rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60`}>
-    {searchable && (
-      <div className="relative mb-2">
-        <Search size={11} className="absolute left-2 top-1.5 text-zinc-600" />
-        <input
-          type="text"
-          value={searchValue ?? ''}
-          onChange={(event) => onSearchChange?.(event.target.value)}
-          placeholder={searchPlaceholder ?? '搜索'}
-          className="w-full rounded border border-zinc-800 bg-black py-1 pl-7 pr-2 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00]"
-        />
+  options, groups, selected, onToggle, singleSelect, searchable, searchValue, onSearchChange, searchPlaceholder, emptyText, width
+}) => {
+  const renderOption = (option: FilterOption) => (
+    <label key={option.value} className={`flex items-center gap-1.5 text-[10px] ${option.dimmed ? 'text-zinc-600' : 'text-zinc-400'}`}>
+      <input
+        type={singleSelect ? 'radio' : 'checkbox'}
+        checked={selected.has(option.value)}
+        onChange={() => onToggle(option.value)}
+        className="h-3 w-3 rounded border-zinc-700 bg-black text-[#00ff00] focus:ring-[#00ff00]/50"
+      />
+      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+      {option.badge && (
+        <span className="shrink-0 rounded bg-zinc-800 px-1 text-[8.5px] text-zinc-500">{option.badge}</span>
+      )}
+    </label>
+  );
+  const hasContent = (groups && groups.some(g => g.options.length > 0)) || (options && options.length > 0);
+  return (
+    <div className={`absolute left-0 top-full z-30 mt-1.5 ${width ?? 'w-52'} rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60`}>
+      {searchable && (
+        <div className="relative mb-2">
+          <Search size={11} className="absolute left-2 top-1.5 text-zinc-600" />
+          <input
+            type="text"
+            value={searchValue ?? ''}
+            onChange={(event) => onSearchChange?.(event.target.value)}
+            placeholder={searchPlaceholder ?? '搜索'}
+            className="w-full rounded border border-zinc-800 bg-black py-1 pl-7 pr-2 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00]"
+          />
+        </div>
+      )}
+      <div className="max-h-52 space-y-1 overflow-y-auto pr-1">
+        {hasContent ? (
+          groups ? groups.filter(g => g.options.length > 0).map(group => (
+            <div key={group.title} className="space-y-1">
+              <p className="px-0.5 pt-1 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">{group.title}</p>
+              {group.options.map(renderOption)}
+            </div>
+          )) : (options ?? []).map(renderOption)
+        ) : (
+          <p className="text-[10px] text-zinc-600">{emptyText ?? '暂无可选项'}</p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// 日期预设单选面板（含自定义范围展开）
+interface DatePresetPanelProps {
+  preset: string;
+  from: string;
+  to: string;
+  onPresetChange: (preset: string) => void;
+  onCustomChange: (next: { from: string; to: string }) => void;
+}
+const DatePresetPanel: React.FC<DatePresetPanelProps> = ({ preset, from, to, onPresetChange, onCustomChange }) => (
+  <div className="absolute left-0 top-full z-30 mt-1.5 w-56 rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60">
+    <div className="space-y-1">
+      {DATE_PRESETS.map(p => (
+        <label key={p.id} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+          <input
+            type="radio"
+            checked={preset === p.id}
+            onChange={() => onPresetChange(p.id)}
+            className="h-3 w-3 border-zinc-700 bg-black text-[#00ff00] focus:ring-[#00ff00]/50"
+          />
+          <span>{p.label}</span>
+        </label>
+      ))}
+    </div>
+    {preset === 'custom' && (
+      <div className="mt-2 space-y-1.5 border-t border-zinc-800 pt-2">
+        <label className="block">
+          <span className="mb-1 block text-[9px] uppercase tracking-wide text-zinc-500">开始日期</span>
+          <input
+            type="date"
+            value={from}
+            max={to || undefined}
+            onChange={(e) => onCustomChange({ from: e.target.value, to })}
+            className="w-full rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[9px] uppercase tracking-wide text-zinc-500">结束日期</span>
+          <input
+            type="date"
+            value={to}
+            min={from || undefined}
+            onChange={(e) => onCustomChange({ from, to: e.target.value })}
+            className="w-full rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]"
+          />
+        </label>
       </div>
     )}
-    <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
-      {options.length > 0 ? options.map((option) => (
-        <label key={option.value} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+  </div>
+);
+
+// 尺寸面板：预设桶多选 + 宽高自定义区间
+interface SizeFilterPanelProps {
+  buckets: Set<string>;
+  onToggleBucket: (id: string) => void;
+  wMin: string; wMax: string; hMin: string; hMax: string;
+  onChange: (field: 'wMin' | 'wMax' | 'hMin' | 'hMax', value: string) => void;
+}
+const SizeFilterPanel: React.FC<SizeFilterPanelProps> = ({ buckets, onToggleBucket, wMin, wMax, hMin, hMax, onChange }) => (
+  <div className="absolute left-0 top-full z-30 mt-1.5 w-60 rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60">
+    <div className="space-y-1">
+      {DIMENSION_BUCKETS.map(b => (
+        <label key={b.id} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
           <input
             type="checkbox"
-            checked={selected.has(option.value)}
-            onChange={() => onToggle(option.value)}
+            checked={buckets.has(b.id)}
+            onChange={() => onToggleBucket(b.id)}
             className="h-3 w-3 rounded border-zinc-700 bg-black text-[#00ff00] focus:ring-[#00ff00]/50"
           />
-          <span className="truncate">{option.label}</span>
+          <span>{b.label}</span>
         </label>
-      )) : (
-        <p className="text-[10px] text-zinc-600">{emptyText ?? '暂无可选项'}</p>
-      )}
+      ))}
+    </div>
+    <div className="mt-2 border-t border-zinc-800 pt-2">
+      <p className="mb-1 text-[9px] uppercase tracking-wide text-zinc-500">自定义（px）</p>
+      <div className="grid grid-cols-2 gap-1.5">
+        <input type="number" min={0} value={wMin} onChange={e => onChange('wMin', e.target.value)} placeholder="宽 最小" className="rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]" />
+        <input type="number" min={0} value={wMax} onChange={e => onChange('wMax', e.target.value)} placeholder="宽 最大" className="rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]" />
+        <input type="number" min={0} value={hMin} onChange={e => onChange('hMin', e.target.value)} placeholder="高 最小" className="rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]" />
+        <input type="number" min={0} value={hMax} onChange={e => onChange('hMax', e.target.value)} placeholder="高 最大" className="rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]" />
+      </div>
     </div>
   </div>
 );
@@ -1442,6 +1685,19 @@ const getInitialItemsPerPage = () => {
   }
 };
 
+const clampCardWidth = (width: number) => Math.max(CARD_WIDTH_MIN, Math.min(CARD_WIDTH_MAX, width));
+const getInitialCardWidth = () => {
+  try {
+    const stored = localStorage.getItem(CARD_WIDTH_STORAGE_KEY);
+    if (!stored) return DEFAULT_CARD_WIDTH;
+    const parsed = Number(stored);
+    if (!Number.isFinite(parsed)) return DEFAULT_CARD_WIDTH;
+    return clampCardWidth(parsed);
+  } catch {
+    return DEFAULT_CARD_WIDTH;
+  }
+};
+
 const buildPaginationTokens = (currentPage: number, totalPages: number): PaginationToken[] => {
   if (totalPages <= 0) return [];
   if (totalPages < 7) {
@@ -1459,6 +1715,56 @@ const buildPaginationTokens = (currentPage: number, totalPages: number): Paginat
   return [1, 'ellipsis-left', currentPage - 1, currentPage, currentPage + 1, 'ellipsis-right', totalPages];
 };
 
+// --- 素材分享授权（项目空间 → 与我共享）---------------------------------
+type ShareScope = 'user' | 'group';
+interface AssetShareGrant {
+  assetId: string;
+  granteeEmail: string;
+  granteeName: string;
+  role: 'viewer'; // 授权类型固定「使用者」
+  sharedAt: string;
+  via?: string; // 按项目组分享时标注来源组名
+}
+
+const getInitialAssetShares = (): AssetShareGrant[] => {
+  try {
+    const stored = localStorage.getItem(ASSET_SHARES_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((g): g is AssetShareGrant => (
+      !!g && typeof g.assetId === 'string' && typeof g.granteeEmail === 'string'
+    ));
+  } catch {
+    return [];
+  }
+};
+
+// Read project members (synced with PermissionManager's storage), falling back to seed data.
+const readProjectMembers = (): Record<SpaceId, ProjectMember[]> => {
+  const base: Record<SpaceId, ProjectMember[]> = {
+    [SpaceId.ProjectA]: [...INITIAL_PROJECT_MEMBERS[SpaceId.ProjectA]],
+    [SpaceId.ProjectB]: [...INITIAL_PROJECT_MEMBERS[SpaceId.ProjectB]],
+    [SpaceId.Shared]: [],
+    [SpaceId.Personal]: []
+  };
+  try {
+    const stored = localStorage.getItem(PROJECT_MEMBERS_STORAGE_KEY);
+    if (!stored) return base;
+    const parsed = JSON.parse(stored);
+    if (!parsed || typeof parsed !== 'object') return base;
+    ([SpaceId.ProjectA, SpaceId.ProjectB] as SpaceId[]).forEach((sid) => {
+      if (Array.isArray(parsed[sid])) base[sid] = parsed[sid];
+    });
+    return base;
+  } catch {
+    return base;
+  }
+};
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SHARE_MAX_USERS = 20;
+
 export default function AssetLibrary({
   currentSpace,
   setCurrentSpace,
@@ -1474,6 +1780,11 @@ export default function AssetLibrary({
 }: AssetLibraryProps) {
   // Navigation & filter states
   const [keyword, setKeyword] = useState<string>('');
+  // 批量操作（多选删除）
+  const [isBatchMode, setIsBatchMode] = useState<boolean>(false);
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(() => new Set());
+  const [pendingBatchDelete, setPendingBatchDelete] = useState<boolean>(false);
+  const [batchDeleteProgress, setBatchDeleteProgress] = useState<{ done: number; total: number } | null>(null);
   // 图片搜索（以图搜图）: active query + async color-sampling cache & version trigger
   const [imageSearchQuery, setImageSearchQuery] = useState<ImageSearchQuery | null>(null);
   const [isImageSearchProcessing, setIsImageSearchProcessing] = useState<boolean>(false);
@@ -1487,11 +1798,10 @@ export default function AssetLibrary({
   const [externalSourceFilters, setExternalSourceFilters] = useState<Set<ExternalAssetSource>>(() => new Set());
   const [externalCreatedFrom, setExternalCreatedFrom] = useState<string>('');
   const [externalCreatedTo, setExternalCreatedTo] = useState<string>('');
-  const [externalSizeMin, setExternalSizeMin] = useState<string>('');
-  const [externalSizeMax, setExternalSizeMax] = useState<string>('');
+  const [externalDatePreset, setExternalDatePreset] = useState<string>('all');
   const [externalSortOrder, setExternalSortOrder] = useState<'asc' | 'desc'>('desc');
   // 外部素材新增筛选维度
-  const [externalAuthorFilters, setExternalAuthorFilters] = useState<Set<string>>(() => new Set());
+  const [externalAuthorFilter, setExternalAuthorFilter] = useState<string>(''); // 创建人：单选
   const [externalAuthorKeyword, setExternalAuthorKeyword] = useState<string>('');
   const [externalTagFilters, setExternalTagFilters] = useState<Set<string>>(() => new Set());
   const [externalTagKeyword, setExternalTagKeyword] = useState<string>('');
@@ -1499,10 +1809,13 @@ export default function AssetLibrary({
   const [externalStatusFilters, setExternalStatusFilters] = useState<Set<string>>(() => new Set());
   const [externalShapeFilters, setExternalShapeFilters] = useState<Set<string>>(() => new Set());
   const [externalColorFilters, setExternalColorFilters] = useState<Set<string>>(() => new Set());
-  const [externalFileSizeMin, setExternalFileSizeMin] = useState<string>('');
-  const [externalFileSizeMax, setExternalFileSizeMax] = useState<string>('');
-  const [externalDurationMin, setExternalDurationMin] = useState<string>('');
-  const [externalDurationMax, setExternalDurationMax] = useState<string>('');
+  const [externalFileSizeBuckets, setExternalFileSizeBuckets] = useState<Set<string>>(() => new Set());
+  const [externalSizeBuckets, setExternalSizeBuckets] = useState<Set<string>>(() => new Set());
+  const [externalSizeWMin, setExternalSizeWMin] = useState<string>('');
+  const [externalSizeWMax, setExternalSizeWMax] = useState<string>('');
+  const [externalSizeHMin, setExternalSizeHMin] = useState<string>('');
+  const [externalSizeHMax, setExternalSizeHMax] = useState<string>('');
+  const [externalDurationBuckets, setExternalDurationBuckets] = useState<Set<string>>(() => new Set());
   const [openExternalFilter, setOpenExternalFilter] = useState<FilterKey | null>(null);
   const externalFilterBarRef = useRef<HTMLDivElement | null>(null);
   // 内容类型 tab（全部/图片/视频/3D/工业/文档/音频），内外共用
@@ -1512,11 +1825,10 @@ export default function AssetLibrary({
   const [internalFormatFilters, setInternalFormatFilters] = useState<Set<string>>(() => new Set());
   const [internalCreatedFrom, setInternalCreatedFrom] = useState<string>('');
   const [internalCreatedTo, setInternalCreatedTo] = useState<string>('');
-  const [internalSizeMin, setInternalSizeMin] = useState<string>(''); // 尺寸（最长边 px）
-  const [internalSizeMax, setInternalSizeMax] = useState<string>('');
+  const [internalDatePreset, setInternalDatePreset] = useState<string>('all');
   const [internalSortOrder, setInternalSortOrder] = useState<'asc' | 'desc'>('desc');
   // 内部空间新增筛选维度
-  const [internalAuthorFilters, setInternalAuthorFilters] = useState<Set<string>>(() => new Set());
+  const [internalAuthorFilter, setInternalAuthorFilter] = useState<string>(''); // 创建人：单选
   const [internalAuthorKeyword, setInternalAuthorKeyword] = useState<string>('');
   const [internalTagFilters, setInternalTagFilters] = useState<Set<string>>(() => new Set());
   const [internalTagKeyword, setInternalTagKeyword] = useState<string>('');
@@ -1524,16 +1836,20 @@ export default function AssetLibrary({
   const [internalStatusFilters, setInternalStatusFilters] = useState<Set<string>>(() => new Set());
   const [internalShapeFilters, setInternalShapeFilters] = useState<Set<string>>(() => new Set());
   const [internalColorFilters, setInternalColorFilters] = useState<Set<string>>(() => new Set());
-  const [internalFileSizeMin, setInternalFileSizeMin] = useState<string>(''); // 文件大小（MB）
-  const [internalFileSizeMax, setInternalFileSizeMax] = useState<string>('');
-  const [internalDurationMin, setInternalDurationMin] = useState<string>(''); // 时长（秒）
-  const [internalDurationMax, setInternalDurationMax] = useState<string>('');
+  const [internalFileSizeBuckets, setInternalFileSizeBuckets] = useState<Set<string>>(() => new Set());
+  const [internalSizeBuckets, setInternalSizeBuckets] = useState<Set<string>>(() => new Set());
+  const [internalSizeWMin, setInternalSizeWMin] = useState<string>('');
+  const [internalSizeWMax, setInternalSizeWMax] = useState<string>('');
+  const [internalSizeHMin, setInternalSizeHMin] = useState<string>('');
+  const [internalSizeHMax, setInternalSizeHMax] = useState<string>('');
+  const [internalDurationBuckets, setInternalDurationBuckets] = useState<Set<string>>(() => new Set());
   const [openInternalFilter, setOpenInternalFilter] = useState<FilterKey | null>(null);
   const internalFilterBarRef = useRef<HTMLDivElement | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<ArtAsset | null>(null);
   const [assetDetailNameDraft, setAssetDetailNameDraft] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(getInitialItemsPerPage);
+  const [cardWidth, setCardWidth] = useState<number>(getInitialCardWidth);
   // 卡片元信息功能暂时停用，保留原渲染逻辑便于后续快速恢复。
   // const [showAssetCardInfo, setShowAssetCardInfo] = useState<boolean>(true);
   const showAssetCardInfo = false;
@@ -1575,6 +1891,18 @@ export default function AssetLibrary({
     x: number;
     y: number;
   } | null>(null);
+  // 素材分享授权（项目空间 → 与我共享）
+  const [assetShares, setAssetShares] = useState<AssetShareGrant[]>(getInitialAssetShares);
+  const [shareModalTarget, setShareModalTarget] = useState<{ kind: 'asset' | 'folder'; id: string; name: string; format?: string; thumbnail?: string } | null>(null);
+  const [shareScope, setShareScope] = useState<ShareScope>('user');
+  const [shareUserQuery, setShareUserQuery] = useState<string>('');
+  const [shareSelectedUsers, setShareSelectedUsers] = useState<PlatformUser[]>([]);
+  const [shareSelectedGroup, setShareSelectedGroup] = useState<SpaceId>(SpaceId.ProjectA);
+  const [shareError, setShareError] = useState<string>('');
+  // 查看权限弹窗（素材/文件夹）
+  const [permissionViewTarget, setPermissionViewTarget] = useState<{ kind: 'asset' | 'folder'; id: string; name: string } | null>(null);
+  const [permissionViewTab, setPermissionViewTab] = useState<'members' | 'groups'>('members');
+  const [pendingPermissionRemoval, setPendingPermissionRemoval] = useState<{ scope: 'member' | 'group'; targetId: string; name: string; email?: string; groupName?: string } | null>(null);
   const [pendingFolderDelete, setPendingFolderDelete] = useState<{
     folderId: string;
     folderName: string;
@@ -1624,7 +1952,7 @@ export default function AssetLibrary({
     includeSubfolderAssets,
     activeTypeTab,
     internalFormatFilters,
-    internalAuthorFilters,
+    internalAuthorFilter,
     internalTagFilters,
     internalOrgFilters,
     internalStatusFilters,
@@ -1632,17 +1960,19 @@ export default function AssetLibrary({
     internalColorFilters,
     internalCreatedFrom,
     internalCreatedTo,
-    internalSizeMin,
-    internalSizeMax,
-    internalFileSizeMin,
-    internalFileSizeMax,
-    internalDurationMin,
-    internalDurationMax,
+    internalDatePreset,
+    internalSizeBuckets,
+    internalSizeWMin,
+    internalSizeWMax,
+    internalSizeHMin,
+    internalSizeHMax,
+    internalFileSizeBuckets,
+    internalDurationBuckets,
     internalSortOrder,
     externalKeyword,
     externalFormatFilters,
     externalSourceFilters,
-    externalAuthorFilters,
+    externalAuthorFilter,
     externalTagFilters,
     externalOrgFilters,
     externalStatusFilters,
@@ -1650,14 +1980,60 @@ export default function AssetLibrary({
     externalColorFilters,
     externalCreatedFrom,
     externalCreatedTo,
-    externalSizeMin,
-    externalSizeMax,
-    externalFileSizeMin,
-    externalFileSizeMax,
-    externalDurationMin,
-    externalDurationMax,
+    externalDatePreset,
+    externalSizeBuckets,
+    externalSizeWMin,
+    externalSizeWMax,
+    externalSizeHMin,
+    externalSizeHMax,
+    externalFileSizeBuckets,
+    externalDurationBuckets,
     externalSortOrder
   ]);
+
+  // 跨页约束：切换页码/筛选/文件夹/空间/子文件夹开关 → 退出批量操作。
+  useEffect(() => {
+    if (isBatchMode) {
+      setIsBatchMode(false);
+      setBatchSelectedIds(new Set());
+      setPendingBatchDelete(false);
+      setBatchDeleteProgress(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentPage,
+    currentSpace,
+    selectedFolderId,
+    includeSubfolderAssets,
+    keyword,
+    activeTypeTab,
+    internalFormatFilters,
+    internalAuthorFilter,
+    internalTagFilters,
+    internalOrgFilters,
+    internalStatusFilters,
+    internalShapeFilters,
+    internalColorFilters,
+    internalDatePreset,
+    internalSizeBuckets,
+    internalFileSizeBuckets,
+    internalDurationBuckets,
+    externalKeyword,
+    externalFormatFilters,
+    externalSourceFilters
+  ]);
+
+  // ESC 退出批量操作（删除确认/进度中不响应，避免误触）。
+  useEffect(() => {
+    if (!isBatchMode) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !pendingBatchDelete && !batchDeleteProgress) {
+        exitBatchMode();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isBatchMode, pendingBatchDelete, batchDeleteProgress]);
 
   useEffect(() => {
     setSelectedAsset(null);
@@ -1666,6 +2042,10 @@ export default function AssetLibrary({
     setPersonalAssetMoveEditor(null);
     setPersonalAssetRenameEditor(null);
     setIsPersonalAssetRenameSubmitAttempted(false);
+    setShareModalTarget(null);
+    setShareError('');
+    setPermissionViewTarget(null);
+    setPendingPermissionRemoval(null);
   }, [currentSpace]);
 
   useEffect(() => {
@@ -1736,6 +2116,14 @@ export default function AssetLibrary({
   useEffect(() => {
     localStorage.setItem(ASSET_ITEMS_PER_PAGE_STORAGE_KEY, String(itemsPerPage));
   }, [itemsPerPage]);
+
+  useEffect(() => {
+    localStorage.setItem(CARD_WIDTH_STORAGE_KEY, String(cardWidth));
+  }, [cardWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(ASSET_SHARES_STORAGE_KEY, JSON.stringify(assetShares));
+  }, [assetShares]);
 
   useEffect(() => {
     const cleanedFolders = normalizeFolders(folders);
@@ -1872,11 +2260,26 @@ export default function AssetLibrary({
         return { ...asset, name: overrideName };
       });
   }, [assets, projectAssetNameOverrides, projectRemovedAssetIds]);
+  // Assets shared TO the current user — surfaced in the 与我共享 space.
+  const sharedToMeAssets = useMemo<ArtAsset[]>(() => {
+    const myAssetIds = new Set(
+      assetShares.filter(g => g.granteeEmail.toLowerCase() === CURRENT_USER_EMAIL.toLowerCase()).map(g => g.assetId)
+    );
+    if (myAssetIds.size === 0) return [];
+    return assets.filter(asset => myAssetIds.has(asset.id));
+  }, [assetShares, assets]);
   const activeAssets: ArtAsset[] = useMemo(() => {
     if (currentSpace.id === SpaceId.Personal) return personalAssets;
     if (currentSpace.id === SpaceId.ProjectA) return projectScopedAssets;
+    if (currentSpace.id === SpaceId.Shared) return sharedToMeAssets;
     return [];
-  }, [currentSpace.id, personalAssets, projectScopedAssets]);
+  }, [currentSpace.id, personalAssets, projectScopedAssets, sharedToMeAssets]);
+  // Current user is admin of the active project group (synced from PermissionManager storage).
+  const isCurrentUserProjectAdmin = useMemo(() => {
+    if (!isProjectA) return false;
+    const members = readProjectMembers()[SpaceId.ProjectA] ?? [];
+    return members.some(m => m.email.toLowerCase() === CURRENT_USER_EMAIL.toLowerCase() && m.role === 'admin');
+  }, [isProjectA, shareModalTarget, assetContextMenu]);
 
   // Resolve an asset's dominant color for 图片搜索 scoring: cached sample → external accent
   // → deterministic id-hash fallback. Never blocks; the async effect fills the cache.
@@ -1977,50 +2380,53 @@ export default function AssetLibrary({
       return map;
     }, new Map<string, ExternalAsset>());
   }, []);
-  const externalAllFormats = useMemo(() => {
-    return Array.from(new Set(EXTERNAL_ASSETS.map(asset => asset.format)))
-      .sort((a, b) => a.localeCompare(b, 'en-US', { numeric: true }));
-  }, []);
-  const externalFormatFilterOptions = useMemo(() => {
-    const query = externalFormatKeyword.trim().toUpperCase();
-    if (!query) return externalAllFormats;
-    return externalAllFormats.filter(format => format.includes(query));
-  }, [externalAllFormats, externalFormatKeyword]);
-  const externalAuthorOptions = useMemo(() => {
-    const all = Array.from(new Set(EXTERNAL_ASSETS.map(a => a.author).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-    const query = externalAuthorKeyword.trim().toLowerCase();
-    return query ? all.filter(a => a.toLowerCase().includes(query)) : all;
-  }, [externalAuthorKeyword]);
-  const externalTagOptions = useMemo(() => {
-    const all = dedupeTags(EXTERNAL_ASSETS.flatMap(a => a.tags));
-    const query = externalTagKeyword.trim().toLowerCase();
-    return query ? all.filter(t => t.toLowerCase().includes(query)) : all;
-  }, [externalTagKeyword]);
+  // 创建人：平台所有用户（含离职），按姓名拼音排序；离职者带徽章+灰显。共用于内外。
+  const buildAuthorOptions = (keyword: string): FilterOption[] => {
+    const query = keyword.trim().toLowerCase();
+    return [...PLATFORM_USERS]
+      .filter(u => !query || u.name.toLowerCase().includes(query) || u.email.toLowerCase().includes(query))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
+      .map(u => ({
+        value: u.email,
+        label: `${u.name}（${u.email}）`,
+        badge: u.isFormer ? '已离职' : undefined,
+        dimmed: u.isFormer
+      }));
+  };
+  const externalAuthorOptions = useMemo(() => buildAuthorOptions(externalAuthorKeyword), [externalAuthorKeyword]);
+  const internalAuthorOptions = useMemo(() => buildAuthorOptions(internalAuthorKeyword), [internalAuthorKeyword]);
+  // 标签：平台所有标签，按 AI/手动 分两组；支持搜索。
+  const buildTagGroups = (pool: string[], keyword: string): FilterOptionGroup[] => {
+    const query = keyword.trim().toLowerCase();
+    const filtered = pool.filter(t => !query || t.toLowerCase().includes(query));
+    const ai = filtered.filter(isAiTag).map(t => ({ value: t, label: t }));
+    const manual = filtered.filter(t => !isAiTag(t)).map(t => ({ value: t, label: t }));
+    return [
+      { title: 'AI 标签', options: ai },
+      { title: '手动标签', options: manual }
+    ];
+  };
+  const externalTagGroups = useMemo(() => (
+    buildTagGroups(dedupeTags(EXTERNAL_ASSETS.flatMap(a => a.tags)), externalTagKeyword)
+  ), [externalTagKeyword]);
+  const internalTagGroups = useMemo(() => (
+    buildTagGroups(dedupeTags(activeAssets.flatMap(a => a.tags)), internalTagKeyword)
+  ), [activeAssets, internalTagKeyword]);
+  // 后缀：按内容类型分组（图片/视频/3D/工业/文档/音频），按搜索过滤。
+  const buildFormatGroups = (keyword: string): FilterOptionGroup[] => {
+    const query = keyword.trim().toUpperCase();
+    return ASSET_TYPE_TABS.filter(tab => tab.id !== 'all').map(tab => ({
+      title: tab.label,
+      options: tab.formats
+        .filter(f => !query || f.includes(query))
+        .map(f => ({ value: f, label: f }))
+    })).filter(g => g.options.length > 0);
+  };
+  const formatGroups = useMemo(() => buildFormatGroups(internalFormatKeyword), [internalFormatKeyword]);
+  const externalFormatGroups = useMemo(() => buildFormatGroups(externalFormatKeyword), [externalFormatKeyword]);
   const externalOrgOptions = useMemo(() => (
     Array.from(new Set(EXTERNAL_ASSETS.map(a => a.org).filter((o): o is string => !!o)))
   ), []);
-  // Internal format catalog: when a type tab is active, restrict to that tab's formats;
-  // otherwise expose every known format. Filtered live by the search box.
-  const internalFormatFilterOptions = useMemo(() => {
-    const tab = ASSET_TYPE_TABS.find(t => t.id === activeTypeTab);
-    const baseFormats = tab && tab.id !== 'all' && tab.formats.length > 0
-      ? tab.formats
-      : ASSET_TYPE_TABS.flatMap(t => t.formats);
-    const unique = Array.from(new Set(baseFormats));
-    const query = internalFormatKeyword.trim().toUpperCase();
-    return query ? unique.filter(format => format.includes(query)) : unique;
-  }, [activeTypeTab, internalFormatKeyword]);
-  // Facet option lists derived from the current internal candidate set.
-  const internalAuthorOptions = useMemo(() => {
-    const all = Array.from(new Set(activeAssets.map(a => a.author).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
-    const query = internalAuthorKeyword.trim().toLowerCase();
-    return query ? all.filter(a => a.toLowerCase().includes(query)) : all;
-  }, [activeAssets, internalAuthorKeyword]);
-  const internalTagOptions = useMemo(() => {
-    const all = dedupeTags(activeAssets.flatMap(a => a.tags));
-    const query = internalTagKeyword.trim().toLowerCase();
-    return query ? all.filter(t => t.toLowerCase().includes(query)) : all;
-  }, [activeAssets, internalTagKeyword]);
   const internalOrgOptions = useMemo(() => (
     Array.from(new Set(activeAssets.map(a => a.org).filter((o): o is string => !!o)))
   ), [activeAssets]);
@@ -2292,20 +2698,20 @@ export default function AssetLibrary({
     const unsupported = files.filter(file => inferUploadType(file) === null);
     if (unsupported.length > 0) {
       alert(`仅支持上传图片、动图(GIF)和视频文件。\n\n当前包含 ${unsupported.length} 个不支持的文件。`);
-      addLog(`❌ 个人空间上传被拦截：存在 ${unsupported.length} 个不支持格式文件。`, 'error');
+      addLog(`❌ 个人空间上传被拦截：存在 ${unsupported.length} 个不支持格式文件。`, 'error', { toast: false });
       return;
     }
 
     if (files.length > PERSONAL_UPLOAD_MAX_COUNT) {
       alert(`单次最多上传 ${PERSONAL_UPLOAD_MAX_COUNT} 条素材。\n当前选择 ${files.length} 条，请分批上传。`);
-      addLog(`❌ 个人空间上传被拦截：单次上传数量 ${files.length} 超过上限 ${PERSONAL_UPLOAD_MAX_COUNT}。`, 'error');
+      addLog(`❌ 个人空间上传被拦截：单次上传数量 ${files.length} 超过上限 ${PERSONAL_UPLOAD_MAX_COUNT}。`, 'error', { toast: false });
       return;
     }
 
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
     if (totalBytes > PERSONAL_UPLOAD_MAX_TOTAL_BYTES) {
       alert(`单次上传总大小不能超过 10 GB。\n当前选择总大小：${formatUploadTotal(totalBytes)}。`);
-      addLog(`❌ 个人空间上传被拦截：批量体积 ${formatUploadTotal(totalBytes)} 超过 10 GB。`, 'error');
+      addLog(`❌ 个人空间上传被拦截：批量体积 ${formatUploadTotal(totalBytes)} 超过 10 GB。`, 'error', { toast: false });
       return;
     }
 
@@ -2540,6 +2946,13 @@ export default function AssetLibrary({
   };
 
   const getResolvedAssetFolderId = (asset: ArtAsset) => {
+    // In 与我共享, shared-in assets live under the shared space's default folder regardless
+    // of their origin project assignment.
+    if (currentSpace.id === SpaceId.Shared) {
+      const sharedDefault = getDefaultFolderIdBySpace(SpaceId.Shared);
+      return folderById[sharedDefault] ? sharedDefault : SHARED_SPACE_FOLDER_ID;
+    }
+
     const assignedFolderId = folderAssignments[asset.id];
     if (assignedFolderId && folderById[assignedFolderId]) {
       return assignedFolderId;
@@ -2553,6 +2966,8 @@ export default function AssetLibrary({
 
   const selectedFolder = folderById[selectedFolderId] ?? folderById[SPACE_ANCHOR_FOLDER_IDS[currentSpace.id]];
   const isExternalRootSelected = selectedFolder?.id === EXTERNAL_ASSET_FOLDER_ID;
+  // 批量删除权限：个人空间始终可删；项目空间需管理员；外部素材只读不可批量。
+  const canBatchDelete = !isExternalRootSelected && (isPersonalSpace || (isProjectA && isCurrentUserProjectAdmin));
   // The toolbar "+" creates a child of whatever folder is currently selected. The external
   // root is read-only (no space id), so child creation is disabled there.
   const canCreateChildOfSelected = !!selectedFolder && getFolderSpaceId(selectedFolder.id) !== null;
@@ -2596,6 +3011,7 @@ export default function AssetLibrary({
   const getAssetsBySpaceId = (spaceId: SpaceId | null): ArtAsset[] => {
     if (spaceId === SpaceId.Personal) return personalAssets;
     if (spaceId === SpaceId.ProjectA) return projectScopedAssets;
+    if (spaceId === SpaceId.Shared) return sharedToMeAssets;
     return [];
   };
   const isSystemFolder = (folderId: string) => SYSTEM_FOLDER_IDS.has(folderId);
@@ -2614,12 +3030,14 @@ export default function AssetLibrary({
   };
   const toggleExternalFormatFilter = makeSetToggle(setExternalFormatFilters);
   const toggleExternalSourceFilter = makeSetToggle(setExternalSourceFilters);
-  const toggleExternalAuthorFilter = makeSetToggle(setExternalAuthorFilters);
   const toggleExternalTagFilter = makeSetToggle(setExternalTagFilters);
   const toggleExternalOrgFilter = makeSetToggle(setExternalOrgFilters);
   const toggleExternalStatusFilter = makeSetToggle(setExternalStatusFilters);
   const toggleExternalShapeFilter = makeSetToggle(setExternalShapeFilters);
   const toggleExternalColorFilter = makeSetToggle(setExternalColorFilters);
+  const toggleExternalFileSizeBucket = makeSetToggle(setExternalFileSizeBuckets);
+  const toggleExternalSizeBucket = makeSetToggle(setExternalSizeBuckets);
+  const toggleExternalDurationBucket = makeSetToggle(setExternalDurationBuckets);
   const clearExternalFilters = () => {
     setExternalKeyword('');
     setActiveTypeTab('all');
@@ -2628,10 +3046,9 @@ export default function AssetLibrary({
     setExternalSourceFilters(new Set());
     setExternalCreatedFrom('');
     setExternalCreatedTo('');
-    setExternalSizeMin('');
-    setExternalSizeMax('');
+    setExternalDatePreset('all');
     setExternalSortOrder('desc');
-    setExternalAuthorFilters(new Set());
+    setExternalAuthorFilter('');
     setExternalAuthorKeyword('');
     setExternalTagFilters(new Set());
     setExternalTagKeyword('');
@@ -2639,18 +3056,20 @@ export default function AssetLibrary({
     setExternalStatusFilters(new Set());
     setExternalShapeFilters(new Set());
     setExternalColorFilters(new Set());
-    setExternalFileSizeMin('');
-    setExternalFileSizeMax('');
-    setExternalDurationMin('');
-    setExternalDurationMax('');
+    setExternalFileSizeBuckets(new Set());
+    setExternalSizeBuckets(new Set());
+    setExternalSizeWMin(''); setExternalSizeWMax(''); setExternalSizeHMin(''); setExternalSizeHMax('');
+    setExternalDurationBuckets(new Set());
   };
   const toggleInternalFormatFilter = makeSetToggle(setInternalFormatFilters);
-  const toggleInternalAuthorFilter = makeSetToggle(setInternalAuthorFilters);
   const toggleInternalTagFilter = makeSetToggle(setInternalTagFilters);
   const toggleInternalOrgFilter = makeSetToggle(setInternalOrgFilters);
   const toggleInternalStatusFilter = makeSetToggle(setInternalStatusFilters);
   const toggleInternalShapeFilter = makeSetToggle(setInternalShapeFilters);
   const toggleInternalColorFilter = makeSetToggle(setInternalColorFilters);
+  const toggleInternalFileSizeBucket = makeSetToggle(setInternalFileSizeBuckets);
+  const toggleInternalSizeBucket = makeSetToggle(setInternalSizeBuckets);
+  const toggleInternalDurationBucket = makeSetToggle(setInternalDurationBuckets);
   const clearInternalFilters = () => {
     setKeyword('');
     setActiveTypeTab('all');
@@ -2658,10 +3077,9 @@ export default function AssetLibrary({
     setInternalFormatFilters(new Set());
     setInternalCreatedFrom('');
     setInternalCreatedTo('');
-    setInternalSizeMin('');
-    setInternalSizeMax('');
+    setInternalDatePreset('all');
     setInternalSortOrder('desc');
-    setInternalAuthorFilters(new Set());
+    setInternalAuthorFilter('');
     setInternalAuthorKeyword('');
     setInternalTagFilters(new Set());
     setInternalTagKeyword('');
@@ -2669,10 +3087,10 @@ export default function AssetLibrary({
     setInternalStatusFilters(new Set());
     setInternalShapeFilters(new Set());
     setInternalColorFilters(new Set());
-    setInternalFileSizeMin('');
-    setInternalFileSizeMax('');
-    setInternalDurationMin('');
-    setInternalDurationMax('');
+    setInternalFileSizeBuckets(new Set());
+    setInternalSizeBuckets(new Set());
+    setInternalSizeWMin(''); setInternalSizeWMax(''); setInternalSizeHMin(''); setInternalSizeHMax('');
+    setInternalDurationBuckets(new Set());
   };
 
   useEffect(() => {
@@ -3101,7 +3519,7 @@ export default function AssetLibrary({
     setIsFolderEditorSubmitAttempted(true);
     const error = validateFolderName(folderEditor.name, folderEditor);
     if (error) {
-      addLog(`❌ 文件夹操作被拦截：${error}`, 'error');
+      addLog(`❌ 文件夹操作被拦截：${error}`, 'error', { toast: false });
       return;
     }
 
@@ -3204,7 +3622,7 @@ export default function AssetLibrary({
     event.preventDefault();
     event.stopPropagation();
     setAssetContextMenu(null);
-    setSelectedFolderId(folderId);
+    // Right-click only opens the menu; it must not select/enter the folder.
     setFolderContextMenu({
       folderId,
       x: event.clientX,
@@ -3299,7 +3717,7 @@ export default function AssetLibrary({
 
     const validationError = validatePersonalAssetName(rawName, targetAsset.id, activeAssets);
     if (validationError) {
-      addLog(`❌ 素材重命名失败：${validationError}`, 'error');
+      addLog(`❌ 素材重命名失败：${validationError}`, 'error', { toast: false });
       return { ok: false as const, nextName: targetAsset.name };
     }
 
@@ -3398,6 +3816,32 @@ export default function AssetLibrary({
     addLog(`📤 已生成分享链接: ${asset.name}`, 'info');
   };
 
+  // 个人空间文件夹分享：与个人素材分享一致，走系统分享 / 链接兜底。
+  const handleSharePersonalFolder = async (folder: AssetFolder) => {
+    if (!isPersonalSpace) return;
+
+    setFolderContextMenu(null);
+    const shareUrl = `${window.location.origin}/personal-space/folders/${folder.id}`;
+
+    const supportsNativeShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    if (supportsNativeShare) {
+      try {
+        await navigator.share({
+          title: folder.name,
+          text: `分享文件夹：${folder.name}`,
+          url: shareUrl
+        });
+        addLog(`📤 已触发系统分享: ${folder.name}`, 'success');
+        return;
+      } catch {
+        // 用户取消分享时保持现状。
+      }
+    }
+
+    window.alert(`[分享链接]\n${shareUrl}`);
+    addLog(`📤 已生成文件夹分享链接: ${folder.name}`, 'info');
+  };
+
   const handleCopyPersonalAssetLink = async (asset: ArtAsset) => {
     if (!isPersonalSpace && !isProjectA) return;
 
@@ -3411,6 +3855,227 @@ export default function AssetLibrary({
       addLog(`🔗 已提供可复制链接: ${asset.name}`, 'info');
     }
   };
+
+  // --- 项目空间分享（管理员）：素材 + 文件夹 ---------------------------
+  const resetShareModalFields = () => {
+    setShareScope('user');
+    setShareUserQuery('');
+    setShareSelectedUsers([]);
+    setShareSelectedGroup(SpaceId.ProjectA);
+    setShareError('');
+  };
+  const openShareModal = (asset: ArtAsset) => {
+    setAssetContextMenu(null);
+    resetShareModalFields();
+    setShareModalTarget({ kind: 'asset', id: asset.id, name: asset.name, format: asset.format, thumbnail: asset.thumbnail });
+  };
+  const openFolderShareModal = (folder: AssetFolder) => {
+    setFolderContextMenu(null);
+    resetShareModalFields();
+    setShareModalTarget({ kind: 'folder', id: folder.id, name: folder.name });
+  };
+
+  const closeShareModal = () => {
+    setShareModalTarget(null);
+    setShareError('');
+  };
+
+  // Platform users matching the fuzzy query (name or email), excluding the current user.
+  const shareUserMatches = useMemo(() => {
+    const query = shareUserQuery.trim().toLowerCase();
+    const picked = new Set(shareSelectedUsers.map(u => u.email.toLowerCase()));
+    const pool = PLATFORM_USERS.filter(u => (
+      u.email.toLowerCase() !== CURRENT_USER_EMAIL.toLowerCase() && !picked.has(u.email.toLowerCase())
+    ));
+    if (!query) return pool.slice(0, 8);
+    return pool.filter(u => (
+      u.name.toLowerCase().includes(query) || u.email.toLowerCase().includes(query)
+    )).slice(0, 8);
+  }, [shareUserQuery, shareSelectedUsers]);
+
+  // Users who already have access to the modal's target (shares + current project members).
+  const shareExistingGrantees = useMemo(() => {
+    if (!shareModalTarget) return [] as Array<{ name: string; email: string; source: string }>;
+    const seen = new Map<string, { name: string; email: string; source: string }>();
+    assetShares
+      .filter(g => g.assetId === shareModalTarget.id)
+      .forEach(g => seen.set(g.granteeEmail.toLowerCase(), { name: g.granteeName, email: g.granteeEmail, source: g.via ? `${g.via}·分享` : '已分享' }));
+    (readProjectMembers()[SpaceId.ProjectA] ?? []).forEach(m => {
+      const key = m.email.toLowerCase();
+      if (!seen.has(key)) seen.set(key, { name: m.name, email: m.email, source: '项目组成员' });
+    });
+    return Array.from(seen.values());
+  }, [shareModalTarget, assetShares]);
+
+  const projectGroupOptions = useMemo(() => (
+    PROJECT_SPACES.filter(s => s.id === SpaceId.ProjectA || s.id === SpaceId.ProjectB)
+  ), []);
+
+  const confirmShare = () => {
+    if (!shareModalTarget) return;
+    const target = shareModalTarget;
+    const targetLabel = target.kind === 'folder' ? '目录' : '素材';
+    const now = new Date().toISOString();
+
+    if (shareScope === 'user') {
+      // Collect targets: all chip-selected users, plus a trailing typed exact match if any.
+      const targets: PlatformUser[] = [...shareSelectedUsers];
+      const query = shareUserQuery.trim();
+      if (query) {
+        const typed = PLATFORM_USERS.find(u => (
+          u.email.toLowerCase() === query.toLowerCase() || u.name === query
+        ));
+        if (!typed) {
+          if (EMAIL_PATTERN.test(query)) {
+            setShareError(`账号校验失败：「${query}」不是平台用户，无法分享。`);
+          } else {
+            setShareError('请从下拉中选择有效的平台用户（支持姓名/邮箱模糊匹配）。');
+          }
+          return;
+        }
+        if (!targets.some(t => t.email.toLowerCase() === typed.email.toLowerCase())) {
+          targets.push(typed);
+        }
+      }
+      if (targets.length === 0) {
+        setShareError('请至少添加 1 位协作者（支持姓名/邮箱模糊匹配）。');
+        return;
+      }
+      if (targets.length > SHARE_MAX_USERS) {
+        setShareError(`单次最多同时添加 ${SHARE_MAX_USERS} 人，当前已选 ${targets.length} 人。`);
+        return;
+      }
+      const fresh = targets.filter(t => (
+        !assetShares.some(g => g.assetId === target.id && g.granteeEmail.toLowerCase() === t.email.toLowerCase())
+      ));
+      if (fresh.length === 0) {
+        setShareError(`所选协作者均已拥有该${targetLabel}权限，请勿重复分享。`);
+        return;
+      }
+      setAssetShares(prev => [...prev, ...fresh.map(t => ({
+        assetId: target.id,
+        granteeEmail: t.email,
+        granteeName: t.name,
+        role: 'viewer' as const,
+        sharedAt: now
+      }))]);
+      const skipped = targets.length - fresh.length;
+      addLog(`📤 已将${targetLabel}【${target.name}】分享给 ${fresh.length} 位协作者，授权：使用者。${skipped > 0 ? `（${skipped} 人已有权限，已跳过）` : ''}`, 'success');
+      closeShareModal();
+      return;
+    }
+
+    // group scope: grant to every member of the selected project group (skip duplicates).
+    const group = projectGroupOptions.find(g => g.id === shareSelectedGroup);
+    const members = readProjectMembers()[shareSelectedGroup] ?? [];
+    if (members.length === 0) {
+      setShareError('该项目组暂无成员，无法分享。');
+      return;
+    }
+    const fresh = members.filter(m => (
+      !assetShares.some(g => g.assetId === target.id && g.granteeEmail.toLowerCase() === m.email.toLowerCase())
+    ));
+    if (fresh.length === 0) {
+      setShareError(`该项目组成员均已拥有该${targetLabel}权限。`);
+      return;
+    }
+    setAssetShares(prev => [...prev, ...fresh.map(m => ({
+      assetId: target.id,
+      granteeEmail: m.email,
+      granteeName: m.name,
+      role: 'viewer' as const,
+      sharedAt: now,
+      via: group?.name
+    }))]);
+    addLog(`📤 已将${targetLabel}【${target.name}】分享给项目组「${group?.name}」的 ${fresh.length} 名成员，授权：使用者。`, 'success');
+    closeShareModal();
+  };
+
+  // --- 查看权限（素材/文件夹）------------------------------------------
+  const openPermissionView = (kind: 'asset' | 'folder', id: string, name: string) => {
+    setAssetContextMenu(null);
+    setFolderContextMenu(null);
+    setPermissionViewTab('members');
+    setPermissionViewTarget({ kind, id, name });
+  };
+  const closePermissionView = () => setPermissionViewTarget(null);
+
+  // 移除权限二次确认：member=移除单个分享授权；group=移除某分享项目组（该组全部成员的分享授权）
+  const requestRemoveMemberGrant = (email: string, name: string) => {
+    if (!permissionViewTarget) return;
+    setPendingPermissionRemoval({ scope: 'member', targetId: permissionViewTarget.id, email, name });
+  };
+  const requestRemoveGroupGrant = (groupName: string) => {
+    if (!permissionViewTarget) return;
+    setPendingPermissionRemoval({ scope: 'group', targetId: permissionViewTarget.id, groupName, name: groupName });
+  };
+  const confirmPermissionRemoval = () => {
+    const req = pendingPermissionRemoval;
+    if (!req) return;
+    const targetLabel = permissionViewTarget?.kind === 'folder' ? '目录' : '素材';
+    if (req.scope === 'member') {
+      setAssetShares(prev => prev.filter(g => !(g.assetId === req.targetId && g.granteeEmail.toLowerCase() === (req.email ?? '').toLowerCase())));
+      addLog(`🛑 已移除【${req.name}】对该${targetLabel}的访问权限，授权立即失效。`, 'warning');
+    } else {
+      setAssetShares(prev => prev.filter(g => !(g.assetId === req.targetId && g.via === req.groupName)));
+      addLog(`🛑 已取消项目组「${req.groupName}」对该${targetLabel}的共享，相关成员授权立即失效。`, 'warning');
+    }
+    setPendingPermissionRemoval(null);
+  };
+
+  const handleCopyFolderLink = async (folder: AssetFolder) => {
+    const url = `${window.location.origin}/project-space/${currentSpace.id}/folders/${folder.id}`;
+    setFolderContextMenu(null);
+    try {
+      await navigator.clipboard.writeText(url);
+      addLog(`🔗 已复制目录链接: ${folder.name}`, 'success');
+    } catch {
+      window.alert(`[复制失败，请手动复制]\n${url}`);
+      addLog(`🔗 已提供可复制目录链接: ${folder.name}`, 'info');
+    }
+  };
+
+  // 查看权限弹窗的可访问成员清单：项目组成员（实时）+ 分享授权（可移除），按邮箱去重（成员优先）。
+  const permissionGrantees = useMemo(() => {
+    if (!permissionViewTarget) return [] as Array<{ name: string; email: string; role: string; removable: boolean }>;
+    const list: Array<{ name: string; email: string; role: string; removable: boolean }> = [];
+    const seen = new Set<string>();
+    (readProjectMembers()[SpaceId.ProjectA] ?? []).forEach(m => {
+      const key = m.email.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      list.push({ name: m.name, email: m.email, role: m.role === 'admin' ? '管理员' : '项目成员', removable: false });
+    });
+    assetShares.filter(g => g.assetId === permissionViewTarget.id).forEach(g => {
+      const key = g.granteeEmail.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      list.push({ name: g.granteeName, email: g.granteeEmail, role: '使用者', removable: true });
+    });
+    return list;
+  }, [permissionViewTarget, assetShares]);
+
+  // 查看权限弹窗的项目组清单：当前所属项目组 + 通过分享授权带来的项目组（via），去重。
+  const permissionGroups = useMemo(() => {
+    if (!permissionViewTarget) return [] as Array<{ id: string; name: string; memberCount: number; source: string; removable: boolean }>;
+    const members = readProjectMembers();
+    const list: Array<{ id: string; name: string; memberCount: number; source: string; removable: boolean }> = [];
+    const seen = new Set<string>();
+    // 当前所属项目组（素材/文件夹本身所在的项目组）—— 不可移除
+    const ownGroup = PROJECT_SPACES.find(s => s.id === currentSpace.id);
+    if (ownGroup) {
+      seen.add(ownGroup.id);
+      list.push({ id: ownGroup.id, name: ownGroup.name, memberCount: (members[ownGroup.id] ?? []).length, source: '所属项目组', removable: false });
+    }
+    // 通过「按项目组分享」带来的其它项目组 —— 可移除
+    assetShares.filter(g => g.assetId === permissionViewTarget.id && g.via).forEach(g => {
+      const grp = PROJECT_SPACES.find(s => s.name === g.via);
+      if (!grp || seen.has(grp.id)) return;
+      seen.add(grp.id);
+      list.push({ id: grp.id, name: grp.name, memberCount: (members[grp.id] ?? []).length, source: '分享共享', removable: true });
+    });
+    return list;
+  }, [permissionViewTarget, assetShares, currentSpace.id]);
 
   const confirmPersonalAssetDelete = () => {
     if (!pendingPersonalAssetDelete) return;
@@ -3458,6 +4123,92 @@ export default function AssetLibrary({
     setPersonalAssetMoveEditor(prev => (prev?.assetId === targetAsset.id ? null : prev));
     setPersonalAssetRenameEditor(prev => (prev?.assetId === targetAsset.id ? null : prev));
     addLog(`🗑️ 已删除素材: ${targetAsset.name}`, 'warning');
+  };
+
+  // --- 批量操作 -------------------------------------------------------
+  const enterBatchMode = () => {
+    setBatchSelectedIds(new Set());
+    setSelectedAsset(null);
+    setAssetContextMenu(null);
+    setIsBatchMode(true);
+  };
+  const exitBatchMode = () => {
+    setIsBatchMode(false);
+    setBatchSelectedIds(new Set());
+    setPendingBatchDelete(false);
+    setBatchDeleteProgress(null);
+  };
+  const toggleBatchSelect = (assetId: string) => {
+    setBatchSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(assetId)) next.delete(assetId);
+      else next.add(assetId);
+      return next;
+    });
+  };
+
+  // Remove a single asset by id (shared by single + batch delete). Returns true on success.
+  const removeAssetById = (assetId: string): boolean => {
+    const target = activeAssets.find(asset => asset.id === assetId);
+    if (!target) return false;
+    if (isPersonalSpace) {
+      setPersonalAssets(prev => prev.filter(asset => asset.id !== assetId));
+    } else {
+      setProjectRemovedAssetIds(prev => {
+        const next = new Set(prev);
+        next.add(assetId);
+        return next;
+      });
+      setProjectAssetNameOverrides(prev => {
+        if (!(assetId in prev)) return prev;
+        const next = { ...prev };
+        delete next[assetId];
+        return next;
+      });
+    }
+    setFolderAssignments(prev => {
+      const next = { ...prev };
+      delete next[assetId];
+      return next;
+    });
+    setDownloadedAssetIds(prev => {
+      const next = new Set(prev);
+      next.delete(assetId);
+      return next;
+    });
+    setActiveDownloads(prev => prev.filter(task => task.assetId !== assetId));
+    if (target.previewUrl.startsWith('blob:')) URL.revokeObjectURL(target.previewUrl);
+    return true;
+  };
+
+  // Execute batch delete: progress → 三态反馈（全成功/部分失败/全失败）→ 自动退出。
+  const runBatchDelete = async () => {
+    const ids = Array.from(batchSelectedIds);
+    if (ids.length === 0) return;
+    setPendingBatchDelete(false);
+    setBatchDeleteProgress({ done: 0, total: ids.length });
+
+    let success = 0;
+    let failed = 0;
+    for (let i = 0; i < ids.length; i += 1) {
+      // 演示用：默认全部成功（removeAssetById 仅在素材不存在时返回 false）。
+      const ok = removeAssetById(ids[i]);
+      if (ok) success += 1; else failed += 1;
+      // small async tick so the progress bar is visible
+      await new Promise(resolve => setTimeout(resolve, 120));
+      setBatchDeleteProgress({ done: i + 1, total: ids.length });
+    }
+
+    if (selectedAsset && batchSelectedIds.has(selectedAsset.id)) setSelectedAsset(null);
+
+    if (failed === 0) {
+      addLog(`🗑️ 批量删除完成：成功删除 ${success} 个素材。`, 'success');
+    } else if (success === 0) {
+      addLog(`❌ 批量删除失败：${failed} 个素材均未能删除，请重试。`, 'error');
+    } else {
+      addLog(`⚠️ 批量删除部分完成：成功 ${success} 个，失败 ${failed} 个。`, 'warning');
+    }
+    exitBatchMode();
   };
 
   const startFolderPaneResize = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -3511,24 +4262,7 @@ export default function AssetLibrary({
   const filteredInternalAssets = useMemo(() => {
     if (isExternalRootSelected) return [];
 
-    const createdFromTs = internalCreatedFrom
-      ? new Date(`${internalCreatedFrom}T00:00:00`).getTime()
-      : null;
-    const createdToTs = internalCreatedTo
-      ? new Date(`${internalCreatedTo}T23:59:59`).getTime()
-      : null;
-    const parsedMinSize = internalSizeMin.trim() === '' ? null : Number(internalSizeMin);
-    const parsedMaxSize = internalSizeMax.trim() === '' ? null : Number(internalSizeMax);
-    const hasMinSize = parsedMinSize !== null && Number.isFinite(parsedMinSize);
-    const hasMaxSize = parsedMaxSize !== null && Number.isFinite(parsedMaxSize);
-    const parsedMinFileSize = internalFileSizeMin.trim() === '' ? null : Number(internalFileSizeMin);
-    const parsedMaxFileSize = internalFileSizeMax.trim() === '' ? null : Number(internalFileSizeMax);
-    const hasMinFileSize = parsedMinFileSize !== null && Number.isFinite(parsedMinFileSize);
-    const hasMaxFileSize = parsedMaxFileSize !== null && Number.isFinite(parsedMaxFileSize);
-    const parsedMinDuration = internalDurationMin.trim() === '' ? null : Number(internalDurationMin);
-    const parsedMaxDuration = internalDurationMax.trim() === '' ? null : Number(internalDurationMax);
-    const hasMinDuration = parsedMinDuration !== null && Number.isFinite(parsedMinDuration);
-    const hasMaxDuration = parsedMaxDuration !== null && Number.isFinite(parsedMaxDuration);
+    const { fromTs: createdFromTs, toTs: createdToTs } = resolveDatePresetRange(internalDatePreset, internalCreatedFrom, internalCreatedTo);
     const kw = keyword.trim().toLowerCase();
     const isImageSearch = imageSearchQuery !== null;
     void assetColorVersion; // re-run color matching after async sampling
@@ -3539,14 +4273,10 @@ export default function AssetLibrary({
       // 类型 tab（按后缀归类）
       if (activeTypeTab !== 'all' && getAssetTypeTab(asset.format) !== activeTypeTab) return false;
       if (internalFormatFilters.size > 0 && !internalFormatFilters.has(asset.format.trim().toUpperCase())) return false;
-      if (internalAuthorFilters.size > 0 && !internalAuthorFilters.has(asset.author)) return false;
+      if (internalAuthorFilter && asset.author !== internalAuthorFilter) return false;
       if (internalTagFilters.size > 0 && !asset.tags.some(t => internalTagFilters.has(t))) return false;
       if (internalOrgFilters.size > 0 && (!asset.org || !internalOrgFilters.has(asset.org))) return false;
       if (internalStatusFilters.size > 0 && (!asset.taskStatus || !internalStatusFilters.has(asset.taskStatus))) return false;
-      if (internalShapeFilters.size > 0) {
-        const shape = getAssetShape(asset);
-        if (!shape || !internalShapeFilters.has(shape)) return false;
-      }
       if (internalColorFilters.size > 0 && !internalColorFilters.has(nearestColorSwatchId(getAssetColor(asset)))) return false;
 
       if (createdFromTs !== null || createdToTs !== null) {
@@ -3556,21 +4286,13 @@ export default function AssetLibrary({
         if (createdToTs !== null && createdTs > createdToTs) return false;
       }
 
-      if (hasMinSize || hasMaxSize) {
-        const longestEdge = getAssetLongestEdge(asset);
-        if (longestEdge === null) return false;
-        if (hasMinSize && longestEdge < (parsedMinSize as number)) return false;
-        if (hasMaxSize && longestEdge > (parsedMaxSize as number)) return false;
-      }
-
-      if (hasMinFileSize && asset.sizeMB < (parsedMinFileSize as number)) return false;
-      if (hasMaxFileSize && asset.sizeMB > (parsedMaxFileSize as number)) return false;
-
-      if (hasMinDuration || hasMaxDuration) {
-        if (asset.durationSec === undefined) return false;
-        if (hasMinDuration && asset.durationSec < (parsedMinDuration as number)) return false;
-        if (hasMaxDuration && asset.durationSec > (parsedMaxDuration as number)) return false;
-      }
+      if (!passesFacetFilters(asset, {
+        fileSizeBuckets: internalFileSizeBuckets,
+        sizeBuckets: internalSizeBuckets,
+        sizeWMin: internalSizeWMin, sizeWMax: internalSizeWMax, sizeHMin: internalSizeHMin, sizeHMax: internalSizeHMax,
+        durationBuckets: internalDurationBuckets,
+        shapeFilters: internalShapeFilters
+      })) return false;
 
       // Text keyword and image search are mutually exclusive; skip kw when image search is active.
       if (!isImageSearch && kw) {
@@ -3604,7 +4326,7 @@ export default function AssetLibrary({
     keyword,
     activeTypeTab,
     internalFormatFilters,
-    internalAuthorFilters,
+    internalAuthorFilter,
     internalTagFilters,
     internalOrgFilters,
     internalStatusFilters,
@@ -3612,12 +4334,14 @@ export default function AssetLibrary({
     internalColorFilters,
     internalCreatedFrom,
     internalCreatedTo,
-    internalSizeMin,
-    internalSizeMax,
-    internalFileSizeMin,
-    internalFileSizeMax,
-    internalDurationMin,
-    internalDurationMax,
+    internalDatePreset,
+    internalSizeBuckets,
+    internalSizeWMin,
+    internalSizeWMax,
+    internalSizeHMin,
+    internalSizeHMax,
+    internalFileSizeBuckets,
+    internalDurationBuckets,
     internalSortOrder,
     imageSearchQuery,
     imageSimilarityById,
@@ -3626,24 +4350,7 @@ export default function AssetLibrary({
   const filteredExternalAssets = useMemo(() => {
     const normalizedKeyword = externalKeyword.trim().toLowerCase();
     const isImageSearch = imageSearchQuery !== null;
-    const createdFromTs = externalCreatedFrom
-      ? new Date(`${externalCreatedFrom}T00:00:00`).getTime()
-      : null;
-    const createdToTs = externalCreatedTo
-      ? new Date(`${externalCreatedTo}T23:59:59`).getTime()
-      : null;
-    const parsedMinEdge = externalSizeMin.trim() === '' ? null : Number(externalSizeMin);
-    const parsedMaxEdge = externalSizeMax.trim() === '' ? null : Number(externalSizeMax);
-    const hasMinEdge = parsedMinEdge !== null && Number.isFinite(parsedMinEdge);
-    const hasMaxEdge = parsedMaxEdge !== null && Number.isFinite(parsedMaxEdge);
-    const parsedMinFileSize = externalFileSizeMin.trim() === '' ? null : Number(externalFileSizeMin);
-    const parsedMaxFileSize = externalFileSizeMax.trim() === '' ? null : Number(externalFileSizeMax);
-    const hasMinFileSize = parsedMinFileSize !== null && Number.isFinite(parsedMinFileSize);
-    const hasMaxFileSize = parsedMaxFileSize !== null && Number.isFinite(parsedMaxFileSize);
-    const parsedMinDuration = externalDurationMin.trim() === '' ? null : Number(externalDurationMin);
-    const parsedMaxDuration = externalDurationMax.trim() === '' ? null : Number(externalDurationMax);
-    const hasMinDuration = parsedMinDuration !== null && Number.isFinite(parsedMinDuration);
-    const hasMaxDuration = parsedMaxDuration !== null && Number.isFinite(parsedMaxDuration);
+    const { fromTs: createdFromTs, toTs: createdToTs } = resolveDatePresetRange(externalDatePreset, externalCreatedFrom, externalCreatedTo);
     void assetColorVersion;
 
     const filtered = EXTERNAL_ASSETS.filter((asset) => {
@@ -3656,32 +4363,23 @@ export default function AssetLibrary({
       if (activeTypeTab !== 'all' && getAssetTypeTab(asset.format) !== activeTypeTab) return false;
       if (externalFormatFilters.size > 0 && !externalFormatFilters.has(asset.format)) return false;
       if (externalSourceFilters.size > 0 && !externalSourceFilters.has(asset.source)) return false;
-      if (externalAuthorFilters.size > 0 && !externalAuthorFilters.has(asset.author)) return false;
+      if (externalAuthorFilter && asset.author !== externalAuthorFilter) return false;
       if (externalTagFilters.size > 0 && !asset.tags.some(t => externalTagFilters.has(t))) return false;
       if (externalOrgFilters.size > 0 && (!asset.org || !externalOrgFilters.has(asset.org))) return false;
       if (externalStatusFilters.size > 0 && (!asset.taskStatus || !externalStatusFilters.has(asset.taskStatus))) return false;
-      if (externalShapeFilters.size > 0) {
-        const shape = getAssetShape(asset);
-        if (!shape || !externalShapeFilters.has(shape)) return false;
-      }
       if (externalColorFilters.size > 0 && !externalColorFilters.has(nearestColorSwatchId(getAssetColor(asset)))) return false;
 
       const createdAtTs = new Date(asset.createdAt).getTime();
       if (createdFromTs !== null && Number.isFinite(createdFromTs) && createdAtTs < createdFromTs) return false;
       if (createdToTs !== null && Number.isFinite(createdToTs) && createdAtTs > createdToTs) return false;
 
-      const longestEdge = Math.max(asset.width, asset.height);
-      if (hasMinEdge && longestEdge < (parsedMinEdge as number)) return false;
-      if (hasMaxEdge && longestEdge > (parsedMaxEdge as number)) return false;
-
-      if (hasMinFileSize && asset.sizeMB < (parsedMinFileSize as number)) return false;
-      if (hasMaxFileSize && asset.sizeMB > (parsedMaxFileSize as number)) return false;
-
-      if (hasMinDuration || hasMaxDuration) {
-        if (asset.durationSec === undefined) return false;
-        if (hasMinDuration && asset.durationSec < (parsedMinDuration as number)) return false;
-        if (hasMaxDuration && asset.durationSec > (parsedMaxDuration as number)) return false;
-      }
+      if (!passesFacetFilters(asset, {
+        fileSizeBuckets: externalFileSizeBuckets,
+        sizeBuckets: externalSizeBuckets,
+        sizeWMin: externalSizeWMin, sizeWMax: externalSizeWMax, sizeHMin: externalSizeHMin, sizeHMax: externalSizeHMax,
+        durationBuckets: externalDurationBuckets,
+        shapeFilters: externalShapeFilters
+      })) return false;
 
       return true;
     });
@@ -3707,7 +4405,7 @@ export default function AssetLibrary({
     activeTypeTab,
     externalFormatFilters,
     externalSourceFilters,
-    externalAuthorFilters,
+    externalAuthorFilter,
     externalTagFilters,
     externalOrgFilters,
     externalStatusFilters,
@@ -3715,12 +4413,14 @@ export default function AssetLibrary({
     externalColorFilters,
     externalCreatedFrom,
     externalCreatedTo,
-    externalSizeMin,
-    externalSizeMax,
-    externalFileSizeMin,
-    externalFileSizeMax,
-    externalDurationMin,
-    externalDurationMax,
+    externalDatePreset,
+    externalSizeBuckets,
+    externalSizeWMin,
+    externalSizeWMax,
+    externalSizeHMin,
+    externalSizeHMax,
+    externalFileSizeBuckets,
+    externalDurationBuckets,
     externalSortOrder,
     imageSearchQuery,
     imageSimilarityById,
@@ -3731,60 +4431,63 @@ export default function AssetLibrary({
     activeTypeTab !== 'all' ||
     externalFormatFilters.size > 0 ||
     externalSourceFilters.size > 0 ||
-    externalAuthorFilters.size > 0 ||
+    externalAuthorFilter !== '' ||
     externalTagFilters.size > 0 ||
     externalOrgFilters.size > 0 ||
     externalStatusFilters.size > 0 ||
     externalShapeFilters.size > 0 ||
     externalColorFilters.size > 0 ||
-    externalCreatedFrom !== '' ||
-    externalCreatedTo !== '' ||
-    externalSizeMin.trim() !== '' ||
-    externalSizeMax.trim() !== '' ||
-    externalFileSizeMin.trim() !== '' ||
-    externalFileSizeMax.trim() !== '' ||
-    externalDurationMin.trim() !== '' ||
-    externalDurationMax.trim() !== '' ||
+    externalDatePreset !== 'all' ||
+    externalSizeBuckets.size > 0 ||
+    externalSizeWMin.trim() !== '' || externalSizeWMax.trim() !== '' ||
+    externalSizeHMin.trim() !== '' || externalSizeHMax.trim() !== '' ||
+    externalFileSizeBuckets.size > 0 ||
+    externalDurationBuckets.size > 0 ||
     externalSortOrder !== 'desc'
   );
 
-  const externalCreatedCount = (externalCreatedFrom !== '' ? 1 : 0) + (externalCreatedTo !== '' ? 1 : 0);
-  const externalSizeCount = (externalSizeMin.trim() !== '' ? 1 : 0)
-    + (externalSizeMax.trim() !== '' ? 1 : 0)
-    + (externalSortOrder !== 'desc' ? 1 : 0);
-  const externalFileSizeCount = (externalFileSizeMin.trim() !== '' ? 1 : 0) + (externalFileSizeMax.trim() !== '' ? 1 : 0);
-  const externalDurationCount = (externalDurationMin.trim() !== '' ? 1 : 0) + (externalDurationMax.trim() !== '' ? 1 : 0);
+  const externalDateCount = externalDatePreset !== 'all' ? 1 : 0;
+  const externalSizeCount = externalSizeBuckets.size
+    + (externalSizeWMin.trim() !== '' || externalSizeWMax.trim() !== '' || externalSizeHMin.trim() !== '' || externalSizeHMax.trim() !== '' ? 1 : 0);
+  const externalFileSizeCount = externalFileSizeBuckets.size;
+  const externalDurationCount = externalDurationBuckets.size;
+  const externalSortCount = externalSortOrder !== 'desc' ? 1 : 0;
 
   const hasInternalActiveFilters = (
     keyword.trim() !== '' ||
     activeTypeTab !== 'all' ||
     internalFormatFilters.size > 0 ||
-    internalAuthorFilters.size > 0 ||
+    internalAuthorFilter !== '' ||
     internalTagFilters.size > 0 ||
     internalOrgFilters.size > 0 ||
     internalStatusFilters.size > 0 ||
     internalShapeFilters.size > 0 ||
     internalColorFilters.size > 0 ||
-    internalCreatedFrom !== '' ||
-    internalCreatedTo !== '' ||
-    internalSizeMin.trim() !== '' ||
-    internalSizeMax.trim() !== '' ||
-    internalFileSizeMin.trim() !== '' ||
-    internalFileSizeMax.trim() !== '' ||
-    internalDurationMin.trim() !== '' ||
-    internalDurationMax.trim() !== '' ||
+    internalDatePreset !== 'all' ||
+    internalSizeBuckets.size > 0 ||
+    internalSizeWMin.trim() !== '' || internalSizeWMax.trim() !== '' ||
+    internalSizeHMin.trim() !== '' || internalSizeHMax.trim() !== '' ||
+    internalFileSizeBuckets.size > 0 ||
+    internalDurationBuckets.size > 0 ||
     internalSortOrder !== 'desc'
   );
-  const internalCreatedCount = (internalCreatedFrom !== '' ? 1 : 0) + (internalCreatedTo !== '' ? 1 : 0);
-  const internalSizeCount = (internalSizeMin.trim() !== '' ? 1 : 0)
-    + (internalSizeMax.trim() !== '' ? 1 : 0)
-    + (internalSortOrder !== 'desc' ? 1 : 0);
-  const internalFileSizeCount = (internalFileSizeMin.trim() !== '' ? 1 : 0) + (internalFileSizeMax.trim() !== '' ? 1 : 0);
-  const internalDurationCount = (internalDurationMin.trim() !== '' ? 1 : 0) + (internalDurationMax.trim() !== '' ? 1 : 0);
+  const internalDateCount = internalDatePreset !== 'all' ? 1 : 0;
+  const internalSizeCount = internalSizeBuckets.size
+    + (internalSizeWMin.trim() !== '' || internalSizeWMax.trim() !== '' || internalSizeHMin.trim() !== '' || internalSizeHMax.trim() !== '' ? 1 : 0);
+  const internalFileSizeCount = internalFileSizeBuckets.size;
+  const internalDurationCount = internalDurationBuckets.size;
+  const internalSortCount = internalSortOrder !== 'desc' ? 1 : 0;
 
   const personalReadyTaggingCount = personalUploadDraft
     ? personalUploadDraft.items.filter(item => item.status === 'ready').length
     : 0;
+
+  // 卡片宽度调节：auto-fill + minmax 让卡片按设定宽度排布；宽度超过内容区时自动退化为单列填满。
+  const assetGridStyle: React.CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: `repeat(auto-fill, minmax(${Math.min(cardWidth, 1200)}px, 1fr))`,
+    gap: '1rem'
+  };
 
   const totalItems = isExternalRootSelected ? filteredExternalAssets.length : filteredInternalAssets.length;
   const totalPages = Math.ceil(totalItems / itemsPerPage);
@@ -3833,15 +4536,26 @@ export default function AssetLibrary({
         ? `${previewNaturalSize.width}*${previewNaturalSize.height}`
         : (selectedAssetResolutionFromTag ? selectedAssetResolutionFromTag.replace(/[xX]/, '*') : '--')
     );
-  const selectedAssetImportedAtLabel = selectedExternalAsset
+  // 创建时间 = 素材上传至平台的时间（外部用采集时间，个人用上传时间，项目用占位时间）。
+  const selectedAssetCreatedAtLabel = selectedExternalAsset
     ? formatDetailDateTime(selectedExternalAsset.createdAt)
     : (
       selectedPersonalAsset
         ? formatDetailDateTime(selectedPersonalAsset.uploadedAt)
         : projectDetailTimestampLabel
     );
-  const selectedAssetCreatedAtLabel = selectedAssetImportedAtLabel;
-  const selectedAssetUpdatedAtLabel = selectedAssetImportedAtLabel;
+  // 文件夹信息：素材所属目录的完整路径。
+  const selectedAssetFolderLabel = selectedAsset
+    ? getFolderPathLabel(getResolvedAssetFolderId(selectedAsset))
+    : '--';
+  // 时长：仅视频/音频类有 durationSec 的素材显示，格式 mm:ss。
+  const selectedAssetDurationLabel = selectedAsset && selectedAsset.durationSec !== undefined
+    ? `${Math.floor(selectedAsset.durationSec / 60)}:${String(selectedAsset.durationSec % 60).padStart(2, '0')}`
+    : null;
+  // 地区：按素材 id 哈希稳定映射到 北京/上海/广州（mock）。
+  const selectedAssetRegionLabel = selectedAsset
+    ? (['北京', '上海', '广州'][hashColorFallback(selectedAsset.id).r % 3])
+    : '--';
   const contextMenuAsset = assetContextMenu
     ? activeAssets.find(asset => asset.id === assetContextMenu.assetId)
     : null;
@@ -3855,14 +4569,15 @@ export default function AssetLibrary({
     && getFolderSpaceId(contextMenuFolder.id) !== null;
   const canMutateContextFolder = !!contextMenuFolder && !isSystemFolder(contextMenuFolder.id);
 
-  const renderInlineFolderCreateEditor = (depth: number): React.ReactNode => {
-    if (!folderEditor || folderEditor.mode !== 'create') return null;
+  const renderInlineFolderEditor = (depth: number): React.ReactNode => {
+    if (!folderEditor) return null;
+    const isRename = folderEditor.mode === 'rename';
 
     return (
       <div className="py-1 pr-2" style={{ paddingLeft: `${8 + depth * 16}px` }}>
         <div className="flex items-center gap-1.5">
           <span className="flex h-4 w-4 shrink-0 items-center justify-center text-zinc-700">
-            <CornerDownRight size={12} />
+            {isRename ? <Pencil size={11} /> : <CornerDownRight size={12} />}
           </span>
           <Folder size={14} className="shrink-0 text-zinc-500" />
           <input
@@ -3874,7 +4589,7 @@ export default function AssetLibrary({
               if (event.key === 'Enter') submitFolderEditor();
               if (event.key === 'Escape') closeFolderEditor();
             }}
-            placeholder="文件夹名称"
+            placeholder={isRename ? '重命名' : '文件夹名称'}
             className={`min-w-0 flex-1 rounded border bg-[#0c0c0e] px-2 py-1 text-xs text-zinc-200 outline-none transition-colors ${
               shouldShowFolderEditorError
                 ? 'border-red-500/70 focus:border-red-500'
@@ -3934,9 +4649,13 @@ export default function AssetLibrary({
       const rootVisual = isRoot ? ROOT_FOLDER_VISUALS[folder.id] : undefined;
       const accent = rootVisual?.accent ?? '#00ff00';
       const RootIcon = rootVisual?.icon;
+      const isRenamingThisFolder = folderEditor?.mode === 'rename' && folderEditor.folderId === folder.id;
 
       return (
         <div key={folder.id}>
+          {isRenamingThisFolder ? (
+            renderInlineFolderEditor(depth)
+          ) : (
           <button
             type="button"
             onClick={() => setSelectedFolderId(folder.id)}
@@ -3993,6 +4712,7 @@ export default function AssetLibrary({
               <span className={isSelected ? '' : 'text-zinc-500'}>{nestedCount}</span>
             </span>
           </button>
+          )}
           {shouldRenderSubtree && renderFolderTree(folder.id, depth + 1)}
         </div>
       );
@@ -4003,7 +4723,7 @@ export default function AssetLibrary({
     return (
       <>
         {renderedChildren}
-        {renderInlineFolderCreateEditor(depth)}
+        {renderInlineFolderEditor(depth)}
       </>
     );
   };
@@ -4052,9 +4772,9 @@ export default function AssetLibrary({
     const toggleFormat = isInternal ? toggleInternalFormatFilter : toggleExternalFormatFilter;
     const formatKeyword = isInternal ? internalFormatKeyword : externalFormatKeyword;
     const setFormatKeyword = isInternal ? setInternalFormatKeyword : setExternalFormatKeyword;
-    const formatOptions = isInternal ? internalFormatFilterOptions : externalFormatFilterOptions;
-    const authorFilters = isInternal ? internalAuthorFilters : externalAuthorFilters;
-    const toggleAuthor = isInternal ? toggleInternalAuthorFilter : toggleExternalAuthorFilter;
+    const formatGroupsForScope = isInternal ? formatGroups : externalFormatGroups;
+    const authorFilter = isInternal ? internalAuthorFilter : externalAuthorFilter;
+    const setAuthorFilter = isInternal ? setInternalAuthorFilter : setExternalAuthorFilter;
     const authorOptions = isInternal ? internalAuthorOptions : externalAuthorOptions;
     const authorKeyword = isInternal ? internalAuthorKeyword : externalAuthorKeyword;
     const setAuthorKeyword = isInternal ? setInternalAuthorKeyword : setExternalAuthorKeyword;
@@ -4062,7 +4782,7 @@ export default function AssetLibrary({
     const toggleTag = isInternal ? toggleInternalTagFilter : toggleExternalTagFilter;
     const tagKeyword = isInternal ? internalTagKeyword : externalTagKeyword;
     const setTagKeyword = isInternal ? setInternalTagKeyword : setExternalTagKeyword;
-    const tagOptions = isInternal ? internalTagOptions : externalTagOptions;
+    const tagGroups = isInternal ? internalTagGroups : externalTagGroups;
     const orgFilters = isInternal ? internalOrgFilters : externalOrgFilters;
     const toggleOrg = isInternal ? toggleInternalOrgFilter : toggleExternalOrgFilter;
     const orgOptions = isInternal ? internalOrgOptions : externalOrgOptions;
@@ -4072,28 +4792,42 @@ export default function AssetLibrary({
     const toggleShape = isInternal ? toggleInternalShapeFilter : toggleExternalShapeFilter;
     const colorFilters = isInternal ? internalColorFilters : externalColorFilters;
     const toggleColor = isInternal ? toggleInternalColorFilter : toggleExternalColorFilter;
+    const datePreset = isInternal ? internalDatePreset : externalDatePreset;
+    const setDatePreset = isInternal ? setInternalDatePreset : setExternalDatePreset;
     const createdFrom = isInternal ? internalCreatedFrom : externalCreatedFrom;
     const createdTo = isInternal ? internalCreatedTo : externalCreatedTo;
     const setCreatedFrom = isInternal ? setInternalCreatedFrom : setExternalCreatedFrom;
     const setCreatedTo = isInternal ? setInternalCreatedTo : setExternalCreatedTo;
-    const fileSizeMin = isInternal ? internalFileSizeMin : externalFileSizeMin;
-    const fileSizeMax = isInternal ? internalFileSizeMax : externalFileSizeMax;
-    const setFileSizeMin = isInternal ? setInternalFileSizeMin : setExternalFileSizeMin;
-    const setFileSizeMax = isInternal ? setInternalFileSizeMax : setExternalFileSizeMax;
-    const sizeMin = isInternal ? internalSizeMin : externalSizeMin;
-    const sizeMax = isInternal ? internalSizeMax : externalSizeMax;
-    const setSizeMin = isInternal ? setInternalSizeMin : setExternalSizeMin;
-    const setSizeMax = isInternal ? setInternalSizeMax : setExternalSizeMax;
-    const durationMin = isInternal ? internalDurationMin : externalDurationMin;
-    const durationMax = isInternal ? internalDurationMax : externalDurationMax;
-    const setDurationMin = isInternal ? setInternalDurationMin : setExternalDurationMin;
-    const setDurationMax = isInternal ? setInternalDurationMax : setExternalDurationMax;
+    const fileSizeBuckets = isInternal ? internalFileSizeBuckets : externalFileSizeBuckets;
+    const toggleFileSizeBucket = isInternal ? toggleInternalFileSizeBucket : toggleExternalFileSizeBucket;
+    const sizeBuckets = isInternal ? internalSizeBuckets : externalSizeBuckets;
+    const toggleSizeBucket = isInternal ? toggleInternalSizeBucket : toggleExternalSizeBucket;
+    const sizeWMin = isInternal ? internalSizeWMin : externalSizeWMin;
+    const sizeWMax = isInternal ? internalSizeWMax : externalSizeWMax;
+    const sizeHMin = isInternal ? internalSizeHMin : externalSizeHMin;
+    const sizeHMax = isInternal ? internalSizeHMax : externalSizeHMax;
+    const setSizeField = (field: 'wMin' | 'wMax' | 'hMin' | 'hMax', value: string) => {
+      if (isInternal) {
+        if (field === 'wMin') setInternalSizeWMin(value);
+        else if (field === 'wMax') setInternalSizeWMax(value);
+        else if (field === 'hMin') setInternalSizeHMin(value);
+        else setInternalSizeHMax(value);
+      } else {
+        if (field === 'wMin') setExternalSizeWMin(value);
+        else if (field === 'wMax') setExternalSizeWMax(value);
+        else if (field === 'hMin') setExternalSizeHMin(value);
+        else setExternalSizeHMax(value);
+      }
+    };
+    const durationBuckets = isInternal ? internalDurationBuckets : externalDurationBuckets;
+    const toggleDurationBucket = isInternal ? toggleInternalDurationBucket : toggleExternalDurationBucket;
     const sortOrder = isInternal ? internalSortOrder : externalSortOrder;
     const setSortOrder = isInternal ? setInternalSortOrder : setExternalSortOrder;
-    const createdCount = isInternal ? internalCreatedCount : externalCreatedCount;
+    const dateCount = isInternal ? internalDateCount : externalDateCount;
     const fileSizeCount = isInternal ? internalFileSizeCount : externalFileSizeCount;
     const sizeCount = isInternal ? internalSizeCount : externalSizeCount;
     const durationCount = isInternal ? internalDurationCount : externalDurationCount;
+    const sortCount = isInternal ? internalSortCount : externalSortCount;
     const hasActive = isInternal ? hasInternalActiveFilters : hasExternalActiveFilters;
     const clearAll = isInternal ? clearInternalFilters : clearExternalFilters;
 
@@ -4124,21 +4858,23 @@ export default function AssetLibrary({
         {/* 通用筛选行 */}
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10.5px] text-zinc-500">通用筛选</span>
-          {dd('author', '创建人', authorFilters.size, (
+          {dd('author', '创建人', authorFilter ? 1 : 0, (
             <MultiSelectFilterPanel
-              options={authorOptions.map(a => ({ value: a, label: a }))}
-              selected={authorFilters}
-              onToggle={toggleAuthor}
+              options={authorOptions}
+              selected={new Set(authorFilter ? [authorFilter] : [])}
+              onToggle={(v) => { setAuthorFilter(authorFilter === v ? '' : v); }}
+              singleSelect
               searchable
               searchValue={authorKeyword}
               onSearchChange={setAuthorKeyword}
               searchPlaceholder="搜索创建人"
               emptyText="没有匹配的创建人"
+              width="w-60"
             />
           ))}
           {dd('format', '后缀', formatFilters.size, (
             <MultiSelectFilterPanel
-              options={formatOptions.map(f => ({ value: f, label: f.toUpperCase() }))}
+              groups={formatGroupsForScope}
               selected={formatFilters}
               onToggle={toggleFormat}
               searchable
@@ -4150,7 +4886,7 @@ export default function AssetLibrary({
           ))}
           {dd('tag', '标签', tagFilters.size, (
             <MultiSelectFilterPanel
-              options={tagOptions.map(t => ({ value: t, label: t }))}
+              groups={tagGroups}
               selected={tagFilters}
               onToggle={toggleTag}
               searchable
@@ -4168,22 +4904,21 @@ export default function AssetLibrary({
               emptyText="暂无组织架构"
             />
           ))}
-          {dd('created', '日期', createdCount, (
-            <CreatedRangePanel
+          {dd('created', '日期', dateCount, (
+            <DatePresetPanel
+              preset={datePreset}
               from={createdFrom}
               to={createdTo}
-              onChange={({ from, to }) => { setCreatedFrom(from); setCreatedTo(to); }}
+              onPresetChange={setDatePreset}
+              onCustomChange={({ from, to }) => { setCreatedFrom(from); setCreatedTo(to); }}
             />
           ))}
           {dd('fileSize', '文件大小', fileSizeCount, (
-            <RangeFilterPanel
-              min={fileSizeMin}
-              max={fileSizeMax}
-              onMinChange={setFileSizeMin}
-              onMaxChange={setFileSizeMax}
-              minPlaceholder="最小 MB"
-              maxPlaceholder="最大 MB"
-              hint="按文件大小（MB）筛选"
+            <MultiSelectFilterPanel
+              options={FILE_SIZE_BUCKETS.map(b => ({ value: b.id, label: b.label }))}
+              selected={fileSizeBuckets}
+              onToggle={toggleFileSizeBucket}
+              width="w-44"
             />
           ))}
           {dd('status', '任务状态', statusFilters.size, (
@@ -4195,14 +4930,11 @@ export default function AssetLibrary({
             />
           ))}
           {dd('size', '尺寸', sizeCount, (
-            <RangeFilterPanel
-              min={sizeMin}
-              max={sizeMax}
-              onMinChange={setSizeMin}
-              onMaxChange={setSizeMax}
-              minPlaceholder="最小边长"
-              maxPlaceholder="最大边长"
-              hint="按最长边（px）筛选"
+            <SizeFilterPanel
+              buckets={sizeBuckets}
+              onToggleBucket={toggleSizeBucket}
+              wMin={sizeWMin} wMax={sizeWMax} hMin={sizeHMin} hMax={sizeHMax}
+              onChange={setSizeField}
             />
           ))}
           {dd('shape', '形状', shapeFilters.size, (
@@ -4210,18 +4942,15 @@ export default function AssetLibrary({
               options={ASSET_SHAPE_OPTIONS.map(s => ({ value: s.id, label: s.label }))}
               selected={shapeFilters}
               onToggle={toggleShape}
-              width="w-36"
+              width="w-40"
             />
           ))}
           {dd('duration', '时长', durationCount, (
-            <RangeFilterPanel
-              min={durationMin}
-              max={durationMax}
-              onMinChange={setDurationMin}
-              onMaxChange={setDurationMax}
-              minPlaceholder="最短(秒)"
-              maxPlaceholder="最长(秒)"
-              hint="仅视频/音频含时长"
+            <MultiSelectFilterPanel
+              options={DURATION_BUCKETS.map(b => ({ value: b.id, label: b.label }))}
+              selected={durationBuckets}
+              onToggle={toggleDurationBucket}
+              width="w-44"
             />
           ))}
           {dd('color', '颜色', colorFilters.size, (
@@ -4235,16 +4964,24 @@ export default function AssetLibrary({
               width="w-40"
             />
           ))}
-          {dd('sort', '排序', sortOrder !== 'desc' ? 1 : 0, (
+          {dd('sort', '排序', sortCount, (
             <div className="absolute left-0 top-full z-30 mt-1.5 w-44 rounded border border-zinc-700 bg-[#0c0c0e] p-2 shadow-xl shadow-black/60">
-              <select
-                value={sortOrder}
-                onChange={(event) => setSortOrder(event.target.value as 'asc' | 'desc')}
-                className="w-full rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 outline-none focus:border-[#00ff00] [color-scheme:dark]"
-              >
-                <option value="desc">创建时间降序（默认）</option>
-                <option value="asc">创建时间升序</option>
-              </select>
+              <div className="space-y-1">
+                {([
+                  { value: 'desc' as const, label: '创建时间降序（默认）' },
+                  { value: 'asc' as const, label: '创建时间升序' }
+                ]).map(opt => (
+                  <label key={opt.value} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+                    <input
+                      type="radio"
+                      checked={sortOrder === opt.value}
+                      onChange={() => setSortOrder(opt.value)}
+                      className="h-3 w-3 border-zinc-700 bg-black text-[#00ff00] focus:ring-[#00ff00]/50"
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
             </div>
           ))}
           <button
@@ -4293,6 +5030,38 @@ export default function AssetLibrary({
               onClick={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
             >
+              {isProjectA && isCurrentUserProjectAdmin && (
+                <>
+                  {/* 项目空间分享功能隐藏：项目文件的可见性/可操作性通过「权限管理 → 成员管理」控制
+                  <button
+                    type="button"
+                    onClick={() => openShareModal(contextMenuAsset)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                  >
+                    <Send size={12} className="text-[#00ff00]" />
+                    分享
+                  </button>
+                  */}
+                  <button
+                    type="button"
+                    onClick={() => { void handleCopyPersonalAssetLink(contextMenuAsset); setAssetContextMenu(null); }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                  >
+                    <Link2 size={12} className="text-zinc-400" />
+                    复制链接
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openPermissionView('asset', contextMenuAsset.id, contextMenuAsset.name)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                  >
+                    <Eye size={12} className="text-zinc-400" />
+                    查看权限
+                  </button>
+                  <div className="my-1 border-t border-zinc-900" />
+                </>
+              )}
+              {/* V1：移动功能暂时停用
               <button
                 type="button"
                 onClick={() => openPersonalAssetMoveEditor(contextMenuAsset.id)}
@@ -4300,6 +5069,15 @@ export default function AssetLibrary({
               >
                 <FolderInput size={12} className="text-zinc-400" />
                 移动
+              </button>
+              */}
+              <button
+                type="button"
+                onClick={() => { handleLocalDownload(contextMenuAsset); setAssetContextMenu(null); }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+              >
+                <Download size={12} className="text-[#00ff00]" />
+                {downloadedAssetIds.has(contextMenuAsset.id) ? '打开本地目录' : '下载到本地'}
               </button>
               <button
                 type="button"
@@ -4351,6 +5129,46 @@ export default function AssetLibrary({
               {canMutateContextFolder && (
                 <>
                   {(canCreateSiblingFolder || canCreateChildFolder) && <div className="my-1 border-t border-zinc-900" />}
+                  {isProjectA && isCurrentUserProjectAdmin && (
+                    <>
+                      {/* 项目空间分享功能隐藏：项目文件夹的可见性/可操作性通过「权限管理 → 成员管理」控制
+                      <button
+                        type="button"
+                        onClick={() => openFolderShareModal(contextMenuFolder)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                      >
+                        <Send size={12} className="text-[#00ff00]" />
+                        分享
+                      </button>
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => { void handleCopyFolderLink(contextMenuFolder); }}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                      >
+                        <Link2 size={12} className="text-zinc-400" />
+                        复制链接
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openPermissionView('folder', contextMenuFolder.id, contextMenuFolder.name)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                      >
+                        <Eye size={12} className="text-zinc-400" />
+                        查看权限
+                      </button>
+                    </>
+                  )}
+                  {isPersonalSpace && (
+                    <button
+                      type="button"
+                      onClick={() => { void handleSharePersonalFolder(contextMenuFolder); }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                    >
+                      <Send size={12} className="text-[#00ff00]" />
+                      分享
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => openRenameFolderEditor(contextMenuFolder.id)}
@@ -4440,55 +5258,6 @@ export default function AssetLibrary({
                   </div>
                 </div>
               )}
-
-              {folderEditor && folderEditor.mode === 'rename' && (
-                <div className="mt-3 rounded border border-[#27272a] bg-black p-2">
-                  <div className="flex items-center gap-2">
-                    <input
-                      autoFocus
-                      maxLength={FOLDER_NAME_MAX_LENGTH}
-                      value={folderEditor.name}
-                      onChange={(event) => setFolderEditor(prev => prev ? { ...prev, name: event.target.value } : prev)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') submitFolderEditor();
-                        if (event.key === 'Escape') closeFolderEditor();
-                      }}
-                      placeholder="重命名"
-                      className={`min-w-0 flex-1 rounded border bg-[#0c0c0e] px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors ${
-                        shouldShowFolderEditorError
-                          ? 'border-red-500/70 focus:border-red-500'
-                          : 'border-zinc-800 focus:border-[#00ff00]'
-                      }`}
-                    />
-                    <button
-                      type="button"
-                      title={shouldShowFolderEditorError ? folderEditorValidationError : '确认'}
-                      disabled={shouldShowFolderEditorError}
-                      onClick={submitFolderEditor}
-                      className={`flex h-7 w-7 items-center justify-center rounded transition-colors ${
-                        shouldShowFolderEditorError
-                          ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
-                          : 'bg-[#00ff00] text-black'
-                      }`}
-                    >
-                      <Check size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      title="取消"
-                      onClick={closeFolderEditor}
-                      className="flex h-7 w-7 items-center justify-center rounded border border-zinc-800 text-zinc-500 hover:text-white"
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                  {shouldShowFolderEditorError && (
-                    <p className="mt-1.5 px-0.5 text-[10px] font-mono leading-relaxed text-red-400">
-                      {folderEditorValidationError}
-                    </p>
-                  )}
-                </div>
-              )}
             </div>
 
             <div className="flex-1 overflow-y-auto p-3 max-h-[240px] lg:max-h-none">
@@ -4519,6 +5288,52 @@ export default function AssetLibrary({
           <section className="flex-1 overflow-hidden flex flex-col min-w-0">
             <div className="asset-content-toolbar shrink-0 border-b border-[#27272a] bg-[#0c0c0e]/60 px-4 py-2">
               <div className="flex flex-col gap-2.5">
+                {isBatchMode ? (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center gap-2 text-sm font-bold text-white">
+                        <CheckCircle size={16} className="text-[#00ff00]" />
+                        已选中 {batchSelectedIds.size} 个
+                      </span>
+                      {(() => {
+                        const allIds = filteredInternalAssets.map(a => a.id);
+                        const allSelected = allIds.length > 0 && allIds.every(id => batchSelectedIds.has(id));
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBatchSelectedIds(allSelected ? new Set() : new Set(allIds));
+                            }}
+                            disabled={allIds.length === 0 || !!batchDeleteProgress}
+                            className="inline-flex items-center gap-1.5 rounded border border-zinc-700 bg-black px-2.5 py-1.5 text-[10.5px] font-mono text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <CheckCircle size={12} className={allSelected ? 'text-[#00ff00]' : ''} />
+                            {allSelected ? '取消全选' : `全选（${allIds.length}）`}
+                          </button>
+                        );
+                      })()}
+                    </div>
+                    <div className="ml-auto flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setPendingBatchDelete(true)}
+                        disabled={batchSelectedIds.size === 0 || !!batchDeleteProgress}
+                        className="inline-flex items-center gap-1.5 rounded border border-red-500/50 bg-red-500/10 px-3 py-1.5 text-[10.5px] font-mono font-semibold text-red-400 transition-colors hover:border-red-500 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-zinc-900 disabled:text-zinc-600"
+                      >
+                        <Trash2 size={12} />
+                        删除{batchSelectedIds.size > 0 ? `（${batchSelectedIds.size}）` : ''}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={exitBatchMode}
+                        disabled={!!batchDeleteProgress}
+                        className="inline-flex items-center gap-1.5 rounded border border-zinc-700 bg-black px-3 py-1.5 text-[10.5px] font-mono text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 flex-1 items-center gap-2">
                     {/* 返回上一个目录功能暂时停用
@@ -4546,7 +5361,7 @@ export default function AssetLibrary({
                         className="inline-flex items-center justify-center gap-1.5 rounded border border-[#00ff00]/40 bg-[#00ff00]/10 px-3 py-1.5 text-[10.5px] font-mono font-semibold text-[#00ff00] transition-colors hover:border-[#00ff00] hover:bg-[#00ff00]/20"
                       >
                         <Upload size={12} />
-                        上传素材
+                        上传
                       </button>
                     )}
 
@@ -4562,41 +5377,37 @@ export default function AssetLibrary({
                             : setKeyword(event.target.value)
                         )}
                         placeholder={imageSearchQuery !== null ? '以图搜图进行中…' : (isExternalRootSelected ? '搜索外部素材名或标签' : '搜索素材名或标签')}
-                        className="w-full bg-zinc-950 border border-zinc-900 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-1.5 pl-9 pr-3 text-zinc-200 font-mono disabled:cursor-not-allowed disabled:opacity-50"
+                        className="w-full bg-zinc-950 border border-zinc-900 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-1.5 pl-9 pr-9 text-zinc-200 font-mono disabled:cursor-not-allowed disabled:opacity-50"
                       />
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={openImageSearchPicker}
-                      disabled={isImageSearchProcessing}
-                      title="以图搜图：上传参考图按视觉相似度匹配素材"
-                      className={`inline-flex shrink-0 items-center gap-1.5 rounded border px-2.5 py-1.5 text-[10.5px] font-mono transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                        imageSearchQuery !== null
-                          ? 'border-[#00ff00]/60 bg-[#00ff00]/10 text-[#00ff00]'
-                          : 'border-zinc-700 bg-black text-zinc-300 hover:border-[#00ff00]/60 hover:text-white'
-                      }`}
-                    >
-                      {isImageSearchProcessing ? <Loader2 size={12} className="animate-spin" /> : <ScanSearch size={12} />}
-                      以图搜图
-                    </button>
-
-                    {isExternalRootSelected && (
                       <button
                         type="button"
-                        onClick={clearExternalFilters}
-                        disabled={!hasExternalActiveFilters}
-                        className={`rounded border px-2.5 py-1.5 text-[10.5px] font-mono transition-colors ${
-                          hasExternalActiveFilters
-                            ? 'border-zinc-700 bg-black text-zinc-300 hover:border-[#00ff00]/60 hover:text-white'
-                            : 'border-zinc-800 bg-black text-zinc-600 cursor-not-allowed'
+                        onClick={openImageSearchPicker}
+                        disabled={isImageSearchProcessing}
+                        title="以图搜图：上传参考图按视觉相似度匹配素材"
+                        className={`absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                          imageSearchQuery !== null
+                            ? 'bg-[#00ff00]/15 text-[#00ff00]'
+                            : 'text-zinc-500 hover:bg-zinc-800 hover:text-[#00ff00]'
                         }`}
                       >
-                        重置筛选
+                        {isImageSearchProcessing ? <Loader2 size={13} className="animate-spin" /> : <Camera size={14} />}
+                      </button>
+                    </div>
+
+                    {canBatchDelete && (
+                      <button
+                        type="button"
+                        onClick={enterBatchMode}
+                        title="批量操作：多选后批量删除"
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded border border-zinc-700 bg-black px-2.5 py-1.5 text-[10.5px] font-mono text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-white"
+                      >
+                        <CheckCircle size={12} />
+                        批量操作
                       </button>
                     )}
                   </div>
                 </div>
+                )}
 
                 {imageSearchQuery && (
                   <div className="flex items-center gap-3 rounded border border-[#00ff00]/40 bg-[#00ff00]/5 px-3 py-2">
@@ -4628,7 +5439,7 @@ export default function AssetLibrary({
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-7">
-              {!isExternalRootSelected && (
+              {!isExternalRootSelected && directChildFolders.length > 0 && (
                 <section>
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 text-sm font-bold text-white">
@@ -4638,40 +5449,35 @@ export default function AssetLibrary({
                     </div>
                   </div>
 
-                  {directChildFolders.length > 0 ? (
-                    <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                      {directChildFolders.map((folder) => (
-                        <button
-                          key={folder.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedFolderId(folder.id);
-                            setExpandedFolderIds(prev => new Set(prev).add(selectedFolderId));
-                          }}
-                          className="group/folderCard min-h-[128px] rounded border border-[#27272a] bg-[#0c0c0e] p-4 text-left transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <FolderOpen size={42} className="text-zinc-500 transition-colors group-hover/folderCard:text-[#00ff00]" />
-                            <span className="rounded border border-zinc-800 bg-black px-1.5 py-0.5 text-[10px] font-mono text-zinc-500">
-                              {getFolderAssetCount(folder.id)}
-                            </span>
-                          </div>
-                          <div className="mt-3 min-w-0">
-                            <p className="truncate text-sm font-semibold text-zinc-200 group-hover/folderCard:text-white">
-                              {folder.name}
-                            </p>
-                            <p className="mt-1 text-[10px] font-mono text-zinc-500">
-                              {foldersByParent.get(folder.id)?.length ?? 0} 个子目录
-                            </p>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded border border-dashed border-[#27272a] bg-[#0c0c0e]/30 px-4 py-5 text-xs text-zinc-500">
-                      当前文件夹没有子文件夹。
-                    </div>
-                  )}
+                  <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    {directChildFolders.map((folder) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedFolderId(folder.id);
+                          setExpandedFolderIds(prev => new Set(prev).add(selectedFolderId));
+                        }}
+                        onContextMenu={(event) => openFolderContextMenu(event, folder.id)}
+                        className="group/folderCard min-h-[128px] rounded border border-[#27272a] bg-[#0c0c0e] p-4 text-left transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <FolderOpen size={42} className="text-zinc-500 transition-colors group-hover/folderCard:text-[#00ff00]" />
+                          <span className="rounded border border-zinc-800 bg-black px-1.5 py-0.5 text-[10px] font-mono text-zinc-500">
+                            {getFolderAssetCount(folder.id)}
+                          </span>
+                        </div>
+                        <div className="mt-3 min-w-0">
+                          <p className="truncate text-sm font-semibold text-zinc-200 group-hover/folderCard:text-white">
+                            {folder.name}
+                          </p>
+                          <p className="mt-1 text-[10px] font-mono text-zinc-500">
+                            {foldersByParent.get(folder.id)?.length ?? 0} 个子目录
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </section>
               )}
 
@@ -4683,8 +5489,24 @@ export default function AssetLibrary({
                     <span className="font-mono text-xs text-zinc-500">({totalItems})</span>
                   </div>
 
-                  {!isExternalRootSelected && (
-                    <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* 卡片宽度调节滑动条 */}
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[10.5px] text-zinc-500">封面尺寸</span>
+                      <input
+                        type="range"
+                        min={CARD_WIDTH_MIN}
+                        max={CARD_WIDTH_MAX}
+                        step={10}
+                        value={cardWidth}
+                        onChange={(event) => setCardWidth(clampCardWidth(Number(event.target.value)))}
+                        className="asset-card-width-slider h-1 w-28 cursor-pointer appearance-none rounded-full bg-zinc-700 accent-[#00ff00]"
+                        title={`封面宽度 ${cardWidth}px`}
+                      />
+                      <span className="w-12 shrink-0 font-mono text-[10.5px] text-zinc-400">{cardWidth}px</span>
+                    </div>
+
+                    {!isExternalRootSelected && (
                       <button
                         type="button"
                         role="switch"
@@ -4703,8 +5525,8 @@ export default function AssetLibrary({
                         </span>
                         显示子文件夹素材
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
                 {totalItems === 0 ? (
@@ -4727,7 +5549,7 @@ export default function AssetLibrary({
                   </div>
                 ) : (
                   isExternalRootSelected ? (
-                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                    <div style={assetGridStyle}>
                       {paginatedExternalAssets.map((asset) => {
                         const sourceMeta = EXTERNAL_SOURCE_META[asset.source];
                         const isCurSelected = selectedAsset?.id === asset.id;
@@ -4777,9 +5599,10 @@ export default function AssetLibrary({
                       })}
                     </div>
                   ) : (
-                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                    <div style={assetGridStyle}>
                       {paginatedInternalAssets.map((asset) => {
                         const isCurSelected = selectedAsset?.id === asset.id;
+                        const isBatchSelected = isBatchMode && batchSelectedIds.has(asset.id);
 
                         // Check if currently downloading/queued
                         const activeTask = activeDownloads.find(task => task.assetId === asset.id);
@@ -4788,11 +5611,14 @@ export default function AssetLibrary({
                           <div
                             key={asset.id}
                             onClick={() => {
-                              setSelectedAsset(asset);
+                              if (isBatchMode) toggleBatchSelect(asset.id);
+                              else setSelectedAsset(asset);
                             }}
-                            onContextMenu={(event) => openAssetContextMenu(event, asset.id)}
+                            onContextMenu={(event) => { if (!isBatchMode) openAssetContextMenu(event, asset.id); }}
                             className={`group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
-                              isCurSelected
+                              isBatchSelected
+                                ? 'border-[#00ff00] ring-1 ring-[#00ff00]/60'
+                                : isCurSelected && !isBatchMode
                                 ? 'border-[#00ff00]'
                                 : 'border-[#27272a] hover:border-zinc-700'
                             }`}
@@ -4806,8 +5632,17 @@ export default function AssetLibrary({
                                 referrerPolicy="no-referrer"
                               />
 
+                              {/* 批量操作复选框 */}
+                              {isBatchMode && (
+                                <span className={`absolute left-2 top-2 z-30 flex h-5 w-5 items-center justify-center rounded-full border-2 transition-colors ${
+                                  isBatchSelected ? 'border-[#00ff00] bg-[#00ff00] text-black' : 'border-white/80 bg-black/50'
+                                }`}>
+                                  {isBatchSelected && <Check size={12} strokeWidth={3} />}
+                                </span>
+                              )}
+
                               {/* Format sticker and category indicator */}
-                              <div className="absolute top-2 left-2 flex items-center gap-1">
+                              <div className={`absolute top-2 left-2 flex items-center gap-1 ${isBatchMode ? 'opacity-0' : ''}`}>
                                 <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded uppercase">
                                   .{asset.format}
                                 </span>
@@ -4819,7 +5654,7 @@ export default function AssetLibrary({
                                 </span>
                               )}
 
-                              {(isPersonalSpace || isProjectA) && (
+                              {!isBatchMode && (isPersonalSpace || isProjectA) && (
                                 <div className="asset-cover-actions absolute right-2 top-2 z-20 flex items-center gap-1 rounded-md px-1 py-1 opacity-0 transition-all duration-200 pointer-events-none group-hover/cover:opacity-100 group-hover/cover:pointer-events-auto group-focus-within/cover:opacity-100 group-focus-within/cover:pointer-events-auto">
                                   {isPersonalSpace && (
                                     <button
@@ -5069,7 +5904,348 @@ export default function AssetLibrary({
         </div>
       )}
 
-      {personalAssetMoveEditor && moveEditorAsset && (
+      {permissionViewTarget && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm p-4 flex items-center justify-center"
+          onClick={closePermissionView}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-[520px] flex-col overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[#1c1c1f] px-5 py-4">
+              <span className="flex items-center gap-2 text-sm font-bold text-white">
+                <Eye size={15} className="text-[#00ff00]" />
+                查看权限
+              </span>
+              <button type="button" onClick={closePermissionView} className="text-zinc-500 transition-colors hover:text-white">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto px-5 py-4">
+              <div className="mb-3">
+                <span className="flex items-center gap-1.5 text-sm font-semibold text-white">
+                  {permissionViewTarget.kind === 'folder'
+                    ? <Folder size={14} className="text-zinc-400" />
+                    : <Files size={14} className="text-zinc-400" />}
+                  {permissionViewTarget.name}
+                </span>
+              </div>
+
+              {/* Tab 切换：成员 / 项目组 */}
+              <div className="mb-3 flex items-center gap-1 border-b border-[#1c1c1f]">
+                {([
+                  { id: 'members' as const, name: `成员（${permissionGrantees.length}）` },
+                  { id: 'groups' as const, name: `项目组（${permissionGroups.length}）` }
+                ]).map(tab => {
+                  const isActive = permissionViewTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setPermissionViewTab(tab.id)}
+                      className={`border-b-2 px-3 py-2 text-xs transition-colors ${
+                        isActive ? 'border-[#00ff00] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                      }`}
+                    >
+                      {tab.name}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {permissionViewTab === 'members' ? (
+                <>
+                  <p className="mb-2 text-[11px] text-zinc-400">当前可访问成员：</p>
+                  <div className="space-y-1.5">
+                    {permissionGrantees.map(g => (
+                      <div key={g.email} className="flex items-center justify-between gap-2 rounded border border-zinc-800 bg-black px-3 py-2">
+                        <div className="min-w-0">
+                          <span className="block truncate text-xs text-zinc-200">{g.name}</span>
+                          <span className="block truncate font-mono text-[10px] text-zinc-500">{g.email}</span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className={`rounded border px-1.5 py-0.5 text-[10px] font-mono ${
+                            g.role === '管理员'
+                              ? 'border-[#00ff00]/50 bg-[#00ff00]/10 text-[#00ff00]'
+                              : 'border-zinc-700 bg-zinc-900 text-zinc-400'
+                          }`}>
+                            {g.role}
+                          </span>
+                          {g.removable && (
+                            <button
+                              type="button"
+                              onClick={() => requestRemoveMemberGrant(g.email, g.name)}
+                              className="rounded border border-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-red-500/60 hover:text-red-400"
+                            >
+                              移除权限
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {permissionGrantees.length === 0 && (
+                      <div className="px-3 py-4 text-center text-[11px] text-zinc-600">暂无可访问成员。</div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="mb-2 text-[11px] text-zinc-400">当前共享项目组：</p>
+                  <div className="space-y-1.5">
+                    {permissionGroups.map(grp => (
+                      <div key={grp.id} className="flex items-center justify-between gap-2 rounded-lg border border-[#00ff00]/30 bg-[#00ff00]/5 px-3 py-2.5">
+                        <div className="min-w-0">
+                          <span className="flex items-center gap-1.5 text-xs font-semibold text-[#00ff00]">
+                            <Users size={13} />
+                            {grp.name}
+                          </span>
+                          <span className="mt-0.5 block font-mono text-[10px] text-zinc-500">{grp.id} · {grp.memberCount} 名成员</span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-mono text-zinc-400">{grp.source}</span>
+                          {grp.removable && (
+                            <button
+                              type="button"
+                              onClick={() => requestRemoveGroupGrant(grp.name)}
+                              className="rounded border border-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-red-500/60 hover:text-red-400"
+                            >
+                              移除
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {permissionGroups.length === 0 && (
+                      <div className="px-3 py-4 text-center text-[11px] text-zinc-600">暂无共享项目组。</div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingPermissionRemoval && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          onClick={() => setPendingPermissionRemoval(null)}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-[#1c1c1f] px-5 py-4 text-sm font-bold text-white">
+              {pendingPermissionRemoval.scope === 'member' ? '移除访问权限' : '取消项目组共享'}
+            </div>
+            <div className="px-5 py-4 text-xs leading-relaxed text-zinc-300">
+              {pendingPermissionRemoval.scope === 'member' ? (
+                <>确认移除 <span className="font-semibold text-white">{pendingPermissionRemoval.name}</span> 对该{permissionViewTarget?.kind === 'folder' ? '目录' : '素材'}的访问权限？</>
+              ) : (
+                <>确认取消项目组 <span className="font-semibold text-white">「{pendingPermissionRemoval.name}」</span> 对该{permissionViewTarget?.kind === 'folder' ? '目录' : '素材'}的共享？该组成员的分享授权将一并移除。</>
+              )}
+              <p className="mt-2 text-[11px] text-amber-500">移除后授权立即失效。</p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[#1c1c1f] px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setPendingPermissionRemoval(null)}
+                className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmPermissionRemoval}
+                className="rounded bg-red-500 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-600"
+              >
+                确认移除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shareModalTarget && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm p-4 flex items-center justify-center"
+          onClick={closeShareModal}
+        >
+          <div
+            className="w-full max-w-[560px] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#1c1c1f] px-5 py-4">
+              <span className="text-sm font-bold text-white">分享 1 个{shareModalTarget.kind === 'folder' ? '文件夹' : '文件'}</span>
+              <button
+                type="button"
+                onClick={closeShareModal}
+                className="text-zinc-500 transition-colors hover:text-white"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] overflow-y-auto px-5 py-4 space-y-4">
+              {/* Target card */}
+              <div className="flex items-center gap-3 rounded-lg border border-[#27272a] bg-[#121214] p-3">
+                <div className="flex h-12 w-16 shrink-0 items-center justify-center overflow-hidden rounded border border-[#27272a] bg-black">
+                  {shareModalTarget.kind === 'folder' ? (
+                    <Folder size={22} className="text-[#00ff00]" />
+                  ) : (
+                    <img src={shareModalTarget.thumbnail} alt={shareModalTarget.name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-white">{shareModalTarget.name}</p>
+                  <p className="mt-0.5 font-mono text-[10px] text-zinc-500">{shareModalTarget.kind === 'folder' ? '文件夹' : `.${shareModalTarget.format}`} · 使用者</p>
+                </div>
+              </div>
+
+              {/* Share scope */}
+              <div>
+                <label className="mb-1.5 block text-[11px] text-zinc-400">分享给</label>
+                <select
+                  value={shareScope}
+                  onChange={(event) => { setShareScope(event.target.value as ShareScope); setShareError(''); }}
+                  className="w-full rounded-lg border border-[#27272a] bg-[#121214] px-3 py-2.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00] [color-scheme:dark]"
+                >
+                  <option value="user">指定的人</option>
+                  <option value="group">项目组</option>
+                </select>
+              </div>
+
+              {/* Invite collaborator */}
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label className="text-[11px] text-zinc-400">邀请协作者</label>
+                  {shareScope === 'user' && (
+                    <span className={`font-mono text-[10px] ${shareSelectedUsers.length >= SHARE_MAX_USERS ? 'text-amber-400' : 'text-zinc-600'}`}>
+                      {shareSelectedUsers.length}/{SHARE_MAX_USERS}
+                    </span>
+                  )}
+                </div>
+                {shareScope === 'user' ? (
+                  <div className="relative">
+                    {shareSelectedUsers.length > 0 && (
+                      <div className="mb-1.5 flex flex-wrap gap-1.5">
+                        {shareSelectedUsers.map(user => (
+                          <span
+                            key={user.id}
+                            className="inline-flex items-center gap-1 rounded-full border border-[#00ff00]/40 bg-[#00ff00]/10 py-0.5 pl-2 pr-1 text-[10px] text-[#00ff00]"
+                          >
+                            <span className="max-w-[160px] truncate">{user.name}（{user.email}）</span>
+                            <button
+                              type="button"
+                              onClick={() => { setShareSelectedUsers(prev => prev.filter(u => u.id !== user.id)); setShareError(''); }}
+                              className="flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-[#00ff00]/20"
+                            >
+                              <X size={10} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <input
+                      type="text"
+                      value={shareUserQuery}
+                      disabled={shareSelectedUsers.length >= SHARE_MAX_USERS}
+                      onChange={(event) => { setShareUserQuery(event.target.value); setShareError(''); }}
+                      placeholder={shareSelectedUsers.length >= SHARE_MAX_USERS ? `已达上限 ${SHARE_MAX_USERS} 人` : '输入姓名或邮箱，支持模糊匹配'}
+                      className="w-full rounded-lg border border-[#27272a] bg-[#121214] px-3 py-2.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00] disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                    {shareUserQuery.trim() && shareSelectedUsers.length < SHARE_MAX_USERS && shareUserMatches.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-52 overflow-y-auto rounded-lg border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl">
+                        {shareUserMatches.map(user => (
+                          <button
+                            key={user.id}
+                            type="button"
+                            onClick={() => { setShareSelectedUsers(prev => [...prev, user]); setShareUserQuery(''); setShareError(''); }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#121214]"
+                          >
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#00ff00]/15 text-[10px] font-bold text-[#00ff00]">
+                              {user.name.slice(0, 2)}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-xs text-zinc-200">
+                              {user.name} <span className="font-mono text-[10px] text-zinc-500">({user.email})</span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {shareUserQuery.trim() && shareSelectedUsers.length < SHARE_MAX_USERS && shareUserMatches.length === 0 && (
+                      <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-[#27272a] bg-[#0c0c0e] px-3 py-2 text-[11px] text-zinc-500 shadow-xl">
+                        无匹配的平台用户
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <select
+                    value={shareSelectedGroup}
+                    onChange={(event) => { setShareSelectedGroup(event.target.value as SpaceId); setShareError(''); }}
+                    className="w-full rounded-lg border border-[#27272a] bg-[#121214] px-3 py-2.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00] [color-scheme:dark]"
+                  >
+                    {projectGroupOptions.map(g => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {shareError && (
+                <div className="rounded-lg border border-red-500/40 bg-red-950/30 px-3 py-2 text-[11px] text-red-300">
+                  {shareError}
+                </div>
+              )}
+
+              {/* Existing grantees */}
+              <div>
+                <label className="mb-1.5 block text-[11px] text-zinc-400">已拥有权限</label>
+                <div className="space-y-1 rounded-lg border border-[#1c1c1f] bg-[#121214]/40 p-1.5">
+                  {shareExistingGrantees.length > 0 ? shareExistingGrantees.map(g => (
+                    <div key={g.email} className="flex items-center gap-2 rounded px-2 py-1.5">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-500/20 text-[10px] font-bold text-violet-200">
+                        {g.name.slice(0, 2)}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs text-zinc-200">{g.name} <span className="font-mono text-[10px] text-zinc-500">({g.email})</span></p>
+                        <p className="font-mono text-[9px] text-zinc-600">{g.source}</p>
+                      </div>
+                      <span className="shrink-0 rounded border border-zinc-700 bg-black px-2 py-0.5 text-[10px] text-zinc-400">使用者</span>
+                    </div>
+                  )) : (
+                    <p className="px-2 py-3 text-center text-[11px] text-zinc-600">暂无其他权限用户</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-2 border-t border-[#1c1c1f] px-5 py-4">
+              <button
+                type="button"
+                onClick={closeShareModal}
+                className="rounded-lg border border-zinc-800 bg-black px-4 py-2 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmShare}
+                className="rounded-lg bg-[#00ff00] px-5 py-2 text-xs font-semibold text-black transition-colors hover:bg-[#00dd00]"
+              >
+                确认
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* V1：移动功能暂时停用（保留弹窗逻辑便于后续恢复） */}
+      {false && personalAssetMoveEditor && moveEditorAsset && (
         <div
           className="delete-folder-modal fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm p-4 flex items-center justify-center"
           onClick={() => setPersonalAssetMoveEditor(null)}
@@ -5221,6 +6397,59 @@ export default function AssetLibrary({
               >
                 确认重命名
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingBatchDelete && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          onClick={() => setPendingBatchDelete(false)}
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-[#1c1c1f] px-5 py-4 text-sm font-bold text-white">批量删除素材</div>
+            <div className="px-5 py-4 text-xs leading-relaxed text-zinc-300">
+              确认删除选中的 <span className="font-semibold text-white">{batchSelectedIds.size}</span> 个素材？
+              <p className="mt-2 text-[11px] text-amber-500">删除后将从当前空间移除，操作不可撤销。</p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[#1c1c1f] px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setPendingBatchDelete(false)}
+                className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => { void runBatchDelete(); }}
+                className="rounded bg-red-500 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-600"
+              >
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchDeleteProgress && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] shadow-2xl">
+            <div className="px-5 py-5">
+              <p className="mb-3 flex items-center gap-2 text-sm font-bold text-white">
+                <Loader2 size={15} className="animate-spin text-[#00ff00]" />
+                正在删除…（{batchDeleteProgress.done}/{batchDeleteProgress.total}）
+              </p>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                <div
+                  className="h-full bg-[#00ff00] transition-all duration-150"
+                  style={{ width: `${Math.round((batchDeleteProgress.done / Math.max(1, batchDeleteProgress.total)) * 100)}%` }}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -5698,28 +6927,38 @@ export default function AssetLibrary({
                   <h3 className="text-sm font-semibold text-zinc-200">素材信息</h3>
                   <div className="mt-3 space-y-2.5 font-mono">
                     <div className="flex items-center justify-between gap-3 text-xs">
-                      <span className="w-[68px] shrink-0 text-left text-zinc-500">类型</span>
-                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAsset.format.toLowerCase()}</span>
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">文件夹</span>
+                      <span className="min-w-0 flex-1 truncate text-right text-zinc-300" title={selectedAssetFolderLabel}>{selectedAssetFolderLabel}</span>
                     </div>
                     <div className="flex items-center justify-between gap-3 text-xs">
                       <span className="w-[68px] shrink-0 text-left text-zinc-500">尺寸</span>
                       <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetDimensionLabel}</span>
                     </div>
+                    {selectedAssetDurationLabel && (
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <span className="w-[68px] shrink-0 text-left text-zinc-500">时长</span>
+                        <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetDurationLabel}</span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between gap-3 text-xs">
-                      <span className="w-[68px] shrink-0 text-left text-zinc-500">文件大小</span>
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">大小</span>
                       <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAsset.sizeMB} MB</span>
                     </div>
                     <div className="flex items-center justify-between gap-3 text-xs">
-                      <span className="w-[68px] shrink-0 text-left text-zinc-500">导入时间</span>
-                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetImportedAtLabel}</span>
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">后缀</span>
+                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAsset.format.toLowerCase()}</span>
                     </div>
                     <div className="flex items-center justify-between gap-3 text-xs">
-                      <span className="w-[68px] shrink-0 text-left text-zinc-500">创建时间</span>
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">创建人</span>
+                      <span className="min-w-0 flex-1 truncate text-right text-zinc-300" title={selectedAsset.author}>{selectedAsset.author}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">添加日期</span>
                       <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetCreatedAtLabel}</span>
                     </div>
                     <div className="flex items-center justify-between gap-3 text-xs">
-                      <span className="w-[68px] shrink-0 text-left text-zinc-500">修改时间</span>
-                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetUpdatedAtLabel}</span>
+                      <span className="w-[68px] shrink-0 text-left text-zinc-500">地区</span>
+                      <span className="min-w-0 flex-1 text-right text-zinc-300">{selectedAssetRegionLabel}</span>
                     </div>
                     {selectedExternalAsset && (
                       <>

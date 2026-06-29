@@ -284,6 +284,14 @@
   color: #0f172a !important;
 }
 
+/* Disabled button backgrounds (e.g. batch-delete toolbar) must not stay dark in light mode */
+.light .disabled\:bg-zinc-900:disabled,
+.light .disabled\:bg-black:disabled {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+  color: #94a3b8 !important;
+}
+
 /* Border Overrides */
 .light .border-\[\#27272a\],
 .light .border-\[\#1c1c1f\],
@@ -342,6 +350,11 @@
 
 .light .accent-\[\#00ff00\] {
   accent-color: #00C800 !important;
+}
+
+/* Light mode: 封面尺寸滑动条轨道改用浅灰，避免深色 bg-zinc-700 在亮色下显黑 */
+.light .asset-card-width-slider {
+  background: #e2e8f0 !important;
 }
 
 .light ::-webkit-scrollbar-track {

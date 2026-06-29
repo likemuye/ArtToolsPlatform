@@ -23,7 +23,7 @@ interface ExtensionManagerProps {
   setApps: React.Dispatch<React.SetStateAction<AppConfig[]>>;
   extensions: DccExtension[];
   setExtensions: React.Dispatch<React.SetStateAction<DccExtension[]>>;
-  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error') => void;
+  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
   theme: 'light' | 'dark';
 }
 

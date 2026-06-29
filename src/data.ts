@@ -1057,22 +1057,30 @@ export const INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A = ART_ASSETS_PROJECT_A.r
 // --- 项目组权限管理：示例数据 ---------------------------------------------
 export const CURRENT_USER_EMAIL = 'likemuye@gmail.com';
 export const CURRENT_USER_NAME = '慕也';
+export const CURRENT_USER_DEPARTMENT = '美术中心 · 次世代组';
+
+// 登录白名单：仅以下邮箱可通过钉钉扫码进入平台（模拟企业域校验）。
+export const LOGIN_WHITELIST = new Set<string>([
+  CURRENT_USER_EMAIL,
+  'zhaoyun@studio.com',
+  'kongming@studio.com'
+]);
 
 // 平台用户池：添加成员弹窗用于"从平台用户选择 / 模拟匹配"。
 export const PLATFORM_USERS: PlatformUser[] = [
-  { id: 'user-current', name: CURRENT_USER_NAME, email: CURRENT_USER_EMAIL },
-  { id: 'user-zhaoyun', name: '赵云', email: 'zhaoyun@studio.com' },
+  { id: 'user-current', name: CURRENT_USER_NAME, email: CURRENT_USER_EMAIL, department: CURRENT_USER_DEPARTMENT },
+  { id: 'user-zhaoyun', name: '赵云', email: 'zhaoyun@studio.com', department: '美术中心 · 角色组' },
   { id: 'user-liubei', name: '刘备', email: 'liubei@studio.com' },
   { id: 'user-guanyu', name: '关羽', email: 'guanyu@studio.com' },
   { id: 'user-zhangfei', name: '张飞', email: 'zhangfei@studio.com' },
-  { id: 'user-zhugeliang', name: '诸葛亮', email: 'kongming@studio.com' },
+  { id: 'user-zhugeliang', name: '诸葛亮', email: 'kongming@studio.com', department: '美术中心 · 场景组' },
   { id: 'user-sunshangxiang', name: '孙尚香', email: 'sunsx@studio.com' },
   { id: 'user-zhouyu', name: '周瑜', email: 'zhouyu@studio.com' },
-  { id: 'user-lubu', name: '吕布', email: 'lubu@studio.com' },
+  { id: 'user-lubu', name: '吕布', email: 'lubu@studio.com', isFormer: true },
   { id: 'user-diaochan', name: '貂蝉', email: 'diaochan@studio.com' },
-  { id: 'user-caocao', name: '曹操', email: 'caocao@studio.com' },
+  { id: 'user-caocao', name: '曹操', email: 'caocao@studio.com', isFormer: true },
   { id: 'user-simayi', name: '司马懿', email: 'simayi@studio.com' },
-  { id: 'user-huangzhong', name: '黄忠', email: 'huangzhong@studio.com' },
+  { id: 'user-huangzhong', name: '黄忠', email: 'huangzhong@studio.com', isFormer: true },
   { id: 'user-machao', name: '马超', email: 'machao@studio.com' }
 ];
 

@@ -20,7 +20,7 @@ import { SpaceId, ProjectSpace, ProjectRole, ProjectMember, AssetFolder } from '
 import { PROJECT_SPACES, PLATFORM_USERS, INITIAL_PROJECT_MEMBERS, CURRENT_USER_EMAIL } from '../data';
 
 interface PermissionManagerProps {
-  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error') => void;
+  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
 }
 
 const PROJECT_MEMBERS_STORAGE_KEY = 'art-launcher-project-members-v1';
@@ -205,7 +205,7 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
   const handleAddMember = () => {
     setIsAddSubmitAttempted(true);
     if (addMemberError) {
-      addLog(`❌ 添加成员被拦截：${addMemberError}`, 'error');
+      addLog(`❌ 添加成员被拦截：${addMemberError}`, 'error', { toast: false });
       return;
     }
     const newMember: ProjectMember = {
@@ -506,7 +506,7 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
                                 onClick={() => handleChangeRole(member)}
                                 className="inline-flex items-center gap-1 rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-800 disabled:hover:text-zinc-300"
                               >
-                                {member.role === 'admin' ? '降级' : '提升'}
+                                权限配置
                               </button>
                               <button
                                 type="button"

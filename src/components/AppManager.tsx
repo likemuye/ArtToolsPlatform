@@ -3,7 +3,6 @@ import {
   Monitor,
   Download,
   Play,
-  Square,
   RotateCw,
   AlertCircle,
   Folder,
@@ -37,7 +36,7 @@ interface AppManagerProps {
   setApps: React.Dispatch<React.SetStateAction<AppConfig[]>>;
   simulatedDiskGB: number;
   setSimulatedDiskGB: React.Dispatch<React.SetStateAction<number>>;
-  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error') => void;
+  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
   theme: 'light' | 'dark';
 }
 
@@ -188,17 +187,6 @@ export default function AppManager({
         return a;
       }));
     }, 2000);
-  };
-
-  // Close Application / Disconnect
-  const stopApp = (app: AppConfig) => {
-    setApps(prev => prev.map(a => {
-      if (a.id === app.id) {
-        addLog(`🔴 已断开与 ${app.name} 运行进程的通信，软件安全关闭。`, 'warning');
-        return { ...a, status: AppStatus.InstalledOffline };
-      }
-      return a;
-    }));
   };
 
   // Reconnect after a failed connection
@@ -625,17 +613,6 @@ export default function AppManager({
                       >
                         <RotateCw size={12} />
                         重新连接
-                      </button>
-                    )}
-
-                    {/* Connected close button */}
-                    {app.status === AppStatus.Connected && (
-                      <button
-                        onClick={() => stopApp(app)}
-                        className="bg-zinc-950 hover:bg-red-950/20 border border-red-500/60 text-red-400 hover:text-red-300 px-4 py-1.5 text-xs rounded transition-all flex items-center gap-1.5"
-                      >
-                        <Square size={11} fill="currentColor" />
-                        断开连接
                       </button>
                     )}
                   </div>

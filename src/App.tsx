@@ -10,15 +10,23 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { PROJECT_SPACES, INITIAL_APPS, EXTENSIONS_PROJECT_A, ART_ASSETS_PROJECT_A } from './data';
-import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId } from './types';
+import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession } from './types';
+import {
+  loadSession,
+  saveSession,
+  clearSession,
+  isExpired,
+  needsRenewal,
+  renewSession
+} from './auth';
 
 // Importing child components
 import Sidebar from './components/Sidebar';
-import AppManager from './components/AppManager';
 import ExtensionManager from './components/ExtensionManager';
 import AssetLibrary from './components/AssetLibrary';
 import SettingsPanel from './components/SettingsPanel';
 import PermissionManager from './components/PermissionManager';
+import LoginPage from './components/LoginPage';
 
 interface LogLine {
   text: string;
@@ -27,17 +35,48 @@ interface LogLine {
 }
 
 export default function App() {
-  // Theme state - Persists locally
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    return (localStorage.getItem('art-launcher-theme') as 'dark' | 'light') || 'dark';
+  // Theme preference: 'light' | 'dark' | 'system'（跟随系统）。
+  const [themePref, setThemePref] = useState<'dark' | 'light' | 'system'>(() => {
+    const stored = localStorage.getItem('art-launcher-theme');
+    if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
+    return 'dark';
   });
 
-  const toggleTheme = () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
-    localStorage.setItem('art-launcher-theme', nextTheme);
-    addLog(`🌓 切换客户端显示模式: 【${nextTheme === 'light' ? '极简亮色 (Light Mode)' : '深邃暗色 (Dark Mode)'}】`, 'success');
+  // 系统配色（仅当 themePref === 'system' 时生效）。
+  const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>(() => (
+    typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+      ? 'light'
+      : 'dark'
+  ));
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mql = window.matchMedia('(prefers-color-scheme: light)');
+    const handler = (e: MediaQueryListEvent) => setSystemTheme(e.matches ? 'light' : 'dark');
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  }, []);
+
+  // 实际生效的主题。
+  const theme: 'dark' | 'light' = themePref === 'system' ? systemTheme : themePref;
+
+  // 设置主题偏好（浅色/深色/跟随系统）。
+  const setThemePreference = (pref: 'dark' | 'light' | 'system') => {
+    setThemePref(pref);
+    localStorage.setItem('art-launcher-theme', pref);
+    const label = pref === 'light' ? '极简亮色 (Light)' : pref === 'dark' ? '深邃暗色 (Dark)' : '跟随系统 (System)';
+    addLog(`🌓 切换客户端显示模式: 【${label}】`, 'success');
   };
+
+  // 旧入口兼容：在浅/深之间切换（折叠态等仍可用）。
+  const toggleTheme = () => setThemePreference(theme === 'dark' ? 'light' : 'dark');
+
+  // 登录会话（钉钉扫码 → Token，7 天有效，过期前 1 天静默续期）。
+  const [session, setSession] = useState<AuthSession | null>(() => {
+    const stored = loadSession();
+    if (!stored) return null;
+    return isExpired(stored, Date.now()) ? null : stored;
+  });
 
   // Sidebar and space states - F7
   const [currentTab, setCurrentTab] = useState<string>('assets');
@@ -75,11 +114,23 @@ export default function App() {
     addLog('📁 项目空间【三国奇幻RPGA】分发中心握手完毕，已加载 22 个定制插件、100+美术共享元数据。', 'success');
   }, []);
 
-  // System logging helper
-  const addLog = (text: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+  // System logging helper. Success/error also raise a global toast (1.5s), unless the caller
+  // opts out via { toast: false } — used by sub-flows that already show an inline message.
+  const addLog = (
+    text: string,
+    type: 'info' | 'success' | 'warning' | 'error' = 'info',
+    options?: { toast?: boolean }
+  ) => {
     const now = new Date();
     const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
     setLogs(prev => [...prev, { text, timestamp: timeStr, type }]);
+
+    const shouldToast = options?.toast !== false && (type === 'success' || type === 'error');
+    if (shouldToast) {
+      // Strip a leading emoji + spaces so the toast reads cleanly.
+      const message = text.replace(/^[^一-龥A-Za-z0-9]+/, '').trim() || text;
+      setToast({ id: Date.now(), message, type });
+    }
   };
 
   // Switch Space side effect logging
@@ -102,15 +153,60 @@ export default function App() {
     }
   }, [currentSpace]);
 
-  // Toast auto-dismiss timer
+  // Toast auto-dismiss timer: 成功 1.5s；失败（含错误原因）停留更久，便于阅读。
   useEffect(() => {
     if (toast) {
+      const duration = toast.type === 'error' ? 3500 : 1500;
       const timer = setTimeout(() => {
         setToast(null);
-      }, 1500);
+      }, duration);
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  // 登录成功：保存 Token，进入主界面；首次登录提示已自动创建个人空间。
+  const handleLogin = (newSession: AuthSession, isFirstLogin: boolean) => {
+    saveSession(newSession);
+    setSession(newSession);
+    if (isFirstLogin) {
+      addLog(`🎉 首次登录成功，已为【${newSession.name}】自动创建个人空间。`, 'success');
+    } else {
+      addLog(`✅ 欢迎回来，${newSession.name}！登录态有效期 7 天。`, 'success');
+    }
+  };
+
+  // 主动登出：清 Token / 下载任务 / 缓存，返回登录页。
+  const handleLogout = () => {
+    clearSession();
+    setSession(null);
+    setDownloadedAssetIds(new Set());
+    setPersonalAssets([]);
+    setCurrentTab('assets');
+    addLog('👋 已退出登录，本地令牌与下载任务已清除。', 'info', { toast: false });
+  };
+
+  // Token 生命周期守护：过期则自动登出；进入续期窗口（<1天）静默续期。
+  useEffect(() => {
+    if (!session) return;
+    const guard = () => {
+      const now = Date.now();
+      if (isExpired(session, now)) {
+        clearSession();
+        setSession(null);
+        setToast({ id: Date.now(), message: '登录态已过期，请重新扫码登录。', type: 'warning' });
+        return;
+      }
+      if (needsRenewal(session, now)) {
+        const renewed = renewSession(session, now);
+        saveSession(renewed);
+        setSession(renewed);
+        addLog('🔄 登录令牌已静默续期，有效期顺延 7 天。', 'info', { toast: false });
+      }
+    };
+    guard();
+    const timer = window.setInterval(guard, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [session]);
 
   // Render correct panel subcomponent
   const renderTabContent = () => {
@@ -118,14 +214,6 @@ export default function App() {
       case 'extensions':
         return (
           <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
-            <AppManager
-              apps={apps}
-              setApps={setApps}
-              simulatedDiskGB={simulatedDiskGB}
-              setSimulatedDiskGB={setSimulatedDiskGB}
-              addLog={addLog}
-              theme={theme}
-            />
             <ExtensionManager
               currentSpace={currentSpace}
               apps={apps}
@@ -181,6 +269,13 @@ export default function App() {
   };
 
   return (
+    <>
+      {!session && (
+        <div className={theme === 'light' ? 'light' : 'dark'}>
+          <LoginPage theme={theme} onLogin={handleLogin} />
+        </div>
+      )}
+      {session && (
     <div className={`flex h-screen overflow-hidden font-sans select-none antialiased transition-colors duration-200 relative ${
       theme === 'light' ? 'bg-[#f8fafc] text-zinc-800 light' : 'bg-[#09090b] text-zinc-200 dark'
     }`}>
@@ -201,7 +296,11 @@ export default function App() {
               boxShadow: theme === 'light' ? '0 10px 15px -3px rgba(0,0,0,0.1)' : '0 10px 15px -3px rgba(0,0,0,0.5)',
             }}
           >
-            <div className={`w-1.5 h-1.5 rounded-full shrink-0 animate-pulse ${theme === 'light' ? 'bg-[#00C800]' : 'bg-[#00ff00]'}`}></div>
+            <div className={`w-1.5 h-1.5 rounded-full shrink-0 animate-pulse ${
+              toast.type === 'error' ? 'bg-red-500'
+                : toast.type === 'warning' ? 'bg-amber-500'
+                : (theme === 'light' ? 'bg-[#00C800]' : 'bg-[#00ff00]')
+            }`}></div>
             <span className="font-semibold">{toast.message}</span>
             <button 
               onClick={() => setToast(null)}
@@ -216,13 +315,20 @@ export default function App() {
       </AnimatePresence>
 
       {/* 1. Left Navigation Sidebar */}
-      <Sidebar 
+      <Sidebar
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         currentSpace={currentSpace}
         simulatedDiskGB={simulatedDiskGB}
         theme={theme}
+        themePref={themePref}
+        setThemePreference={setThemePreference}
         toggleTheme={toggleTheme}
+        apps={apps}
+        setApps={setApps}
+        addLog={addLog}
+        session={session}
+        onLogout={handleLogout}
       />
 
       {/* 2. Main Work Content Area (split with bottom collapsible terminal log) */}
@@ -290,5 +396,7 @@ export default function App() {
 
       </div>
     </div>
+    )}
+    </>
   );
 }

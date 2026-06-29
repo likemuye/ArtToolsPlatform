@@ -22,7 +22,7 @@ interface SettingsPanelProps {
   setSimulatedDiskGB: React.Dispatch<React.SetStateAction<number>>;
   tempCacheMB: number;
   setTempCacheMB: React.Dispatch<React.SetStateAction<number>>;
-  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error') => void;
+  addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
 }
 
 export default function SettingsPanel({

@@ -124,6 +124,19 @@ export interface PlatformUser {
   id: string;
   name: string;
   email: string;
+  isFormer?: boolean; // 已离职人员标记
+  department?: string; // 所属部门，登录后左下角展示
+}
+
+// 登录会话：钉钉扫码登录后生成，持久化到 localStorage。
+export interface AuthSession {
+  token: string;
+  userId: string;
+  name: string;
+  email: string;
+  department: string;
+  issuedAt: number; // 签发时间戳 (ms)
+  expiresAt: number; // 过期时间戳 (ms)，签发 + 7 天
 }
 
 export interface ProjectMember {
