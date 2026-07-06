@@ -1518,6 +1518,417 @@
   color: #ffffff !important;
 }
 
+/* Canvas collaboration module */
+.canvas-tool-btn {
+  display: flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: #a1a1aa;
+  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.canvas-tool-btn:hover:not(:disabled),
+.canvas-tool-btn.is-active {
+  background-color: #18181b;
+  color: #00ff00;
+}
+
+.canvas-tool-btn:disabled {
+  cursor: not-allowed;
+  color: #3f3f46;
+}
+
+.canvas-editor-icon-btn,
+.canvas-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #27272a;
+  background-color: #050506;
+  color: #a1a1aa;
+  transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
+}
+
+.canvas-editor-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+}
+
+.canvas-mini-btn {
+  min-height: 26px;
+  border-radius: 5px;
+  padding: 0 9px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.canvas-editor-icon-btn:hover,
+.canvas-mini-btn:hover:not(:disabled) {
+  border-color: rgba(0, 255, 0, 0.55);
+  color: #f4f4f5;
+}
+
+.canvas-editor-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 255, 0, 0.55);
+  background-color: rgba(0, 255, 0, 0.1);
+  padding: 7px 12px;
+  color: #00ff00;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.canvas-role-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 255, 0, 0.35);
+  background-color: rgba(0, 255, 0, 0.1);
+  padding: 2px 7px;
+  color: #00ff00;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.canvas-collab-avatar {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.canvas-folder-cover-tile {
+  position: relative;
+}
+
+.canvas-excalidraw-shell {
+  background-color: #ffffff;
+}
+
+.canvas-excalidraw-frame-wrap {
+  min-width: 0;
+}
+
+.canvas-excalidraw-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background-color: #ffffff;
+}
+
+.canvas-grid {
+  background-image:
+    linear-gradient(rgba(15, 23, 42, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.07) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.canvas-element {
+  cursor: pointer;
+}
+
+.canvas-element.is-selected {
+  outline: 1px dashed #2563eb;
+  outline-offset: 4px;
+}
+
+.canvas-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  border: 1px solid #2563eb;
+  background-color: #ffffff;
+}
+
+.canvas-comment-pin {
+  transform: translate(-50%, -50%);
+}
+
+.canvas-panel-tab {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: 5px;
+  color: #71717a;
+  font-size: 11px;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.canvas-panel-tab:hover,
+.canvas-panel-tab.is-active {
+  background-color: #18181b;
+  color: #f4f4f5;
+}
+
+.canvas-side-card {
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  background-color: #09090b;
+  padding: 12px;
+}
+
+.canvas-tree-row {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #a1a1aa;
+  font-size: 12px;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.canvas-tree-row:hover {
+  background-color: #121214;
+  color: #f4f4f5;
+}
+
+.canvas-tree-row.is-active {
+  background-color: #18181b;
+  color: #f4f4f5;
+  font-weight: 600;
+}
+
+.canvas-tree-toggle,
+.canvas-tree-spacer {
+  display: inline-flex;
+  width: 16px;
+  height: 18px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  color: #71717a;
+}
+
+.canvas-tree-toggle:hover {
+  color: #f4f4f5;
+}
+
+.canvas-tree-toggle.is-empty {
+  color: #52525b;
+}
+
+.canvas-tree-dot::before {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background-color: currentColor;
+  content: '';
+}
+
+.canvas-tree-main {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 7px;
+  text-align: left;
+}
+
+.canvas-tree-count {
+  min-width: 20px;
+  flex: 0 0 auto;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #71717a;
+}
+
+.canvas-tree-child {
+  padding-left: 22px;
+  font-size: 11px;
+}
+
+.canvas-context-menu {
+  font-family: JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.light .canvas-library-root,
+.light .canvas-content-panel {
+  background-color: #f8fafc !important;
+}
+
+.light .canvas-inline-header {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .canvas-inline-header .text-white {
+  color: #0f172a !important;
+}
+
+.light .canvas-sidebar {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .canvas-sidebar > .border-b {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .canvas-editor-header,
+.light .canvas-right-panel {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .canvas-tool-sidebar {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .canvas-tool-btn {
+  color: #64748b !important;
+}
+
+.light .canvas-tool-btn:hover:not(:disabled),
+.light .canvas-tool-btn.is-active {
+  background-color: #0f172a !important;
+  color: #ffffff !important;
+}
+
+.light .canvas-tool-btn:disabled {
+  color: #cbd5e1 !important;
+}
+
+.light .canvas-stage-wrap {
+  background-color: #f1f5f9 !important;
+}
+
+.light .canvas-editor-icon-btn,
+.light .canvas-mini-btn {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+
+.light .canvas-editor-icon-btn:hover,
+.light .canvas-mini-btn:hover:not(:disabled) {
+  background-color: #f1f5f9 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+.light .canvas-editor-save-btn {
+  background-color: #0f172a !important;
+  border-color: #0f172a !important;
+  color: #ffffff !important;
+}
+
+.light .canvas-role-badge {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.light .canvas-panel-tab {
+  color: #64748b !important;
+}
+
+.light .canvas-panel-tab:hover,
+.light .canvas-panel-tab.is-active {
+  background-color: #0f172a !important;
+  color: #ffffff !important;
+}
+
+.light .canvas-side-card {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .canvas-tree-row {
+  color: #64748b !important;
+}
+
+.light .canvas-tree-row:hover {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+.light .canvas-tree-row.is-active {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+.light .canvas-tree-row.is-active .canvas-tree-count,
+.light .canvas-tree-row.is-active .canvas-tree-toggle,
+.light .canvas-tree-row.is-active svg {
+  color: #0f172a !important;
+}
+
+.light .canvas-tree-row.is-active .asset-folder-count.is-selected {
+  background-color: #dcfce7 !important;
+  color: #15803d !important;
+}
+
+.light .canvas-tree-count,
+.light .canvas-tree-toggle,
+.light .canvas-tree-spacer {
+  color: #64748b !important;
+}
+
+.light .canvas-tree-toggle.is-empty {
+  color: #94a3b8 !important;
+}
+
+.light .canvas-context-menu {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14) !important;
+}
+
+.light .canvas-context-menu button {
+  color: #475569 !important;
+}
+
+.light .canvas-context-menu button:hover {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+.light .canvas-context-menu button.text-red-300 {
+  color: #dc2626 !important;
+}
+
+.light .canvas-context-menu button.text-red-300:hover {
+  background-color: #fef2f2 !important;
+  color: #b91c1c !important;
+}
+
+.light .canvas-permission-banner {
+  background-color: #fffbeb !important;
+  border-color: #f59e0b !important;
+  color: #92400e !important;
+}
+
+.light .canvas-status-toast {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
 /* 3. Ensure card dividers (such as asset card top dividers and extension card dividers) are clean light grey */
 .light .border-zinc-900\/60,
 .light .border-t.border-zinc-900\/60,

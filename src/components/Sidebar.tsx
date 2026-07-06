@@ -102,10 +102,10 @@ export default function Sidebar({
 
   const mainTabs = [
     { id: 'assets', name: '素材', icon: FolderOpen, badge: currentSpace.id === SpaceId.ProjectA ? '100+' : '0' },
+    { id: 'canvas', name: '画布', icon: Palette },
     { id: 'permissions', name: '权限管理', icon: ShieldCheck },
-    // V1 暂不开放：工具、画布、缓存与设置
+    // V1 暂不开放：工具、缓存与设置
     // { id: 'extensions', name: '工具', icon: Layers, badge: currentSpace.id === SpaceId.ProjectA ? '22' : '0' },
-    // { id: 'canvas', name: '画布', icon: Palette },
     // { id: 'settings', name: '缓存与设置', icon: Settings },
   ];
 

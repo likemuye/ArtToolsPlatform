@@ -105,6 +105,84 @@ export interface AssetFolder {
   createdAt?: string;
 }
 
+export type CanvasRole = 'owner' | 'editor' | 'viewer';
+
+export interface CanvasFolder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  spaceId: SpaceId;
+  createdAt: string;
+  updatedAt: string;
+  createdByEmail: string;
+}
+
+export interface CanvasDocument {
+  id: string;
+  name: string;
+  folderId: string | null;
+  spaceId: SpaceId;
+  ownerEmail: string;
+  ownerName: string;
+  createdAt: string;
+  updatedAt: string;
+  thumbnailColor: string;
+  elementCount: number;
+  isDeleted?: boolean;
+}
+
+export interface CanvasShareGrant {
+  canvasId: string;
+  granteeEmail: string;
+  granteeName: string;
+  role: Exclude<CanvasRole, 'owner'>;
+  sharedByEmail: string;
+  sharedAt: string;
+  viaGroup?: SpaceId;
+}
+
+export interface CanvasHistoryEntry {
+  id: string;
+  canvasId: string;
+  actorName: string;
+  createdAt: string;
+  summary: string;
+}
+
+export interface CanvasCommentThread {
+  id: string;
+  canvasId: string;
+  x: number;
+  y: number;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  resolved: boolean;
+  replies: Array<{
+    id: string;
+    authorName: string;
+    body: string;
+    createdAt: string;
+  }>;
+}
+
+export type CanvasElementKind = 'text' | 'shape' | 'image' | 'audio' | 'video' | 'model';
+
+export interface CanvasElement {
+  id: string;
+  canvasId: string;
+  kind: CanvasElementKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  title: string;
+  body?: string;
+  color: string;
+  createdByName: string;
+  createdAt: string;
+}
+
 export interface DownloadTask {
   assetId: string;
   progress: number; // 0-100

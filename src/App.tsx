@@ -24,6 +24,8 @@ import {
 import Sidebar from './components/Sidebar';
 import ExtensionManager from './components/ExtensionManager';
 import AssetLibrary from './components/AssetLibrary';
+import CanvasLibrary from './components/CanvasLibrary';
+import CanvasEditorWindow from './components/CanvasEditorWindow';
 import SettingsPanel from './components/SettingsPanel';
 import PermissionManager from './components/PermissionManager';
 import LoginPage from './components/LoginPage';
@@ -35,6 +37,8 @@ interface LogLine {
 }
 
 export default function App() {
+  const isCanvasEditorWindow = new URLSearchParams(window.location.search).has('canvasId');
+
   // Theme preference: 'light' | 'dark' | 'system'（跟随系统）。
   const [themePref, setThemePref] = useState<'dark' | 'light' | 'system'>(() => {
     const stored = localStorage.getItem('art-launcher-theme');
@@ -256,7 +260,13 @@ export default function App() {
           />
         );
       case 'canvas':
-        return <div className="flex-1"></div>;
+        return (
+          <CanvasLibrary
+            currentSpace={currentSpace}
+            setCurrentSpace={setCurrentSpace}
+            addLog={addLog}
+          />
+        );
       case 'permissions':
         return <PermissionManager addLog={addLog} />;
       default:
@@ -276,6 +286,9 @@ export default function App() {
         </div>
       )}
       {session && (
+        isCanvasEditorWindow ? (
+          <CanvasEditorWindow theme={theme} />
+        ) : (
     <div className={`flex h-screen overflow-hidden font-sans select-none antialiased transition-colors duration-200 relative ${
       theme === 'light' ? 'bg-[#f8fafc] text-zinc-800 light' : 'bg-[#09090b] text-zinc-200 dark'
     }`}>
@@ -396,6 +409,7 @@ export default function App() {
 
       </div>
     </div>
+        )
     )}
     </>
   );

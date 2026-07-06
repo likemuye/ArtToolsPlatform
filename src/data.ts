@@ -1,4 +1,4 @@
-import { SpaceId, ProjectSpace, AppId, AppStatus, AppConfig, DccExtension, ArtAsset, AssetCategory, AssetFolder, PlatformUser, ProjectMember, AssetTaskStatus } from './types';
+import { SpaceId, ProjectSpace, AppId, AppStatus, AppConfig, DccExtension, ArtAsset, AssetCategory, AssetFolder, PlatformUser, ProjectMember, AssetTaskStatus, CanvasDocument, CanvasFolder, CanvasShareGrant, CanvasHistoryEntry, CanvasCommentThread, CanvasElement } from './types';
 
 export const PROJECT_SPACES: ProjectSpace[] = [
   {
@@ -1102,3 +1102,198 @@ export const INITIAL_PROJECT_MEMBERS: Record<SpaceId, ProjectMember[]> = {
   [SpaceId.Personal]: []
 };
 
+// --- 画布协作模块：V0.1.1 示例数据 ----------------------------------------
+export const INITIAL_CANVAS_FOLDERS: CanvasFolder[] = [
+  {
+    id: 'canvas-folder-personal-inspiration',
+    name: '一级文件夹',
+    parentId: null,
+    spaceId: SpaceId.Personal,
+    createdAt: '2026-06-18T10:12:00.000Z',
+    updatedAt: '2026-07-01T16:34:00.000Z',
+    createdByEmail: CURRENT_USER_EMAIL
+  },
+  { id: 'canvas-folder-personal-003', name: '003', parentId: 'canvas-folder-personal-inspiration', spaceId: SpaceId.Personal, createdAt: '2026-06-18T10:12:00.000Z', updatedAt: '2026-06-18T10:12:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-personal-004', name: '004', parentId: 'canvas-folder-personal-inspiration', spaceId: SpaceId.Personal, createdAt: '2026-06-18T10:13:00.000Z', updatedAt: '2026-06-18T10:13:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-personal-005', name: '005', parentId: 'canvas-folder-personal-inspiration', spaceId: SpaceId.Personal, createdAt: '2026-06-18T10:14:00.000Z', updatedAt: '2026-06-18T10:14:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-personal-006', name: '006', parentId: 'canvas-folder-personal-inspiration', spaceId: SpaceId.Personal, createdAt: '2026-06-18T10:15:00.000Z', updatedAt: '2026-06-18T10:15:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-personal-007', name: '007', parentId: 'canvas-folder-personal-inspiration', spaceId: SpaceId.Personal, createdAt: '2026-06-18T10:16:00.000Z', updatedAt: '2026-06-18T10:16:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-personal-sub', name: '二级文件夹', parentId: 'canvas-folder-personal-inspiration', spaceId: SpaceId.Personal, createdAt: '2026-06-18T10:17:00.000Z', updatedAt: '2026-06-18T10:17:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-personal-sub-01', name: '二级文件夹01', parentId: 'canvas-folder-personal-inspiration', spaceId: SpaceId.Personal, createdAt: '2026-06-18T10:18:00.000Z', updatedAt: '2026-06-18T10:18:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  {
+    id: 'canvas-folder-shared-primary',
+    name: '一级文件夹',
+    parentId: null,
+    spaceId: SpaceId.Shared,
+    createdAt: '2026-06-19T10:12:00.000Z',
+    updatedAt: '2026-06-19T10:12:00.000Z',
+    createdByEmail: 'kongming@studio.com'
+  },
+  {
+    id: 'canvas-folder-project-style',
+    name: '一级文件夹',
+    parentId: null,
+    spaceId: SpaceId.ProjectA,
+    createdAt: '2026-06-20T09:20:00.000Z',
+    updatedAt: '2026-07-03T14:10:00.000Z',
+    createdByEmail: CURRENT_USER_EMAIL
+  },
+  { id: 'canvas-folder-project-003', name: '003', parentId: 'canvas-folder-project-style', spaceId: SpaceId.ProjectA, createdAt: '2026-06-20T09:21:00.000Z', updatedAt: '2026-06-20T09:21:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-project-004', name: '004', parentId: 'canvas-folder-project-style', spaceId: SpaceId.ProjectA, createdAt: '2026-06-20T09:22:00.000Z', updatedAt: '2026-06-20T09:22:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-project-005', name: '005', parentId: 'canvas-folder-project-style', spaceId: SpaceId.ProjectA, createdAt: '2026-06-20T09:23:00.000Z', updatedAt: '2026-06-20T09:23:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-project-006', name: '006', parentId: 'canvas-folder-project-style', spaceId: SpaceId.ProjectA, createdAt: '2026-06-20T09:24:00.000Z', updatedAt: '2026-06-20T09:24:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-project-007', name: '007', parentId: 'canvas-folder-project-style', spaceId: SpaceId.ProjectA, createdAt: '2026-06-20T09:25:00.000Z', updatedAt: '2026-06-20T09:25:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-project-sub', name: '二级文件夹', parentId: 'canvas-folder-project-style', spaceId: SpaceId.ProjectA, createdAt: '2026-06-20T09:26:00.000Z', updatedAt: '2026-06-20T09:26:00.000Z', createdByEmail: CURRENT_USER_EMAIL },
+  { id: 'canvas-folder-project-sub-01', name: '二级文件夹01', parentId: 'canvas-folder-project-style', spaceId: SpaceId.ProjectA, createdAt: '2026-06-20T09:27:00.000Z', updatedAt: '2026-06-20T09:27:00.000Z', createdByEmail: CURRENT_USER_EMAIL }
+];
+
+export const INITIAL_CANVASES: CanvasDocument[] = [
+  {
+    id: 'canvas-personal-001',
+    name: '武将剪影与材质 Moodboard',
+    folderId: 'canvas-folder-personal-inspiration',
+    spaceId: SpaceId.Personal,
+    ownerEmail: CURRENT_USER_EMAIL,
+    ownerName: CURRENT_USER_NAME,
+    createdAt: '2026-06-21T09:30:00.000Z',
+    updatedAt: '2026-07-03T17:18:00.000Z',
+    thumbnailColor: '#0f766e',
+    elementCount: 42
+  },
+  {
+    id: 'canvas-project-001',
+    name: '冰河三国主视觉方向',
+    folderId: 'canvas-folder-project-style',
+    spaceId: SpaceId.ProjectA,
+    ownerEmail: CURRENT_USER_EMAIL,
+    ownerName: CURRENT_USER_NAME,
+    createdAt: '2026-06-24T13:12:00.000Z',
+    updatedAt: '2026-07-04T10:08:00.000Z',
+    thumbnailColor: '#1d4ed8',
+    elementCount: 68
+  },
+  {
+    id: 'canvas-project-002',
+    name: '赵云盔甲细节讨论',
+    folderId: 'canvas-folder-project-style',
+    spaceId: SpaceId.ProjectA,
+    ownerEmail: 'zhaoyun@studio.com',
+    ownerName: '赵云',
+    createdAt: '2026-06-29T15:05:00.000Z',
+    updatedAt: '2026-07-05T11:22:00.000Z',
+    thumbnailColor: '#7c3aed',
+    elementCount: 31
+  },
+  {
+    id: 'canvas-shared-001',
+    name: '场景雾效参考整合',
+    folderId: null,
+    spaceId: SpaceId.Personal,
+    ownerEmail: 'kongming@studio.com',
+    ownerName: '诸葛亮',
+    createdAt: '2026-06-27T08:45:00.000Z',
+    updatedAt: '2026-07-02T19:30:00.000Z',
+    thumbnailColor: '#b45309',
+    elementCount: 24
+  }
+];
+
+export const INITIAL_CANVAS_SHARES: CanvasShareGrant[] = [
+  {
+    canvasId: 'canvas-shared-001',
+    granteeEmail: CURRENT_USER_EMAIL,
+    granteeName: CURRENT_USER_NAME,
+    role: 'editor',
+    sharedByEmail: 'kongming@studio.com',
+    sharedAt: '2026-07-02T20:00:00.000Z'
+  },
+  {
+    canvasId: 'canvas-personal-001',
+    granteeEmail: 'zhaoyun@studio.com',
+    granteeName: '赵云',
+    role: 'viewer',
+    sharedByEmail: CURRENT_USER_EMAIL,
+    sharedAt: '2026-07-03T10:10:00.000Z'
+  }
+];
+
+export const INITIAL_CANVAS_HISTORY: CanvasHistoryEntry[] = [
+  { id: 'history-canvas-project-001-1', canvasId: 'canvas-project-001', actorName: CURRENT_USER_NAME, createdAt: '2026-07-04T10:08:00.000Z', summary: '调整主视觉冷暖对比，补充 6 张参考图。' },
+  { id: 'history-canvas-project-002-1', canvasId: 'canvas-project-002', actorName: '赵云', createdAt: '2026-07-05T11:22:00.000Z', summary: '更新肩甲结构标注并整理待办。' },
+  { id: 'history-canvas-personal-001-1', canvasId: 'canvas-personal-001', actorName: CURRENT_USER_NAME, createdAt: '2026-07-03T17:18:00.000Z', summary: '新增材质分区与剪影评注。' }
+];
+
+export const INITIAL_CANVAS_COMMENTS: CanvasCommentThread[] = [
+  {
+    id: 'comment-canvas-project-001-1',
+    canvasId: 'canvas-project-001',
+    x: 62,
+    y: 44,
+    authorName: '赵云',
+    body: '@慕也 这里的冰裂纹可以再硬一些。',
+    createdAt: '2026-07-04T11:20:00.000Z',
+    resolved: false,
+    replies: [
+      { id: 'reply-canvas-project-001-1', authorName: CURRENT_USER_NAME, body: '收到，我会放进下一轮风格稿。', createdAt: '2026-07-04T11:26:00.000Z' }
+    ]
+  }
+];
+
+export const INITIAL_CANVAS_ELEMENTS: CanvasElement[] = [
+  {
+    id: 'element-canvas-project-001-text-1',
+    canvasId: 'canvas-project-001',
+    kind: 'text',
+    x: 18,
+    y: 18,
+    width: 260,
+    height: 92,
+    title: '主视觉方向',
+    body: '冰河压迫感 + 三国武将辨识度，优先拉开冷暖对比。',
+    color: '#0f766e',
+    createdByName: CURRENT_USER_NAME,
+    createdAt: '2026-07-04T10:08:00.000Z'
+  },
+  {
+    id: 'element-canvas-project-001-image-1',
+    canvasId: 'canvas-project-001',
+    kind: 'image',
+    x: 48,
+    y: 42,
+    width: 220,
+    height: 150,
+    title: '冰裂纹参考',
+    body: '从盔甲边缘向肩部延展，保持硬朗切面。',
+    color: '#1d4ed8',
+    createdByName: '赵云',
+    createdAt: '2026-07-04T11:18:00.000Z'
+  },
+  {
+    id: 'element-canvas-project-002-model-1',
+    canvasId: 'canvas-project-002',
+    kind: 'model',
+    x: 22,
+    y: 20,
+    width: 240,
+    height: 150,
+    title: '肩甲高模预览',
+    body: '关注肩部剪影和胸甲转折，不做材质定稿。',
+    color: '#7c3aed',
+    createdByName: '赵云',
+    createdAt: '2026-07-05T11:22:00.000Z'
+  },
+  {
+    id: 'element-canvas-personal-001-audio-1',
+    canvasId: 'canvas-personal-001',
+    kind: 'audio',
+    x: 58,
+    y: 54,
+    width: 250,
+    height: 92,
+    title: '灵感语音备注',
+    body: '剪影需要更强的远读识别度。',
+    color: '#b45309',
+    createdByName: CURRENT_USER_NAME,
+    createdAt: '2026-07-03T17:18:00.000Z'
+  }
+];
