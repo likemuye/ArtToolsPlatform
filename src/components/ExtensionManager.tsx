@@ -9,7 +9,6 @@ import {
   RefreshCw, 
   HelpCircle,
   Clock,
-  Play,
   X,
   ChevronDown,
   Check,
@@ -118,27 +117,21 @@ export default function ExtensionManager({
     }, 1200);
   };
 
-  // Functional simulated restart of DCC to activate extensions
-  const performDccRestart = (dccId: AppId) => {
+  // PixGo only detects DCC state; users restart external DCC apps themselves.
+  const confirmManualDccRestart = (dccId: AppId) => {
     setRebootNeededExt(null);
     const dcc = getDccApp(dccId);
     if (!dcc) return;
 
-    addLog(`🔄 正在自动呼叫外部命令重启 ${dcc.name} 主实例...`, 'info');
-    
-    // Set app to Connecting (simulates restart process)
-    setApps(prev => prev.map(a => {
-      if (a.id === dccId) {
-        return { ...a, status: AppStatus.Connecting };
-      }
-      return a;
-    }));
+    addLog(`🔍 已记录 ${dcc.name} 手动重启确认，正在检测插件激活状态...`, 'info');
+    setApps(prev => prev.map(a => (
+      a.id === dccId ? { ...a, status: AppStatus.Connecting } : a
+    )));
 
-    // Timeout simulations
     setTimeout(() => {
       setApps(prev => prev.map(a => {
         if (a.id === dccId) {
-          addLog(`⚡ ${dcc.name} 重新挂载完毕，全部待加载插件已变更为【已激活】就绪状态！`, 'success');
+          addLog(`✅ ${dcc.name} 状态检测通过，全部待加载插件已变更为【已激活】就绪状态！`, 'success');
           return { ...a, status: AppStatus.Connected };
         }
         return a;
@@ -482,7 +475,7 @@ export default function ExtensionManager({
                                 <div className="absolute right-0 bottom-full mb-1.5 hidden group-hover/tip:block bg-black border border-red-500/50 p-2.5 rounded shadow-2xl z-50 w-52 text-zinc-300 leading-tight">
                                   <div className="flex items-start gap-1 p-0.5">
                                     <AlertCircle size={12} className="text-red-400 shrink-0 mt-0.5" />
-                                    <span>请先在应用管理中 <b>启动并且连接</b> 【{ext.dccId.toUpperCase()}】主程序，系统检测到端口通顺后方可下发插件安装包。</span>
+                                    <span>请先手动打开 【{ext.dccId.toUpperCase()}】主程序，并在应用管理中点击<b>检测状态</b>，确认端口通顺后方可下发插件安装包。</span>
                                   </div>
                                 </div>
                               </div>
@@ -504,7 +497,7 @@ export default function ExtensionManager({
                                 className="bg-amber-900/20 hover:bg-amber-900/40 border border-amber-600/60 text-amber-400 px-2 py-0.5 rounded text-[10px] cursor-pointer mr-1.5 flex items-center gap-0.5 transition-colors"
                               >
                                 <RefreshCw size={10} />
-                                重启 DCC
+                                重启后确认
                               </button>
                             )}
                             <button
@@ -527,7 +520,7 @@ export default function ExtensionManager({
         </>
       )}
 
-      {/* DETAILED MODAL 1: REBOOT REQUIRED PROMPT AND SIMULATION (F5) */}
+      {/* DETAILED MODAL 1: REBOOT REQUIRED PROMPT (F5) */}
       {rebootNeededExt && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-[#0c0c0e] border border-[#27272a] rounded p-6 max-w-md w-full font-sans">
@@ -536,7 +529,7 @@ export default function ExtensionManager({
                 <Clock size={22} className="animate-pulse" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white font-display">已部署完成 · 重启生效</h3>
+                <h3 className="text-base font-bold text-white font-display">已部署完成 · 手动重启生效</h3>
                 <p className="text-xs text-zinc-400 mt-1">
                   插件 <span className="text-[#00ff00] font-bold">{rebootNeededExt.name}</span> 已经复制到系统对应目录。
                 </p>
@@ -547,7 +540,7 @@ export default function ExtensionManager({
               根据 DCC 应用兼容手册，<b>{rebootNeededExt.dccId.toUpperCase()}</b> 不支持插件热插拔挂载（冷启动限制）。
               <br/>
               <br/>
-              您可以<b>点击下方一键按钮重启宿主软件</b>，平台会自动存储必要缓存，并在 3 秒内自动执行安全复启，唤起插件：
+              请您在本机手动重启宿主软件。完成后点击下方确认按钮，PixGo 仅执行状态检测与插件激活标记，不会启动或重启外部 DCC 进程：
             </div>
 
             <div className="flex gap-3 justify-end font-mono">
@@ -555,14 +548,14 @@ export default function ExtensionManager({
                 onClick={() => setRebootNeededExt(null)}
                 className="px-4 py-1.5 border border-[#27272a] hover:border-zinc-500 text-zinc-400 hover:text-white rounded text-xs transition-colors btn-secondary"
               >
-                稍后我手动重启
+                稍后确认
               </button>
               <button
-                onClick={() => performDccRestart(rebootNeededExt.dccId)}
+                onClick={() => confirmManualDccRestart(rebootNeededExt.dccId)}
                 className="px-5 py-1.5 bg-[#00ff00] text-black font-semibold rounded text-xs transition-all hover:shadow-[0_0_10px_rgba(0,255,0,0.3)] glow-btn flex items-center gap-1 font-bold cursor-pointer btn-special"
               >
                 <RefreshCw size={12} className="animate-spin text-black" />
-                立即重启 DCC 软件
+                已手动重启，检测状态
               </button>
             </div>
           </div>

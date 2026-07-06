@@ -119,7 +119,9 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
   const [roleDraft, setRoleDraft] = useState<ProjectRole>('member');
   const [isAddSubmitAttempted, setIsAddSubmitAttempted] = useState<boolean>(false);
 
-  // Remove confirmation + asset share-scope modal
+  // Role config / remove confirmation / asset share-scope modal
+  const [roleConfigTarget, setRoleConfigTarget] = useState<ProjectMember | null>(null);
+  const [roleConfigDraft, setRoleConfigDraft] = useState<ProjectRole>('member');
   const [pendingRemove, setPendingRemove] = useState<ProjectMember | null>(null);
   const [viewingShareFolderId, setViewingShareFolderId] = useState<string | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
@@ -228,9 +230,25 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
     setEmailDraft(userEmail);
   };
 
-  const handleChangeRole = (target: ProjectMember) => {
+  const openRoleConfig = (target: ProjectMember) => {
     if (!isCurrentUserAdmin) return;
-    const nextRole: ProjectRole = target.role === 'admin' ? 'member' : 'admin';
+    setRoleConfigTarget(target);
+    setRoleConfigDraft(target.role);
+  };
+
+  const closeRoleConfig = () => {
+    setRoleConfigTarget(null);
+  };
+
+  const confirmRoleConfig = () => {
+    if (!roleConfigTarget) return;
+    const target = roleConfigTarget;
+    const nextRole = roleConfigDraft;
+
+    if (nextRole === target.role) {
+      closeRoleConfig();
+      return;
+    }
 
     if (nextRole === 'member') {
       const error = guardAdminAction(target);
@@ -248,6 +266,7 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
     }));
     const verb = nextRole === 'admin' ? '提升为管理员' : '降级为项目成员';
     addLog(`🔁 已将【${target.name}】${verb}。`, 'success');
+    closeRoleConfig();
   };
 
   const requestRemoveMember = (target: ProjectMember) => {
@@ -381,12 +400,12 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
   return (
     <div className="flex h-full min-h-0 flex-1 overflow-hidden font-sans">
       {/* Left: project group selector */}
-      <aside className="flex w-64 shrink-0 flex-col border-r border-[#27272a] bg-[#0c0c0e]/40">
-        <div className="flex items-center gap-2 border-b border-[#27272a] px-4 py-3">
+      <aside className="permission-sidebar flex w-64 shrink-0 flex-col border-r border-[#27272a] bg-[#0c0c0e]/40">
+        <div className="permission-sidebar-header flex items-center gap-2 border-b border-[#27272a] px-4 py-3">
           <ShieldCheck size={16} className="text-[#00ff00]" />
           <span className="text-xs font-bold text-white">权限管理</span>
         </div>
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="permission-sidebar-body flex-1 overflow-y-auto p-3">
           <label className="mb-1 block pl-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">项目组</label>
           <div className="space-y-1">
             {PROJECT_GROUPS.map(group => {
@@ -397,10 +416,10 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
                   key={group.id}
                   type="button"
                   onClick={() => setSelectedProjectId(group.id)}
-                  className={`flex w-full items-center justify-between gap-2 rounded border-l-2 px-3 py-2 text-left transition-all ${
+                  className={`permission-project-btn flex w-full items-center justify-between gap-2 rounded border-l-2 border-transparent px-3 py-2 text-left shadow-none transition-all ${
                     isActive
-                      ? 'border-[#00ff00] bg-[#18181b] text-white'
-                      : 'border-transparent text-zinc-400 hover:bg-[#0c0c0e] hover:text-white'
+                      ? 'is-active bg-[#18181b] text-white'
+                      : 'text-zinc-400 hover:bg-[#0c0c0e] hover:text-white'
                   }`}
                 >
                   <span className="min-w-0 flex-1 truncate text-xs font-medium">{group.name}</span>
@@ -437,7 +456,7 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
-                  className={`inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors ${
+                  className={`permission-tab-btn inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs shadow-none transition-colors ${
                     isActive
                       ? 'border-[#00ff00] text-white'
                       : 'border-transparent text-zinc-500 hover:text-zinc-300'
@@ -502,8 +521,8 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
                               <button
                                 type="button"
                                 disabled={!isCurrentUserAdmin}
-                                title={isCurrentUserAdmin ? (member.role === 'admin' ? '降级为项目成员' : '提升为管理员') : '仅管理员可操作'}
-                                onClick={() => handleChangeRole(member)}
+                                title={isCurrentUserAdmin ? '配置成员角色' : '仅管理员可操作'}
+                                onClick={() => openRoleConfig(member)}
                                 className="inline-flex items-center gap-1 rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-800 disabled:hover:text-zinc-300"
                               >
                                 权限配置
@@ -663,6 +682,69 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
               >
                 <Check size={13} />
                 确认添加
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Role config modal */}
+      {roleConfigTarget && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4" onClick={closeRoleConfig}>
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-lg border border-[#27272a] bg-[#0a0a0c] shadow-2xl"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[#27272a] px-4 py-3">
+              <span className="text-sm font-bold text-white">权限配置</span>
+              <button type="button" onClick={closeRoleConfig} className="text-zinc-500 hover:text-white">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3 px-4 py-4">
+              <div className="rounded border border-zinc-800 bg-black px-3 py-2.5">
+                <p className="text-xs text-zinc-200">{roleConfigTarget.name}</p>
+                <p className="mt-1 font-mono text-[10px] text-zinc-500">{roleConfigTarget.email}</p>
+              </div>
+
+              <div>
+                <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-zinc-500">角色</label>
+                <div className="flex gap-2">
+                  {(['member', 'admin'] as ProjectRole[]).map(role => (
+                    <button
+                      key={role}
+                      type="button"
+                      onClick={() => setRoleConfigDraft(role)}
+                      className={`flex-1 rounded border px-3 py-2 text-xs transition-colors ${
+                        roleConfigDraft === role
+                          ? 'border-[#00ff00]/60 bg-[#00ff00]/10 text-[#00ff00]'
+                          : 'border-zinc-800 bg-black text-zinc-400 hover:border-zinc-700'
+                      }`}
+                    >
+                      {ROLE_LABELS[role]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-[#27272a] px-4 py-3">
+              <button
+                type="button"
+                onClick={closeRoleConfig}
+                className="rounded border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmRoleConfig}
+                disabled={roleConfigDraft === roleConfigTarget.role}
+                className="inline-flex items-center gap-1.5 rounded bg-[#00ff00] px-3 py-1.5 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Check size={13} />
+                确认修改
               </button>
             </div>
           </div>

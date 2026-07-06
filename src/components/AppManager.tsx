@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Monitor,
   Download,
-  Play,
   RotateCw,
   AlertCircle,
   Folder,
@@ -165,11 +164,12 @@ export default function AppManager({
     addLog(`⚠️ 已取消下载 ${app.name}，并清空本地临时分块文件。`, 'warning');
   };
 
-  // Connected Launch - F3
-  const launchApp = (app: AppConfig) => {
+  // DCC status detection only: PixGo does not launch external DCC processes.
+  const detectAppStatus = (app: AppConfig) => {
     if (app.status === AppStatus.NotReady) return;
 
-    addLog(`🚀 正在呼叫进程并检测 ${app.name} 端口响应中...`, 'info');
+    const previousStatus = app.status;
+    addLog(`🔍 正在检测 ${app.name} 的本地进程与端口状态...`, 'info');
     setApps(prev => prev.map(a => {
       if (a.id === app.id) {
         return { ...a, status: AppStatus.Connecting };
@@ -177,34 +177,23 @@ export default function AppManager({
       return a;
     }));
 
-    // Takes 2 seconds to transition to connected
     setTimeout(() => {
       setApps(prev => prev.map(a => {
         if (a.id === app.id) {
-          addLog(`⚡ ${app.name} 成功连接！平台专属本地端口已就位，可以无缝挂载项目拓展。`, 'success');
-          return { ...a, status: AppStatus.Connected };
+          if (previousStatus === AppStatus.Connected) {
+            addLog(`✅ ${app.name} 仍处于已连接状态，端口响应正常。`, 'success');
+            return { ...a, status: AppStatus.Connected };
+          }
+          if (previousStatus === AppStatus.ConnectionFailed) {
+            addLog(`⚠️ ${app.name} 端口仍未响应，请确认 DCC 已在本机打开并启用桥接服务后重新检测。`, 'warning');
+            return { ...a, status: AppStatus.ConnectionFailed };
+          }
+          addLog(`ℹ️ ${app.name} 已安装，但未检测到运行中的 DCC 端口，保持离线状态。`, 'info');
+          return { ...a, status: AppStatus.InstalledOffline };
         }
         return a;
       }));
-    }, 2000);
-  };
-
-  // Reconnect after a failed connection
-  const reconnectApp = (app: AppConfig) => {
-    addLog(`🔄 正在尝试重新连接 ${app.name}，重新探测本地端口...`, 'info');
-    setApps(prev => prev.map(a => (
-      a.id === app.id ? { ...a, status: AppStatus.Connecting } : a
-    )));
-
-    setTimeout(() => {
-      setApps(prev => prev.map(a => {
-        if (a.id === app.id) {
-          addLog(`⚡ ${app.name} 重新连接成功！端口握手完毕，已恢复在线。`, 'success');
-          return { ...a, status: AppStatus.Connected };
-        }
-        return a;
-      }));
-    }, 2000);
+    }, 1500);
   };
 
   // Manual Path validation - F2
@@ -455,7 +444,7 @@ export default function AppManager({
                     ) : (
                       <div className="flex items-center gap-1.5 text-[10px] font-mono text-amber-500/70">
                         <AlertCircle size={11} className="shrink-0" />
-                        <span>路径缺失，请手动检测或连接该 DCC</span>
+                        <span>路径缺失，请手动检测该 DCC</span>
                       </div>
                     )}
                   </div>
@@ -484,7 +473,7 @@ export default function AppManager({
                       {app.status === AppStatus.Connecting && (
                         <span className="text-[11px] font-mono bg-zinc-900 border border-[#00ff00]/40 text-[#00ff00] px-2 py-0.5 rounded-full flex items-center gap-1.5 animate-pulse">
                           <RotateCw size={11} className="animate-spin text-[#00ff00]" />
-                          连接中
+                          检测中
                         </span>
                       )}
                       {app.status === AppStatus.Connected && (
@@ -579,14 +568,14 @@ export default function AppManager({
                       </>
                     )}
 
-                    {/* Launch button */}
+                    {/* Status detection button */}
                     {app.status === AppStatus.InstalledOffline && (
                       <button
-                        onClick={() => launchApp(app)}
-                        className="dcc-launch-btn px-4 py-1.5 text-xs font-bold rounded cursor-pointer transition-all flex items-center gap-1.5"
+                        onClick={() => detectAppStatus(app)}
+                        className="dcc-detect-btn px-4 py-1.5 text-xs font-bold rounded cursor-pointer transition-all flex items-center gap-1.5"
                       >
-                        <Play size={13} fill="currentColor" />
-                        启动软件
+                        <Search size={13} />
+                        检测状态
                       </button>
                     )}
 
@@ -601,18 +590,18 @@ export default function AppManager({
                         }`}
                       >
                         <RotateCw size={12} className={`animate-spin ${theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}`} />
-                        进程加载中...
+                        状态检测中...
                       </button>
                     )}
 
-                    {/* ConnectionFailed: reconnect */}
+                    {/* ConnectionFailed: re-detect */}
                     {app.status === AppStatus.ConnectionFailed && (
                       <button
-                        onClick={() => reconnectApp(app)}
+                        onClick={() => detectAppStatus(app)}
                         className="bg-zinc-950 hover:bg-[#00ff00]/10 border border-[#00ff00]/60 text-[#00ff00] px-4 py-1.5 text-xs font-bold rounded transition-all flex items-center gap-1.5 cursor-pointer"
                       >
                         <RotateCw size={12} />
-                        重新连接
+                        重新检测
                       </button>
                     )}
                   </div>
@@ -699,7 +688,7 @@ export default function AppManager({
             </div>
             
             <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
-              请选择本地硬盘中已安装的项目官方商业软件包所在根目录。Launcher 将检索目录下可执行文件的注册状态并进行安全桥接。
+              请选择本地硬盘中已安装的项目官方商业软件包所在根目录。PixGo 将检索目录下可执行文件的注册状态，不会启动外部 DCC 进程。
             </p>
 
             <div className="border border-[#27272a] bg-zinc-950 rounded mb-5 p-3">
@@ -764,7 +753,7 @@ export default function AppManager({
                     : (theme === 'light' ? 'bg-slate-100 border border-slate-200 text-slate-450 cursor-not-allowed' : 'bg-[#18181c] border border-zinc-850 text-zinc-500 cursor-not-allowed')
                 }`}
               >
-                验证注册并建立连接
+                验证注册状态
               </button>
             </div>
           </div>
@@ -832,7 +821,7 @@ export default function AppManager({
               <div className="bg-zinc-950 border border-zinc-900 p-4 rounded text-zinc-300 leading-relaxed font-mono">
                 💡 <span className="text-amber-500 font-bold">升级提示：</span><br/>
                 外部正版商业套件 (如 PS, Maya, 3ds Max) 受授权密钥库及企业域网络控制。
-                Art Launcher 无法一键热升级。通常需 IT 网管部门进行后台分发。
+                PixGo 无法一键热升级。通常需 IT 网管部门进行后台分发。
                 <br/>
                 <br/>
                 您可以通过下方快捷渠道提交工单，单系统将自动匹配您的工位及IP地址，IT 专员将在 1 个工作日内在线协助为您升级安装至 IT 注册许可包。

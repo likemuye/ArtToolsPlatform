@@ -9,8 +9,6 @@ import {
   Sun,
   Moon,
   Monitor,
-  PanelLeftClose,
-  PanelLeftOpen,
   ShieldCheck,
   LogOut,
   Check,
@@ -19,6 +17,7 @@ import {
 } from 'lucide-react';
 import { SpaceId, ProjectSpace, AppConfig, AuthSession } from '../types';
 import DccMonitor from './DccMonitor';
+import { Tooltip } from './Tooltip';
 
 interface SidebarProps {
   currentTab: string;
@@ -51,10 +50,13 @@ export default function Sidebar({
   session,
   onLogout
 }: SidebarProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  // V1 sharing mode keeps the primary navigation collapsed; expansion is disabled for now.
+  const isCollapsed = true;
+  const themePickerRef = useRef<HTMLDivElement>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileInfoOpen, setProfileInfoOpen] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
 
   const isLight = theme === 'light';
@@ -73,6 +75,17 @@ export default function Sidebar({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [profileMenuOpen]);
+
+  useEffect(() => {
+    if (!themeMenuOpen) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (themePickerRef.current && !themePickerRef.current.contains(event.target as Node)) {
+        setThemeMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [themeMenuOpen]);
 
   const THEME_OPTIONS: Array<{ value: 'light' | 'dark' | 'system'; label: string; icon: typeof Sun }> = [
     { value: 'light', label: '浅色', icon: Sun },
@@ -106,22 +119,11 @@ export default function Sidebar({
             <div className="w-3 h-3 bg-[#00ff00] animate-pulse"></div>
             {!isCollapsed && (
               <span className={`font-display font-bold tracking-widest text-sm ${theme === 'light' ? 'text-zinc-900' : 'text-[#f4f4f5]'}`}>
-                ARTLAUNCHER <span className="text-[#00ff00] font-mono text-xs font-normal">V1</span>
+                PixGo <span className="text-[#00ff00] font-mono text-xs font-normal">V1</span>
               </span>
             )}
           </div>
-          {!isCollapsed && (
-            <div className="text-[10px] bg-[#1c1c1f] px-1.5 py-0.5 rounded text-zinc-400 font-mono">
-              WIN-64
-            </div>
-          )}
-          <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            title={isCollapsed ? '展开导航' : '收起导航'}
-            className={`${isCollapsed ? 'absolute right-1.5 top-1/2 -translate-y-1/2' : ''} inline-flex h-7 w-7 items-center justify-center text-zinc-500 hover:text-[#00ff00] transition-colors cursor-pointer`}
-          >
-            {isCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
-          </button>
+          {/* Expand/collapse control intentionally disabled in V1 sharing mode. */}
         </div>
 
         {/* Navigation Tabs - F1 - F10 */}
@@ -178,39 +180,75 @@ export default function Sidebar({
 
         {/* Theme selector: 浅色 / 深色 / 跟随系统 */}
         {isCollapsed ? (
-          <button
-            onClick={toggleTheme}
-            title="切换显示模式"
-            className="mb-1.5 h-14 w-14 mx-auto rounded border border-[#27272a] hover:border-[#00ff00] text-zinc-400 hover:text-[#00ff00] transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5"
-          >
-            {themePref === 'system' ? (
-              <Monitor size={14} className="text-zinc-400" />
-            ) : theme === 'dark' ? (
-              <Sun size={14} className="text-amber-500" />
-            ) : (
-              <Moon size={14} className="text-indigo-400" />
+          <div className="relative mb-1.5" ref={themePickerRef}>
+            <Tooltip content="切换显示模式" placement="right">
+              <button
+                onClick={() => setThemeMenuOpen(prev => !prev)}
+                className={`h-14 w-14 mx-auto rounded border transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                  themeMenuOpen
+                    ? 'border-[#00ff00] text-[#00ff00] bg-[#00ff00]/5'
+                    : 'border-[#27272a] hover:border-[#00ff00] text-zinc-400 hover:text-[#00ff00]'
+                }`}
+              >
+                {themePref === 'system' ? (
+                  <Monitor size={14} className={theme === 'light' ? 'text-sky-500' : 'text-zinc-300'} />
+                ) : theme === 'dark' ? (
+                  <Sun size={14} className="text-amber-500" />
+                ) : (
+                  <Moon size={14} className="text-indigo-400" />
+                )}
+                <span className="text-[10px] font-sans">{themePref === 'system' ? '系统' : theme === 'dark' ? '深色' : '浅色'}</span>
+              </button>
+            </Tooltip>
+
+            {themeMenuOpen && (
+              <div className={`absolute left-full bottom-0 ml-2 z-[80] w-28 overflow-hidden rounded-md border shadow-2xl ${
+                isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#121214]'
+              }`}>
+                {THEME_OPTIONS.map(opt => {
+                  const OptIcon = opt.icon;
+                  const active = themePref === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => {
+                        setThemePreference(opt.value);
+                        setThemeMenuOpen(false);
+                      }}
+                      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] font-sans transition-colors ${
+                        active
+                          ? (isLight ? 'bg-emerald-50 text-[#00795c] font-semibold' : 'bg-[#00ff00]/10 text-[#00ff00] font-semibold')
+                          : (isLight ? 'text-slate-600 hover:bg-slate-50 hover:text-slate-800' : 'text-zinc-400 hover:bg-[#18181b] hover:text-zinc-200')
+                      }`}
+                    >
+                      <OptIcon size={13} />
+                      <span className="flex-1">{opt.label}</span>
+                      {active && <Check size={12} />}
+                    </button>
+                  );
+                })}
+              </div>
             )}
-            <span className="text-[10px] font-sans">{themePref === 'system' ? '系统' : theme === 'dark' ? '浅色' : '深色'}</span>
-          </button>
+          </div>
         ) : (
           <div className={`mb-3 grid grid-cols-3 gap-1 rounded-md border p-1 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-[#27272a] bg-[#121214]'}`}>
             {THEME_OPTIONS.map(opt => {
               const OptIcon = opt.icon;
               const active = themePref === opt.value;
               return (
-                <button
-                  key={opt.value}
-                  onClick={() => setThemePreference(opt.value)}
-                  title={opt.label}
-                  className={`flex flex-col items-center justify-center gap-0.5 rounded py-1.5 text-[9px] font-sans transition-colors cursor-pointer ${
-                    active
-                      ? (isLight ? 'bg-white text-[#00795c] shadow-sm font-bold' : 'bg-[#00ff00]/12 text-[#00ff00] font-bold')
-                      : (isLight ? 'text-slate-500 hover:text-slate-700' : 'text-zinc-500 hover:text-zinc-300')
-                  }`}
-                >
-                  <OptIcon size={12} />
-                  {opt.label}
-                </button>
+                <Tooltip key={opt.value} content={opt.label} placement="top">
+                  <button
+                    onClick={() => setThemePreference(opt.value)}
+                    className={`flex flex-col items-center justify-center gap-0.5 rounded py-1.5 text-[9px] font-sans transition-colors cursor-pointer ${
+                      active
+                        ? (isLight ? 'bg-white text-[#00795c] shadow-sm font-bold' : 'bg-[#00ff00]/12 text-[#00ff00] font-bold')
+                        : (isLight ? 'text-slate-500 hover:text-slate-700' : 'text-zinc-500 hover:text-zinc-300')
+                    }`}
+                  >
+                    <OptIcon size={12} />
+                    {opt.label}
+                  </button>
+                </Tooltip>
               );
             })}
           </div>
@@ -218,28 +256,29 @@ export default function Sidebar({
 
         {/* Profile: avatar + name + department，点击弹出菜单 */}
         <div className="relative" ref={profileRef}>
-          <button
-            onClick={() => setProfileMenuOpen(prev => !prev)}
-            title={`${userName}${userDept ? ' · ' + userDept : ''}`}
-            className={`group w-full rounded border transition-colors cursor-pointer ${
-              profileMenuOpen
-                ? (isLight ? 'border-[#00C800] bg-emerald-50' : 'border-[#00ff00]/50 bg-[#00ff00]/5')
-                : (isLight ? 'border-slate-200 bg-white hover:border-slate-300' : 'border-[#27272a] bg-[#0c0c0e] hover:border-zinc-700')
-            } ${isCollapsed ? 'h-14 w-14 mx-auto flex items-center justify-center' : 'flex items-center gap-2.5 px-2.5 py-2'}`}
-          >
-            <span
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
-              style={{ background: 'linear-gradient(135deg,#00C800,#0891b2)' }}
+          <Tooltip content={`${userName}${userDept ? ' · ' + userDept : ''}`} placement={isCollapsed ? 'right' : 'top'} disabled={!isCollapsed}>
+            <button
+              onClick={() => setProfileMenuOpen(prev => !prev)}
+              className={`group w-full rounded transition-colors cursor-pointer ${
+                profileMenuOpen
+                  ? (isLight ? 'bg-emerald-50' : 'bg-[#00ff00]/5')
+                  : (isLight ? 'bg-white hover:bg-slate-50' : 'bg-[#0c0c0e] hover:bg-[#18181b]')
+              } ${isCollapsed ? 'h-14 w-14 mx-auto flex items-center justify-center' : 'flex items-center gap-2.5 px-2.5 py-2'}`}
             >
-              {userName.charAt(0)}
-            </span>
-            {!isCollapsed && (
-              <span className="min-w-0 flex-1 text-left">
-                <span className={`block truncate text-xs font-bold font-sans ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>{userName}</span>
-                <span className={`block truncate text-[10px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>{userDept || userEmail}</span>
+              <span
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
+                style={{ background: 'linear-gradient(135deg,#00C800,#0891b2)' }}
+              >
+                {userName.charAt(0)}
               </span>
-            )}
-          </button>
+              {!isCollapsed && (
+                <span className="min-w-0 flex-1 text-left">
+                  <span className={`block truncate text-xs font-bold font-sans ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>{userName}</span>
+                  <span className={`block truncate text-[10px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>{userDept || userEmail}</span>
+                </span>
+              )}
+            </button>
+          </Tooltip>
 
           {/* Profile dropdown menu */}
           {profileMenuOpen && (

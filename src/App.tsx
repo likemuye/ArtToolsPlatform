@@ -105,9 +105,9 @@ export default function App() {
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [consoleExpanded, setConsoleExpanded] = useState<boolean>(false);
 
-  // Initializing default launcher notifications
+  // Initializing default client notifications
   useEffect(() => {
-    addLog('🖥️ Art Launcher Client v1.0.4 初始化启动...', 'info');
+    addLog('🖥️ PixGo Client v1.0.4 初始化启动...', 'info');
     addLog('🔍 自动检索物理注册表: 发现 Blender 4.1.0 路径及 Photoshop v24.0.', 'info');
     addLog('🔍 自动检索物理注册表: Autodesk Maya 2024 安装定位就绪。', 'info');
     addLog('⚠️ 警告: Autodesk 3ds Max 运行文件校验失败，状态变更为【未就绪】，请配置手工桥接。', 'warning');
@@ -341,7 +341,7 @@ export default function App() {
           {renderTabContent()}
         </div>
 
-        {/* 3. Retractable Launcher System Console Drawer at Bottom */}
+        {/* 3. Retractable PixGo System Console Drawer at Bottom */}
         <div className="shrink-0 bg-[#070708] border-t border-[#1c1c1f] flex flex-col z-40 transition-all font-mono">
           
           {/* Console Header Bar */}

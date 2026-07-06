@@ -1,7 +1,7 @@
 # PixGo 设计规范（Design Spec）
 
 > 反向梳理自当前代码实现（`src/index.css` + 各组件 className 高频统计）。本文件描述「现状即规范」，供后续 UI 开发对齐。
-> 平台名：艺术工具 DCC 启动与资产平台（窗口标题），分享版本名 PixGo。技术栈：React 19 + Vite + Tailwind v4。
+> 平台名：艺术工具 DCC 连接检测与资产平台（窗口标题），分享版本名 PixGo。技术栈：React 19 + Vite + Tailwind v4。
 
 ---
 
@@ -73,7 +73,7 @@
 | Token | 字体族 | 用途 |
 |---|---|---|
 | `font-sans` | **Inter** | 正文 / UI 默认 |
-| `font-display` | **Space Grotesk** | 标题 / 品牌字（如 ARTLAUNCHER、区块大标题） |
+| `font-display` | **Space Grotesk** | 标题 / 品牌字（如 PixGo、区块大标题） |
 | `font-mono` | **JetBrains Mono** | 数据 / 标签 / 计数 / 格式后缀 / 日志 / 邮箱等技术信息 |
 
 ### 字号阶梯（实际高频用法）

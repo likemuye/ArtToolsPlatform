@@ -25,7 +25,7 @@ export enum AppId {
 export enum AppStatus {
   NotReady = 'NOT_READY', // 未就绪
   InstalledOffline = 'INSTALLED_OFFLINE', // 已安装·离线
-  Connecting = 'CONNECTING', // 连接中
+  Connecting = 'CONNECTING', // 检测中
   Connected = 'CONNECTED', // 已连接
   ConnectionFailed = 'CONNECTION_FAILED' // 连接失败
 }
@@ -102,6 +102,7 @@ export interface AssetFolder {
   id: string;
   name: string;
   parentId: string | null;
+  createdAt?: string;
 }
 
 export interface DownloadTask {

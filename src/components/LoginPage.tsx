@@ -127,7 +127,7 @@ export default function LoginPage({ theme, onLogin }: LoginPageProps) {
         <div className="mb-7 flex items-center gap-2.5">
           <div className="h-3.5 w-3.5 bg-[#00ff00] animate-pulse"></div>
           <span className={`font-display text-base font-bold tracking-widest ${isLight ? 'text-slate-900' : 'text-white'}`}>
-            ARTLAUNCHER <span className="font-mono text-xs font-normal text-[#00ff00]">V1</span>
+            PixGo <span className="font-mono text-xs font-normal text-[#00ff00]">V1</span>
           </span>
         </div>
 

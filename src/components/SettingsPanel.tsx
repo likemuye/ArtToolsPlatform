@@ -261,7 +261,7 @@ export default function SettingsPanel({
                   一键模拟 DCC 进程因异常崩溃断开
                 </button>
                 <span className="text-[10px] text-zinc-500 leading-normal block mt-1">
-                  ※ 选中启动一个或多个 DCC 连接后，点击此键模拟宿主崩溃退出。Launcher 会在 10s 内探测到进程静止，并全自动将卡片写回“已安装·离线”状态。
+                  ※ 当一个或多个 DCC 已由用户手动打开并检测为已连接后，点击此键模拟宿主崩溃退出。PixGo 会在 10s 内探测到进程静止，并全自动将卡片写回“已安装·离线”状态。
                 </span>
               </div>
             </div>

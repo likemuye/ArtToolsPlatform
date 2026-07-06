@@ -2,13 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Monitor,
   RotateCw,
-  Play,
   AlertCircle,
   Folder,
   CheckCircle2,
   X
 } from 'lucide-react';
 import { AppId, AppStatus, AppConfig } from '../types';
+import { Tooltip } from './Tooltip';
 
 // Per-DCC brand identity for the list lettermark.
 const DCC_LOGO: Record<string, { label: string; color: string }> = {
@@ -57,8 +57,6 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
   }, [open]);
 
   const connectedCount = apps.filter(a => a.status === AppStatus.Connected).length;
-  const offlineCount = apps.filter(a => a.status === AppStatus.InstalledOffline || a.status === AppStatus.Connecting).length;
-  const downCount = apps.filter(a => a.status === AppStatus.NotReady || a.status === AppStatus.ConnectionFailed).length;
   const totalCount = apps.length;
 
   // Re-detect all DCC states (header refresh): briefly flips into a scanning state.
@@ -72,32 +70,27 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
     }, 1500);
   };
 
-  const launchApp = (app: AppConfig) => {
-    addLog(`🚀 正在呼叫进程并检测 ${app.name} 端口响应中...`, 'info', { toast: false });
+  const detectAppStatus = (app: AppConfig) => {
+    const previousStatus = app.status;
+    addLog(`🔍 正在检测 ${app.name} 的本地进程与端口状态...`, 'info', { toast: false });
     setApps(prev => prev.map(a => (a.id === app.id ? { ...a, status: AppStatus.Connecting } : a)));
     setTimeout(() => {
       setApps(prev => prev.map(a => {
         if (a.id === app.id) {
-          addLog(`⚡ ${app.name} 成功连接！平台专属本地端口已就位。`, 'success');
-          return { ...a, status: AppStatus.Connected };
+          if (previousStatus === AppStatus.Connected) {
+            addLog(`✅ ${app.name} 仍处于已连接状态，端口响应正常。`, 'success');
+            return { ...a, status: AppStatus.Connected };
+          }
+          if (previousStatus === AppStatus.ConnectionFailed) {
+            addLog(`⚠️ ${app.name} 端口仍未响应，请确认 DCC 已在本机打开并启用桥接服务后重新检测。`, 'warning');
+            return { ...a, status: AppStatus.ConnectionFailed };
+          }
+          addLog(`ℹ️ ${app.name} 已安装，但未检测到运行中的 DCC 端口，保持离线状态。`, 'info');
+          return { ...a, status: AppStatus.InstalledOffline };
         }
         return a;
       }));
-    }, 2000);
-  };
-
-  const reconnectApp = (app: AppConfig) => {
-    addLog(`🔄 正在尝试重新连接 ${app.name}，重新探测本地端口...`, 'info', { toast: false });
-    setApps(prev => prev.map(a => (a.id === app.id ? { ...a, status: AppStatus.Connecting } : a)));
-    setTimeout(() => {
-      setApps(prev => prev.map(a => {
-        if (a.id === app.id) {
-          addLog(`⚡ ${app.name} 重新连接成功！端口握手完毕，已恢复在线。`, 'success');
-          return { ...a, status: AppStatus.Connected };
-        }
-        return a;
-      }));
-    }, 2000);
+    }, 1500);
   };
 
   const confirmPath = () => {
@@ -122,38 +115,39 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
   return (
     <div className="relative" ref={rootRef}>
       {/* Persistent trigger */}
-      <button
-        type="button"
-        onClick={() => setOpen(prev => !prev)}
-        title={`DCC 连接状态 ${connectedCount}/${totalCount}`}
-        className={`group w-full rounded border transition-all cursor-pointer ${
-          open
-            ? (isLight ? 'border-[#00C800] bg-emerald-50' : 'border-[#00ff00]/60 bg-[#00ff00]/5')
-            : (isLight ? 'border-slate-200 bg-white hover:border-[#00C800]' : 'border-[#27272a] bg-[#0c0c0e] hover:border-[#00ff00]/50')
-        } ${isCollapsed ? 'h-14 w-14 mx-auto flex flex-col items-center justify-center gap-0.5' : 'flex items-center justify-between px-2.5 py-2'}`}
-      >
-        {isCollapsed ? (
-          <>
-            <div className="relative">
-              <Monitor size={15} className={isLight ? 'text-[#00C800]' : 'text-[#00ff00]'} />
-              <span className="absolute -right-1.5 -top-1.5 flex h-1.5 w-1.5">
-                <span className={`h-full w-full rounded-full ${connectedCount > 0 ? 'bg-[#00ff00] animate-pulse' : 'bg-zinc-600'}`}></span>
+      <Tooltip content={`DCC 连接状态 ${connectedCount}/${totalCount}`} placement={isCollapsed ? 'right' : 'top'} disabled={!isCollapsed}>
+        <button
+          type="button"
+          onClick={() => setOpen(prev => !prev)}
+          className={`group w-full rounded border transition-all cursor-pointer ${
+            open
+              ? (isLight ? 'border-[#00C800] bg-emerald-50' : 'border-[#00ff00]/60 bg-[#00ff00]/5')
+              : (isLight ? 'border-slate-200 bg-white hover:border-[#00C800]' : 'border-[#27272a] bg-[#0c0c0e] hover:border-[#00ff00]/50')
+          } ${isCollapsed ? 'h-14 w-14 mx-auto flex flex-col items-center justify-center gap-0.5' : 'flex items-center justify-between px-2.5 py-2'}`}
+        >
+          {isCollapsed ? (
+            <>
+              <div className="relative">
+                <Monitor size={15} className={isLight ? 'text-[#00C800]' : 'text-[#00ff00]'} />
+                <span className="absolute -right-1.5 -top-1.5 flex h-1.5 w-1.5">
+                  <span className={`h-full w-full rounded-full ${connectedCount > 0 ? 'bg-[#00ff00] animate-pulse' : 'bg-zinc-600'}`}></span>
+                </span>
+              </div>
+              <span className={`text-[9px] font-mono ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>{connectedCount}/{totalCount}</span>
+            </>
+          ) : (
+            <>
+              <span className="flex items-center gap-2 min-w-0">
+                <span className="flex h-1.5 w-1.5 shrink-0">
+                  <span className={`h-full w-full rounded-full ${connectedCount > 0 ? 'bg-[#00ff00] animate-pulse' : 'bg-zinc-600'}`}></span>
+                </span>
+                <span className={`text-[11px] font-medium font-sans ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>DCC 状态</span>
               </span>
-            </div>
-            <span className={`text-[9px] font-mono ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>{connectedCount}/{totalCount}</span>
-          </>
-        ) : (
-          <>
-            <span className="flex items-center gap-2 min-w-0">
-              <span className="flex h-1.5 w-1.5 shrink-0">
-                <span className={`h-full w-full rounded-full ${connectedCount > 0 ? 'bg-[#00ff00] animate-pulse' : 'bg-zinc-600'}`}></span>
-              </span>
-              <span className={`text-[11px] font-medium font-sans ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>DCC 状态</span>
-            </span>
-            <span className={`text-[10px] font-mono font-bold ${isLight ? 'text-[#00C800]' : 'text-[#00ff00]'}`}>{connectedCount}/{totalCount}</span>
-          </>
-        )}
-      </button>
+              <span className={`text-[10px] font-mono font-bold ${isLight ? 'text-[#00C800]' : 'text-[#00ff00]'}`}>{connectedCount}/{totalCount}</span>
+            </>
+          )}
+        </button>
+      </Tooltip>
 
       {/* Popup panel */}
       {open && (
@@ -169,16 +163,17 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
               DCC 连接状态
             </span>
             <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={refreshDetection}
-                title="刷新检测"
-                className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors cursor-pointer ${
-                  isLight ? 'text-slate-400 hover:text-[#00C800] hover:bg-slate-100' : 'text-zinc-500 hover:text-[#00ff00] hover:bg-[#18181b]'
-                }`}
-              >
-                <RotateCw size={13} className={isDetecting ? 'animate-spin' : ''} />
-              </button>
+              <Tooltip content="刷新检测" placement="top">
+                <button
+                  type="button"
+                  onClick={refreshDetection}
+                  className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors cursor-pointer ${
+                    isLight ? 'text-slate-400 hover:text-[#00C800] hover:bg-slate-100' : 'text-zinc-500 hover:text-[#00ff00] hover:bg-[#18181b]'
+                  }`}
+                >
+                  <RotateCw size={13} className={isDetecting ? 'animate-spin' : ''} />
+                </button>
+              </Tooltip>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
@@ -189,22 +184,6 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
                 <X size={13} />
               </button>
             </div>
-          </div>
-
-          {/* Overview bar */}
-          <div className={`flex items-center gap-3 px-3.5 py-2 text-[11px] font-mono border-b ${isLight ? 'border-slate-100 bg-slate-50/60' : 'border-[#1c1c1f] bg-[#070708]'}`}>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-[#00ff00]"></span>
-              <span className={isLight ? 'text-slate-600' : 'text-zinc-400'}>{connectedCount}</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-amber-500"></span>
-              <span className={isLight ? 'text-slate-600' : 'text-zinc-400'}>{offlineCount}</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-red-500"></span>
-              <span className={isLight ? 'text-slate-600' : 'text-zinc-400'}>{downCount}</span>
-            </span>
           </div>
 
           {/* DCC list */}
@@ -258,13 +237,11 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
                             </span>
                             <button
                               type="button"
-                              onClick={() => launchApp(app)}
-                              className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold transition-colors cursor-pointer ${
-                                isLight ? 'bg-[#00C800] text-white hover:bg-[#00a000]' : 'bg-[#00ff00]/15 text-[#00ff00] hover:bg-[#00ff00]/25'
-                              }`}
+                              onClick={() => detectAppStatus(app)}
+                              className="dcc-monitor-detect-btn inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold transition-colors cursor-pointer"
                             >
-                              <Play size={9} fill="currentColor" />
-                              启动
+                              <RotateCw size={9} />
+                              检测
                             </button>
                           </>
                         )}
@@ -276,11 +253,11 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
                             </span>
                             <button
                               type="button"
-                              onClick={() => reconnectApp(app)}
-                              className="inline-flex items-center gap-1 rounded border border-[#00ff00]/50 px-2 py-0.5 text-[10px] font-bold text-[#00ff00] transition-colors hover:bg-[#00ff00]/10 cursor-pointer"
+                              onClick={() => detectAppStatus(app)}
+                              className="dcc-monitor-detect-btn inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold transition-colors cursor-pointer"
                             >
                               <RotateCw size={9} />
-                              重连
+                              检测
                             </button>
                           </>
                         )}
@@ -326,7 +303,7 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
             </div>
 
             <p className={`mb-4 text-xs leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-              请选择本地硬盘中已安装的项目官方软件包所在根目录。Launcher 将检索目录下可执行文件的注册状态并进行安全桥接。
+              请选择本地硬盘中已安装的项目官方软件包所在根目录。PixGo 将检索目录下可执行文件的注册状态，不会启动外部 DCC 进程。
             </p>
 
             <div className={`mb-5 rounded border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-[#27272a] bg-zinc-950'}`}>
@@ -382,7 +359,7 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
                     : (isLight ? 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400' : 'cursor-not-allowed border border-zinc-850 bg-[#18181c] text-zinc-500')
                 }`}
               >
-                验证注册并建立连接
+                验证注册状态
               </button>
             </div>
           </div>
