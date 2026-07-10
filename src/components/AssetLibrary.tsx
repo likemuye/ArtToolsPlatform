@@ -540,6 +540,47 @@ const getAssetLongestEdge = (asset: ArtAsset): number | null => {
   return null;
 };
 
+const getOptionLabel = (
+  value: string,
+  options?: FilterOption[],
+  groups?: FilterOptionGroup[]
+) => {
+  const groupOptions = groups?.flatMap(group => group.options) ?? [];
+  return [...(options ?? []), ...groupOptions].find(option => option.value === value)?.label ?? value;
+};
+
+const summarizeSelectedValues = (
+  selected: Set<string>,
+  options?: FilterOption[],
+  groups?: FilterOptionGroup[]
+) => {
+  const labels = Array.from(selected).map(value => getOptionLabel(value, options, groups));
+  if (labels.length === 0) return '';
+  if (labels.length === 1) return labels[0];
+  return `${labels[0]} +${labels.length - 1}`;
+};
+
+const getAuthorFilterSummary = (email: string) => {
+  if (!email) return '';
+  return PLATFORM_USERS.find(user => user.email.toLowerCase() === email.toLowerCase())?.name ?? email;
+};
+
+const getDateFilterSummary = (preset: string, from: string, to: string) => {
+  if (preset === 'all') return '';
+  if (preset === 'custom') {
+    return formatCreatedRangeSummary(from, to) || '自定义范围';
+  }
+  return DATE_PRESETS.find(item => item.id === preset)?.label ?? preset;
+};
+
+const getSizeFilterSummary = (buckets: Set<string>, wMin: string, wMax: string, hMin: string, hMax: string) => {
+  const bucketSummary = summarizeSelectedValues(buckets, DIMENSION_BUCKETS.map(bucket => ({ value: bucket.id, label: bucket.label })));
+  const hasCustomRange = [wMin, wMax, hMin, hMax].some(value => value.trim() !== '');
+  if (bucketSummary && hasCustomRange) return `${bucketSummary} +自定义`;
+  if (bucketSummary) return bucketSummary;
+  return hasCustomRange ? '自定义范围' : '';
+};
+
 // --- 图片搜索（以图搜图）: feature extraction + similarity scoring -----------
 type RGB = { r: number; g: number; b: number };
 
@@ -5585,6 +5626,73 @@ export default function AssetLibrary({
       sortCount
     ].reduce((sum, count) => sum + count, 0);
 
+    const dateSummary = getDateFilterSummary(datePreset, createdFrom, createdTo);
+    const sortSummary = sortOrder === 'asc' ? '创建时间升序' : '';
+
+    const makeFilterChips = (
+      keyPrefix: string,
+      label: string,
+      selected: Set<string>,
+      onRemove: (value: string) => void,
+      options?: FilterOption[],
+      groups?: FilterOptionGroup[]
+    ) => Array.from(selected).map(value => ({
+      key: `${keyPrefix}-${value}`,
+      label,
+      value: getOptionLabel(value, options, groups),
+      onRemove: () => onRemove(value)
+    }));
+
+    const activeFilterChips = [
+      ...(isInternal && authorFilter ? [{
+        key: 'author',
+        label: '创建人',
+        value: getAuthorFilterSummary(authorFilter),
+        onRemove: () => setAuthorFilter('')
+      }] : []),
+      ...makeFilterChips('format', '后缀', formatFilters, toggleFormat, undefined, formatGroupsForScope),
+      ...makeFilterChips('tag', '标签', tagFilters, toggleTag, undefined, tagGroups),
+      ...(dateSummary ? [{
+        key: 'created',
+        label: '日期',
+        value: dateSummary,
+        onRemove: () => {
+          setDatePreset('all');
+          setCreatedFrom('');
+          setCreatedTo('');
+        }
+      }] : []),
+      ...makeFilterChips('fileSize', '文件大小', fileSizeBuckets, toggleFileSizeBucket, FILE_SIZE_BUCKETS.map(bucket => ({ value: bucket.id, label: bucket.label }))),
+      ...makeFilterChips('sizeBucket', '尺寸', sizeBuckets, toggleSizeBucket, DIMENSION_BUCKETS.map(bucket => ({ value: bucket.id, label: bucket.label }))),
+      ...([sizeWMin, sizeWMax, sizeHMin, sizeHMax].some(value => value.trim() !== '') ? [{
+        key: 'size-custom',
+        label: '尺寸',
+        value: '自定义范围',
+        onRemove: () => {
+          setSizeField('wMin', '');
+          setSizeField('wMax', '');
+          setSizeField('hMin', '');
+          setSizeField('hMax', '');
+        }
+      }] : []),
+      ...makeFilterChips('shape', '形状', shapeFilters, toggleShape, ASSET_SHAPE_OPTIONS.map(shape => ({ value: shape.id, label: shape.label }))),
+      ...makeFilterChips('duration', '时长', durationBuckets, toggleDurationBucket, DURATION_BUCKETS.map(bucket => ({ value: bucket.id, label: bucket.label }))),
+      ...(COLOR_FILTER_ENABLED ? makeFilterChips('color', '颜色', colorFilters, toggleColor, COLOR_SWATCHES.map(color => ({ value: color.id, label: color.label }))) : []),
+      ...(!isInternal ? makeFilterChips(
+        'source',
+        '来源',
+        externalSourceFilters as Set<string>,
+        (value) => toggleExternalSourceFilter(value as ExternalAssetSource),
+        EXTERNAL_SOURCE_OPTIONS.map(source => ({ value: source.id, label: source.label }))
+      ) : []),
+      ...(sortSummary ? [{
+        key: 'sort',
+        label: '排序',
+        value: sortSummary,
+        onRemove: () => setSortOrder('desc')
+      }] : [])
+    ];
+
     const dd = (key: FilterKey, label: string, count: number, panel: React.ReactNode) =>
       renderFilterDropdown(scope, key, label, count, panel);
 
@@ -5623,126 +5731,149 @@ export default function AssetLibrary({
 
         {/* 通用筛选行 */}
         {filtersExpanded && (
-        <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-          {isInternal && dd('author', '创建人', authorFilter ? 1 : 0, (
-            <MultiSelectFilterPanel
-              options={authorOptions}
-              selected={new Set(authorFilter ? [authorFilter] : [])}
-              onToggle={(v) => { setAuthorFilter(authorFilter === v ? '' : v); }}
-              singleSelect
-              searchable
-              searchValue={authorKeyword}
-              onSearchChange={setAuthorKeyword}
-              searchPlaceholder="搜索创建人"
-              emptyText="没有匹配的创建人"
-              width="w-60"
-            />
-          ))}
-          {dd('format', '后缀', formatFilters.size, (
-            <MultiSelectFilterPanel
-              groups={formatGroupsForScope}
-              selected={formatFilters}
-              onToggle={toggleFormat}
-              searchable
-              searchValue={formatKeyword}
-              onSearchChange={setFormatKeyword}
-              searchPlaceholder="搜索格式"
-              emptyText="没有匹配的格式"
-            />
-          ))}
-          {dd('tag', '标签', tagFilters.size, (
-            <TagFilterPanel
-              groups={tagGroups}
-              selected={tagFilters}
-              onToggle={toggleTag}
-              searchable
-              searchValue={tagKeyword}
-              onSearchChange={setTagKeyword}
-              searchPlaceholder="搜索标签"
-              emptyText="没有匹配的标签"
-            />
-          ))}
-          {dd('created', '日期', dateCount, (
-            <DatePresetPanel
-              preset={datePreset}
-              from={createdFrom}
-              to={createdTo}
-              onPresetChange={setDatePreset}
-              onCustomChange={({ from, to }) => { setCreatedFrom(from); setCreatedTo(to); }}
-            />
-          ))}
-          {dd('fileSize', '文件大小', fileSizeCount, (
-            <MultiSelectFilterPanel
-              options={FILE_SIZE_BUCKETS.map(b => ({ value: b.id, label: b.label }))}
-              selected={fileSizeBuckets}
-              onToggle={toggleFileSizeBucket}
-              width="w-44"
-            />
-          ))}
-          {dd('size', '尺寸', sizeCount, (
-            <SizeFilterPanel
-              buckets={sizeBuckets}
-              onToggleBucket={toggleSizeBucket}
-              wMin={sizeWMin} wMax={sizeWMax} hMin={sizeHMin} hMax={sizeHMax}
-              onChange={setSizeField}
-            />
-          ))}
-          {dd('shape', '形状', shapeFilters.size, (
-            <MultiSelectFilterPanel
-              options={ASSET_SHAPE_OPTIONS.map(s => ({ value: s.id, label: s.label }))}
-              selected={shapeFilters}
-              onToggle={toggleShape}
-              width="w-40"
-            />
-          ))}
-          {dd('duration', '时长', durationCount, (
-            <MultiSelectFilterPanel
-              options={DURATION_BUCKETS.map(b => ({ value: b.id, label: b.label }))}
-              selected={durationBuckets}
-              onToggle={toggleDurationBucket}
-              width="w-44"
-            />
-          ))}
-          {COLOR_FILTER_ENABLED && dd('color', '颜色', colorFilters.size, (
-            <ColorFilterPanel selected={colorFilters} onToggle={toggleColor} />
-          ))}
-          {!isInternal && dd('source', '来源', externalSourceFilters.size, (
-            <MultiSelectFilterPanel
-              options={EXTERNAL_SOURCE_OPTIONS.map(o => ({ value: o.id, label: o.label }))}
-              selected={externalSourceFilters as Set<string>}
-              onToggle={(v) => toggleExternalSourceFilter(v as ExternalAssetSource)}
-              width="w-40"
-            />
-          ))}
-          {dd('sort', '排序', sortCount, (
-            <div className="asset-filter-panel absolute left-0 top-full z-30 mt-1.5 w-44 rounded border p-2 shadow-xl shadow-black/60">
-              <div className="space-y-1">
-                {([
-                  { value: 'desc' as const, label: '创建时间降序（默认）' },
-                  { value: 'asc' as const, label: '创建时间升序' }
-                ]).map(opt => (
-                  <label key={opt.value} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
-                    <input
-                      type="radio"
-                      checked={sortOrder === opt.value}
-                      onChange={() => setSortOrder(opt.value)}
-                      className="h-3 w-3 border-zinc-700 bg-black text-[#00ff00] focus:ring-[#00ff00]/50"
-                    />
-                    <span>{opt.label}</span>
-                  </label>
-                ))}
-              </div>
+          <>
+            <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+              {isInternal && dd('author', '创建人', authorFilter ? 1 : 0, (
+                <MultiSelectFilterPanel
+                  options={authorOptions}
+                  selected={new Set(authorFilter ? [authorFilter] : [])}
+                  onToggle={(v) => { setAuthorFilter(authorFilter === v ? '' : v); }}
+                  singleSelect
+                  searchable
+                  searchValue={authorKeyword}
+                  onSearchChange={setAuthorKeyword}
+                  searchPlaceholder="搜索创建人"
+                  emptyText="没有匹配的创建人"
+                  width="w-60"
+                />
+              ))}
+              {dd('format', '后缀', formatFilters.size, (
+                <MultiSelectFilterPanel
+                  groups={formatGroupsForScope}
+                  selected={formatFilters}
+                  onToggle={toggleFormat}
+                  searchable
+                  searchValue={formatKeyword}
+                  onSearchChange={setFormatKeyword}
+                  searchPlaceholder="搜索格式"
+                  emptyText="没有匹配的格式"
+                />
+              ))}
+              {dd('tag', '标签', tagFilters.size, (
+                <TagFilterPanel
+                  groups={tagGroups}
+                  selected={tagFilters}
+                  onToggle={toggleTag}
+                  searchable
+                  searchValue={tagKeyword}
+                  onSearchChange={setTagKeyword}
+                  searchPlaceholder="搜索标签"
+                  emptyText="没有匹配的标签"
+                />
+              ))}
+              {dd('created', '日期', dateCount, (
+                <DatePresetPanel
+                  preset={datePreset}
+                  from={createdFrom}
+                  to={createdTo}
+                  onPresetChange={setDatePreset}
+                  onCustomChange={({ from, to }) => { setCreatedFrom(from); setCreatedTo(to); }}
+                />
+              ))}
+              {dd('fileSize', '文件大小', fileSizeCount, (
+                <MultiSelectFilterPanel
+                  options={FILE_SIZE_BUCKETS.map(b => ({ value: b.id, label: b.label }))}
+                  selected={fileSizeBuckets}
+                  onToggle={toggleFileSizeBucket}
+                  width="w-44"
+                />
+              ))}
+              {dd('size', '尺寸', sizeCount, (
+                <SizeFilterPanel
+                  buckets={sizeBuckets}
+                  onToggleBucket={toggleSizeBucket}
+                  wMin={sizeWMin} wMax={sizeWMax} hMin={sizeHMin} hMax={sizeHMax}
+                  onChange={setSizeField}
+                />
+              ))}
+              {dd('shape', '形状', shapeFilters.size, (
+                <MultiSelectFilterPanel
+                  options={ASSET_SHAPE_OPTIONS.map(s => ({ value: s.id, label: s.label }))}
+                  selected={shapeFilters}
+                  onToggle={toggleShape}
+                  width="w-40"
+                />
+              ))}
+              {dd('duration', '时长', durationCount, (
+                <MultiSelectFilterPanel
+                  options={DURATION_BUCKETS.map(b => ({ value: b.id, label: b.label }))}
+                  selected={durationBuckets}
+                  onToggle={toggleDurationBucket}
+                  width="w-44"
+                />
+              ))}
+              {COLOR_FILTER_ENABLED && dd('color', '颜色', colorFilters.size, (
+                <ColorFilterPanel selected={colorFilters} onToggle={toggleColor} />
+              ))}
+              {!isInternal && dd('source', '来源', externalSourceFilters.size, (
+                <MultiSelectFilterPanel
+                  options={EXTERNAL_SOURCE_OPTIONS.map(o => ({ value: o.id, label: o.label }))}
+                  selected={externalSourceFilters as Set<string>}
+                  onToggle={(v) => toggleExternalSourceFilter(v as ExternalAssetSource)}
+                  width="w-40"
+                />
+              ))}
+              {dd('sort', '排序', sortCount, (
+                <div className="asset-filter-panel absolute left-0 top-full z-30 mt-1.5 w-44 rounded border p-2 shadow-xl shadow-black/60">
+                  <div className="space-y-1">
+                    {([
+                      { value: 'desc' as const, label: '创建时间降序（默认）' },
+                      { value: 'asc' as const, label: '创建时间升序' }
+                    ]).map(opt => (
+                      <label key={opt.value} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+                        <input
+                          type="radio"
+                          checked={sortOrder === opt.value}
+                          onChange={() => setSortOrder(opt.value)}
+                          className="h-3 w-3 border-zinc-700 bg-black text-[#00ff00] focus:ring-[#00ff00]/50"
+                        />
+                        <span>{opt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={clearAll}
+                disabled={!hasActive}
+                className={`asset-filter-reset ${hasActive ? 'is-enabled' : ''}`}
+              >
+                重置筛选
+              </button>
             </div>
-          ))}
-          <button
-            type="button"
-            onClick={clearAll}
-            disabled={!hasActive}
-            className={`asset-filter-reset ${hasActive ? 'is-enabled' : ''}`}
-          >
-            重置筛选
-          </button>
-        </div>
+            {activeFilterChips.length > 0 && (
+              <div className="asset-selected-filter-row">
+                <span className="asset-selected-filter-label">已选</span>
+                <div className="asset-selected-filter-list">
+                  {activeFilterChips.map(item => (
+                    <span key={item.key} className="asset-selected-filter-chip" title={`${item.label}: ${item.value}`}>
+                      <span className="asset-selected-filter-chip-label">{item.label}</span>
+                      <span className="asset-selected-filter-chip-value">{item.value}</span>
+                      <button
+                        type="button"
+                        className="asset-selected-filter-remove"
+                        onClick={item.onRemove}
+                        title={`移除${item.label}: ${item.value}`}
+                      >
+                        <X size={9} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     );

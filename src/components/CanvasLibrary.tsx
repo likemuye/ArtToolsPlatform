@@ -14,7 +14,6 @@ import {
   FolderOpen,
   MessageSquare,
   MoreHorizontal,
-  Package,
   Palette,
   Plus,
   Search,
@@ -31,6 +30,7 @@ import {
   CanvasHistoryEntry,
   CanvasRole,
   CanvasShareGrant,
+  AppNotification,
   PlatformUser,
   ProjectMember,
   ProjectSpace,
@@ -60,6 +60,8 @@ interface CanvasLibraryProps {
   currentSpace: ProjectSpace;
   setCurrentSpace: (space: ProjectSpace) => void;
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
+  addNotification: (notification: Omit<AppNotification, 'id' | 'createdAt' | 'unread'> & { createdAt?: string; unread?: boolean }) => void;
+  theme: 'dark' | 'light';
 }
 
 type CanvasShareRole = Exclude<CanvasRole, 'owner'>;
@@ -100,10 +102,11 @@ const DEFAULT_FOLDER_PANE_WIDTH = 304;
 const MIN_FOLDER_PANE_WIDTH = 240;
 const MAX_FOLDER_PANE_WIDTH = 520;
 const EXCALIDRAW_URL = 'https://excalidraw.com/';
+const CANVAS_TREE_CHILD_BASE_INDENT = 24;
+const CANVAS_TREE_CHILD_STEP_INDENT = 16;
 
 const ROOT_VISUALS: Record<string, { icon: typeof User; accent: string; label: string }> = {
   [SpaceId.Personal]: { icon: User, accent: '#38bdf8', label: '个人空间' },
-  [TUYOO_COMMON_ROOT_ID]: { icon: Package, accent: '#facc15', label: '途游通用' },
   [SpaceId.Shared]: { icon: Users, accent: '#a78bfa', label: '与我共享' },
   [SpaceId.ProjectA]: { icon: Boxes, accent: '#00ff00', label: '项目空间' },
   [SpaceId.ProjectB]: { icon: Boxes, accent: '#00ff00', label: '项目空间' }
@@ -125,6 +128,8 @@ const getRoleLabel = (role: CanvasRole) => {
   if (role === 'editor') return '编辑者';
   return '使用者';
 };
+
+const getNotificationRoleLabel = (role: CanvasShareRole) => (role === 'editor' ? '编辑者' : '阅读者');
 
 const clampFolderPaneWidth = (width: number) => (
   Math.max(MIN_FOLDER_PANE_WIDTH, Math.min(MAX_FOLDER_PANE_WIDTH, width))
@@ -152,7 +157,7 @@ const validateName = (name: string, siblingNames: string[]) => {
   return '';
 };
 
-export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }: CanvasLibraryProps) {
+export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog, addNotification, theme }: CanvasLibraryProps) {
   const [folders, setFolders] = useState<CanvasFolder[]>(readCanvasFolders);
   const [canvases, setCanvases] = useState<CanvasDocument[]>(readCanvases);
   const [shares, setShares] = useState<CanvasShareGrant[]>(readCanvasShares);
@@ -183,6 +188,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
   const [isResizingFolderPane, setIsResizingFolderPane] = useState(false);
   const [isDesktopLayout, setIsDesktopLayout] = useState(() => window.innerWidth >= 1024);
   const canvasLayoutRef = useRef<HTMLDivElement | null>(null);
+  const isLight = theme === 'light';
 
   const projectMembers = useMemo(() => readProjectMembers(), []);
   const projectSpaces = useMemo(() => PROJECT_SPACES.filter(space => space.id === SpaceId.ProjectA || space.id === SpaceId.ProjectB), []);
@@ -213,6 +219,11 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
   const updateHistory = (next: CanvasHistoryEntry[]) => {
     setHistory(next);
     writeStorage(CANVAS_HISTORY_STORAGE_KEY, next);
+  };
+
+  const closeContextMenus = () => {
+    setContextMenuCanvasId(null);
+    setContextMenuFolderId(null);
   };
 
   useEffect(() => {
@@ -263,6 +274,32 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
       document.body.style.userSelect = '';
     };
   }, [isResizingFolderPane]);
+
+  useEffect(() => {
+    if (!contextMenuCanvasId && !contextMenuFolderId) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.canvas-context-menu') || target.closest('[data-canvas-menu-trigger="true"]')) return;
+      closeContextMenus();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeContextMenus();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('scroll', closeContextMenus, true);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('scroll', closeContextMenus, true);
+    };
+  }, [contextMenuCanvasId, contextMenuFolderId]);
+
 
   const folderById = useMemo(() => (
     folders.reduce<Record<string, CanvasFolder>>((acc, folder) => {
@@ -346,15 +383,18 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
     setContextMenuFolderId(null);
   };
 
-  const selectTuyooCommon = () => {
-    setSelectedSystemRoot(TUYOO_COMMON_ROOT_ID);
+  useEffect(() => {
+    if (selectedSystemRoot !== TUYOO_COMMON_ROOT_ID) return;
+
+    setSelectedSystemRoot(null);
+    setCurrentSpace(personalSpace);
     setSelectedFolderId(null);
     setOpenedCanvasId(null);
     setFolderEditor(null);
     setIsFolderEditorSubmitAttempted(false);
     setContextMenuCanvasId(null);
     setContextMenuFolderId(null);
-  };
+  }, [personalSpace, selectedSystemRoot, setCurrentSpace]);
 
   const toggleRoot = (rootId: string) => {
     setExpandedRootIds(prev => ({ ...prev, [rootId]: !prev[rootId] }));
@@ -438,13 +478,12 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
   const openEditor = (canvas: CanvasDocument) => {
     const role = getCanvasRole(canvas);
     setOpenedCanvasId(canvas.id);
-    setContextMenuCanvasId(null);
+    closeContextMenus();
     addLog(`🎨 已在内容区打开 Excalidraw 画布【${canvas.name}】，角色：${getRoleLabel(role)}。`, 'success');
   };
 
   const openDialog = (next: CanvasDialogState) => {
-    setContextMenuCanvasId(null);
-    setContextMenuFolderId(null);
+    closeContextMenus();
     setDialog(next);
   };
 
@@ -636,6 +675,16 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
     };
     updateShares([nextShare, ...shares]);
     addLog(`📤 已将画布【${shareTarget.name}】分享给 ${user.name}，权限：${getRoleLabel(shareState.role)}。`, 'success');
+    addNotification({
+      domain: 'canvas',
+      node: 'canvas-share',
+      trigger: '画布被分享 / 授权',
+      recipient: user.name,
+      title: '分享画布权限',
+      content: `${CURRENT_USER_NAME} 将画布「${shareTarget.name}」分享给您，权限：${getNotificationRoleLabel(shareState.role)}`,
+      canvasName: shareTarget.name,
+      actorName: CURRENT_USER_NAME
+    });
     setShareState({ ...shareState, query: '' });
   };
 
@@ -662,6 +711,16 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
     const withoutExistingGroup = shares.filter(share => !(share.canvasId === shareTarget.id && share.viaGroup === shareTarget.spaceId));
     updateShares([nextShare, ...withoutExistingGroup]);
     addLog(`📤 已更新画布【${shareTarget.name}】的项目成员组权限：${getRoleLabel(shareState.role)}。`, 'success');
+    addNotification({
+      domain: 'canvas',
+      node: 'canvas-share',
+      trigger: '画布被分享 / 授权',
+      recipient: `${projectName} 项目成员组`,
+      title: '分享画布权限',
+      content: `${CURRENT_USER_NAME} 将画布「${shareTarget.name}」分享给您，权限：${getNotificationRoleLabel(shareState.role)}`,
+      canvasName: shareTarget.name,
+      actorName: CURRENT_USER_NAME
+    });
   };
 
   const removeProjectGroupShare = () => {
@@ -770,7 +829,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
     const shouldShowError = isFolderEditorSubmitAttempted && !!validationError;
 
     return (
-      <div className="canvas-inline-folder-editor py-1 pr-2" style={{ paddingLeft: `${8 + depth * 16}px` }}>
+      <div className="canvas-inline-folder-editor py-1 pr-2" style={{ paddingLeft: `${CANVAS_TREE_CHILD_BASE_INDENT + depth * CANVAS_TREE_CHILD_STEP_INDENT}px` }}>
         <div className="flex items-center gap-1.5">
           <span className="flex h-4 w-4 shrink-0 items-center justify-center text-zinc-700">
             {isRename ? <Edit3 size={11} /> : <CornerDownRight size={12} />}
@@ -846,7 +905,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
                 openFolderActions(folder.id);
               }}
               className={`canvas-tree-row ${isSelected ? 'is-active' : ''}`}
-              style={{ paddingLeft: `${8 + depth * 16}px` }}
+              style={{ paddingLeft: `${CANVAS_TREE_CHILD_BASE_INDENT + depth * CANVAS_TREE_CHILD_STEP_INDENT}px` }}
             >
               <span
                 role="button"
@@ -910,18 +969,23 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
         <div className={`canvas-tree-row ${isActive ? 'is-active' : ''}`}>
           <button
             type="button"
-            onClick={() => hasChildren && toggleRoot(rootId)}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (hasChildren) toggleRoot(rootId);
+            }}
             className={`canvas-tree-toggle ${hasChildren ? '' : 'is-empty'}`}
           >
             {hasChildren ? (rootOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : <span className="h-1 w-1 rounded-full bg-current" />}
           </button>
           <button type="button" onClick={onSelect} className="canvas-tree-main">
-            <RootIcon size={14} style={{ color: visual.accent }} />
-            <span className="truncate">{label}</span>
+            <span className="flex min-w-0 items-center gap-[7px]">
+              <RootIcon size={14} className="shrink-0" style={{ color: visual.accent }} />
+              <span className="truncate">{label}</span>
+            </span>
+            <span className={`asset-folder-count ${isActive ? 'is-selected' : ''}`} style={isActive ? { '--folder-accent': visual.accent } as React.CSSProperties : undefined}>
+              {count}
+            </span>
           </button>
-          <span className={`asset-folder-count ${isActive ? 'is-selected' : ''}`} style={isActive ? { '--folder-accent': visual.accent } as React.CSSProperties : undefined}>
-            {count}
-          </span>
         </div>
         {hasChildren && rootOpen && <div>{children}</div>}
       </div>
@@ -936,8 +1000,8 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
         <button type="button" onClick={() => openEditor(canvas)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 hover:bg-[#121214]"><ExternalLink size={12} />打开</button>
         {canRenameCanvas(canvas) && <button type="button" onClick={() => openDialog({ kind: 'rename-canvas', targetId: canvas.id, name: canvas.name })} className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 hover:bg-[#121214]"><Edit3 size={12} />重命名</button>}
         {canShareCanvas(canvas) && <button type="button" onClick={() => { setShareState({ canvasId: canvas.id, query: '', role: 'viewer' }); setContextMenuCanvasId(null); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 hover:bg-[#121214]"><Send size={12} />分享</button>}
-        <button type="button" onClick={() => { copyCanvasLink(canvas); setContextMenuCanvasId(null); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 hover:bg-[#121214]"><Copy size={12} />复制链接</button>
-        {canDeleteCanvas(canvas) && <button type="button" onClick={() => { setDeleteState({ kind: 'canvas', id: canvas.id }); setContextMenuCanvasId(null); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-300 hover:bg-red-950/30"><Trash2 size={12} />删除</button>}
+        <button type="button" onClick={() => { copyCanvasLink(canvas); closeContextMenus(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 hover:bg-[#121214]"><Copy size={12} />复制链接</button>
+        {canDeleteCanvas(canvas) && <button type="button" onClick={() => { setDeleteState({ kind: 'canvas', id: canvas.id }); closeContextMenus(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-300 hover:bg-red-950/30"><Trash2 size={12} />删除</button>}
       </div>
     );
   };
@@ -1037,14 +1101,6 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
               !isTuyooCommonSpace && currentSpace.id === SpaceId.Personal && selectedFolderId === null,
               () => selectSpace(personalSpace),
               renderFolderRows(personalSpace, null)
-            )}
-
-            {renderRootRow(
-              TUYOO_COMMON_ROOT_ID,
-              '途游通用',
-              0,
-              isTuyooCommonSpace,
-              selectTuyooCommon
             )}
 
             {renderRootRow(
@@ -1285,6 +1341,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
                             onClick={(event) => {
                               event.stopPropagation();
                               copyCanvasLink(canvas);
+                              closeContextMenus();
                             }}
                             className="asset-cover-action-btn asset-cover-action-btn-copy flex h-7 w-7 items-center justify-center rounded-md bg-[#111214] text-cyan-300 transition-colors hover:bg-[#1a1c1f] focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-300/80"
                             title="复制链接"
@@ -1293,6 +1350,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
                           </button>
                           <button
                             type="button"
+                            data-canvas-menu-trigger="true"
                             onClick={(event) => {
                               event.stopPropagation();
                               setContextMenuCanvasId(prev => (prev === canvas.id ? null : canvas.id));
@@ -1384,19 +1442,33 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
 
       {shareState && shareTarget && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-[520px] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[#1c1c1f] px-5 py-4">
-              <h3 className="text-sm font-bold text-white">分享画布</h3>
-              <button type="button" onClick={() => setShareState(null)} className="text-zinc-500 hover:text-white"><X size={15} /></button>
+          <div className={`w-full max-w-[520px] overflow-hidden rounded-xl border shadow-2xl ${
+            isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'
+          }`}>
+            <div className={`flex items-center justify-between border-b px-5 py-4 ${
+              isLight ? 'border-slate-100' : 'border-[#1c1c1f]'
+            }`}>
+              <h3 className={`text-sm font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>分享画布</h3>
+              <button
+                type="button"
+                onClick={() => setShareState(null)}
+                className={isLight ? 'text-slate-400 hover:text-slate-700' : 'text-zinc-500 hover:text-white'}
+              >
+                <X size={15} />
+              </button>
             </div>
             <div className="space-y-4 px-5 py-4">
-              <div className="rounded-lg border border-zinc-800 bg-black/40 p-3">
-                <p className="text-sm font-semibold text-white">{shareTarget.name}</p>
-                <p className="mt-1 text-[10px] text-zinc-500">作者：{shareTarget.ownerName}</p>
+              <div className={`rounded-lg border p-3 ${
+                isLight ? 'border-slate-200 bg-slate-50' : 'border-zinc-800 bg-black/40'
+              }`}>
+                <p className={`text-sm font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>{shareTarget.name}</p>
+                <p className={`mt-1 text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>作者：{shareTarget.ownerName}</p>
               </div>
               {(shareTarget.spaceId === SpaceId.ProjectA || shareTarget.spaceId === SpaceId.ProjectB) ? (
                 <>
-                  <div className="rounded-lg border border-zinc-800 bg-black/30 p-3 text-[11px] leading-relaxed text-zinc-500">
+                  <div className={`rounded-lg border p-3 text-[11px] leading-relaxed ${
+                    isLight ? 'border-slate-200 bg-slate-50 text-slate-500' : 'border-zinc-800 bg-black/30 text-zinc-500'
+                  }`}>
                     项目空间画布通过项目成员组授权；添加或移除成员请到「权限管理」。这里仅调整项目成员组对该画布的默认权限。
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -1405,24 +1477,32 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
                         key={role}
                         type="button"
                         onClick={() => setShareState({ ...shareState, role })}
-                        className={`rounded border px-3 py-2 text-xs ${shareState.role === role ? 'border-[#00ff00] bg-[#00ff00]/10 text-[#00ff00]' : 'border-zinc-800 text-zinc-400 hover:text-white'}`}
+                        className={`rounded border px-3 py-2 text-xs ${
+                          shareState.role === role
+                            ? (isLight ? 'border-[#00C800] bg-emerald-50 text-[#00795c]' : 'border-[#00ff00] bg-[#00ff00]/10 text-[#00ff00]')
+                            : (isLight ? 'border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800' : 'border-zinc-800 text-zinc-400 hover:text-white')
+                        }`}
                       >
                         {getRoleLabel(role)}
                       </button>
                     ))}
                   </div>
-                  <div className="space-y-1 rounded border border-zinc-800 p-1.5">
+                  <div className={`space-y-1 rounded border p-1.5 ${
+                    isLight ? 'border-slate-200 bg-slate-50' : 'border-zinc-800'
+                  }`}>
                     {shares.filter(share => share.canvasId === shareTarget.id && share.viaGroup === shareTarget.spaceId).length === 0 ? (
-                      <p className="px-2 py-2 text-[11px] text-zinc-600">当前沿用项目成员默认可打开权限，尚未单独设置组权限。</p>
+                      <p className={`px-2 py-2 text-[11px] ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>当前沿用项目成员默认可打开权限，尚未单独设置组权限。</p>
                     ) : (
                       shares
                         .filter(share => share.canvasId === shareTarget.id && share.viaGroup === shareTarget.spaceId)
                         .map(share => (
-                          <div key={share.granteeEmail} className="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs text-zinc-300">
+                          <div key={share.granteeEmail} className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
                             <span className="min-w-0 truncate">{share.granteeName}</span>
                             <div className="flex shrink-0 items-center gap-1.5">
-                              <span className="rounded border border-zinc-700 px-2 py-0.5 text-[10px]">{getRoleLabel(share.role)}</span>
-                              <button type="button" onClick={removeProjectGroupShare} className="rounded border border-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 hover:border-red-500/60 hover:text-red-400">移除</button>
+                              <span className={`rounded border px-2 py-0.5 text-[10px] ${isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-zinc-700'}`}>{getRoleLabel(share.role)}</span>
+                              <button type="button" onClick={removeProjectGroupShare} className={`rounded border px-2 py-0.5 text-[10px] ${
+                                isLight ? 'border-slate-200 text-slate-500 hover:border-red-400 hover:text-red-500' : 'border-zinc-800 text-zinc-400 hover:border-red-500/60 hover:text-red-400'
+                              }`}>移除</button>
                             </div>
                           </div>
                         ))
@@ -1437,7 +1517,11 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
                         key={role}
                         type="button"
                         onClick={() => setShareState({ ...shareState, role })}
-                        className={`rounded border px-3 py-2 text-xs ${shareState.role === role ? 'border-[#00ff00] bg-[#00ff00]/10 text-[#00ff00]' : 'border-zinc-800 text-zinc-400 hover:text-white'}`}
+                        className={`rounded border px-3 py-2 text-xs ${
+                          shareState.role === role
+                            ? (isLight ? 'border-[#00C800] bg-emerald-50 text-[#00795c]' : 'border-[#00ff00] bg-[#00ff00]/10 text-[#00ff00]')
+                            : (isLight ? 'border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800' : 'border-zinc-800 text-zinc-400 hover:text-white')
+                        }`}
                       >
                         {getRoleLabel(role)}
                       </button>
@@ -1448,31 +1532,41 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
                       value={shareState.query}
                       onChange={(event) => setShareState({ ...shareState, query: event.target.value, error: '' })}
                       placeholder="输入姓名或邮箱，选择平台用户"
-                      className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-200 outline-none focus:border-[#00ff00]"
+                      className={`w-full rounded border px-3 py-2 text-xs outline-none focus:border-[#00ff00] ${
+                        isLight ? 'border-slate-200 bg-white text-slate-700 placeholder:text-slate-400' : 'border-zinc-800 bg-black text-zinc-200'
+                      }`}
                     />
-                    <div className="mt-2 max-h-44 overflow-y-auto rounded border border-zinc-800">
+                    <div className={`mt-2 max-h-44 overflow-y-auto rounded border ${
+                      isLight ? 'border-slate-200 bg-white' : 'border-zinc-800'
+                    }`}>
                       {matchedUsers.map(user => (
-                        <button key={user.id} type="button" onClick={() => submitShare(user)} className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-zinc-300 hover:bg-[#121214]">
-                          <span>{user.name} <span className="font-mono text-[10px] text-zinc-500">({user.email})</span></span>
+                        <button key={user.id} type="button" onClick={() => submitShare(user)} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${
+                          isLight ? 'text-slate-700 hover:bg-slate-50' : 'text-zinc-300 hover:bg-[#121214]'
+                        }`}>
+                          <span>{user.name} <span className={`font-mono text-[10px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>({user.email})</span></span>
                           <Plus size={12} />
                         </button>
                       ))}
-                      {matchedUsers.length === 0 && <p className="px-3 py-3 text-center text-[11px] text-zinc-600">没有可添加的用户</p>}
+                      {matchedUsers.length === 0 && <p className={`px-3 py-3 text-center text-[11px] ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>没有可添加的用户</p>}
                     </div>
                   </div>
                   <div>
-                    <p className="mb-2 text-[11px] text-zinc-500">已授权用户</p>
-                    <div className="space-y-1 rounded border border-zinc-800 p-1.5">
-                      <div className="flex items-center justify-between rounded px-2 py-1.5 text-xs text-zinc-300">
-                        <span>{shareTarget.ownerName} <span className="font-mono text-[10px] text-zinc-500">({shareTarget.ownerEmail})</span></span>
-                        <span className="rounded border border-zinc-700 px-2 py-0.5 text-[10px]">作者</span>
+                    <p className={`mb-2 text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>已授权用户</p>
+                    <div className={`space-y-1 rounded border p-1.5 ${
+                      isLight ? 'border-slate-200 bg-slate-50' : 'border-zinc-800'
+                    }`}>
+                      <div className={`flex items-center justify-between rounded px-2 py-1.5 text-xs ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                        <span>{shareTarget.ownerName} <span className={`font-mono text-[10px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>({shareTarget.ownerEmail})</span></span>
+                        <span className={`rounded border px-2 py-0.5 text-[10px] ${isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-zinc-700'}`}>作者</span>
                       </div>
                       {shares.filter(share => share.canvasId === shareTarget.id && !share.viaGroup).map(share => (
-                        <div key={share.granteeEmail} className="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs text-zinc-300">
-                          <span className="min-w-0 truncate">{share.granteeName} <span className="font-mono text-[10px] text-zinc-500">({share.granteeEmail})</span></span>
+                        <div key={share.granteeEmail} className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                          <span className="min-w-0 truncate">{share.granteeName} <span className={`font-mono text-[10px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>({share.granteeEmail})</span></span>
                           <div className="flex shrink-0 items-center gap-1.5">
-                            <span className="rounded border border-zinc-700 px-2 py-0.5 text-[10px]">{getRoleLabel(share.role)}</span>
-                            <button type="button" onClick={() => removeShare(share.granteeEmail)} className="rounded border border-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 hover:border-red-500/60 hover:text-red-400">移除</button>
+                            <span className={`rounded border px-2 py-0.5 text-[10px] ${isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-zinc-700'}`}>{getRoleLabel(share.role)}</span>
+                            <button type="button" onClick={() => removeShare(share.granteeEmail)} className={`rounded border px-2 py-0.5 text-[10px] ${
+                              isLight ? 'border-slate-200 text-slate-500 hover:border-red-400 hover:text-red-500' : 'border-zinc-800 text-zinc-400 hover:border-red-500/60 hover:text-red-400'
+                            }`}>移除</button>
                           </div>
                         </div>
                       ))}
@@ -1481,12 +1575,16 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog }:
                 </>
               )}
             </div>
-            <div className="flex justify-end gap-2 border-t border-[#1c1c1f] px-5 py-4">
-              <button type="button" onClick={() => copyCanvasLink(shareTarget)} className="mr-auto inline-flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs text-zinc-400 hover:text-white"><Copy size={12} />复制链接</button>
+            <div className={`flex justify-end gap-2 border-t px-5 py-4 ${isLight ? 'border-slate-100' : 'border-[#1c1c1f]'}`}>
+              <button type="button" onClick={() => copyCanvasLink(shareTarget)} className={`mr-auto inline-flex items-center gap-1.5 rounded border px-4 py-1.5 text-xs ${
+                isLight ? 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800' : 'border-zinc-800 bg-black text-zinc-400 hover:text-white'
+              }`}><Copy size={12} />复制链接</button>
               {(shareTarget.spaceId === SpaceId.ProjectA || shareTarget.spaceId === SpaceId.ProjectB) && (
                 <button type="button" onClick={submitProjectGroupShare} className="rounded bg-[#00ff00] px-4 py-1.5 text-xs font-semibold text-black">确认授权</button>
               )}
-              <button type="button" onClick={() => setShareState(null)} className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs text-zinc-400 hover:text-white">关闭</button>
+              <button type="button" onClick={() => setShareState(null)} className={`rounded border px-4 py-1.5 text-xs ${
+                isLight ? 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800' : 'border-zinc-800 bg-black text-zinc-400 hover:text-white'
+              }`}>关闭</button>
             </div>
           </div>
         </div>

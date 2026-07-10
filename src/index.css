@@ -981,6 +981,70 @@
   border-color: #3f3f46;
   color: #d4d4d8;
 }
+.asset-selected-filter-row {
+  display: flex;
+  min-height: 24px;
+  align-items: flex-start;
+  gap: 0.375rem;
+  border-top: 1px solid rgba(39, 39, 42, 0.62);
+  padding-top: 0.375rem;
+}
+.asset-selected-filter-label {
+  display: inline-flex;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  color: #71717a;
+  font-size: 10px;
+  line-height: 1;
+}
+.asset-selected-filter-list {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.asset-selected-filter-chip {
+  display: inline-flex;
+  max-width: 220px;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid rgba(0, 255, 0, 0.24);
+  border-radius: 999px;
+  background-color: rgba(0, 255, 0, 0.08);
+  padding: 0.1875rem 0.4375rem;
+  color: #d4d4d8;
+  font-size: 10px;
+  line-height: 1;
+}
+.asset-selected-filter-chip-label {
+  flex: 0 0 auto;
+  color: #00ff00;
+}
+.asset-selected-filter-chip-value {
+  min-width: 0;
+  overflow: hidden;
+  color: #e4e4e7;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-selected-filter-remove {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: #a1a1aa;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+.asset-selected-filter-remove:hover {
+  background-color: rgba(0, 255, 0, 0.14);
+  color: #00ff00;
+}
 .asset-filter-count {
   min-width: 13px;
   height: 13px;
@@ -1082,6 +1146,30 @@
   background-color: #ffffff !important;
   border-color: #e2e8f0 !important;
   color: #0f172a !important;
+}
+.light .asset-selected-filter-row {
+  border-top-color: #e2e8f0;
+}
+.light .asset-selected-filter-label {
+  color: #94a3b8;
+}
+.light .asset-selected-filter-chip {
+  border-color: #bbf7d0;
+  background-color: #f0fdf4;
+  color: #334155;
+}
+.light .asset-selected-filter-chip-label {
+  color: #15803d;
+}
+.light .asset-selected-filter-chip-value {
+  color: #334155;
+}
+.light .asset-selected-filter-remove {
+  color: #64748b;
+}
+.light .asset-selected-filter-remove:hover {
+  background-color: #dcfce7;
+  color: #15803d;
 }
 .light .asset-filter-count {
   background-color: #dcfce7;
@@ -1739,9 +1827,10 @@
 .canvas-tree-main {
   display: inline-flex;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   align-items: center;
-  gap: 7px;
+  justify-content: space-between;
+  gap: 8px;
   text-align: left;
 }
 

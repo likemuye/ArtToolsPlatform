@@ -6,11 +6,16 @@ import {
   X, 
   HelpCircle,
   Database,
-  Info
+  Info,
+  Bell,
+  CheckCheck,
+  FolderOpen,
+  Palette,
+  Wrench
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { PROJECT_SPACES, INITIAL_APPS, EXTENSIONS_PROJECT_A, ART_ASSETS_PROJECT_A } from './data';
-import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession } from './types';
+import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession, AppNotification, NotificationDomain } from './types';
 import {
   loadSession,
   saveSession,
@@ -35,6 +40,70 @@ interface LogLine {
   timestamp: string;
   type: 'info' | 'success' | 'warning' | 'error';
 }
+
+const NOTIFICATION_DOMAIN_META: Record<NotificationDomain, { label: string; icon: typeof Bell; accent: string }> = {
+  canvas: { label: '画布', icon: Palette, accent: '#38bdf8' },
+  asset: { label: '素材', icon: FolderOpen, accent: '#22c55e' },
+  tool: { label: '工具', icon: Wrench, accent: '#f59e0b' }
+};
+
+const buildInitialNotifications = (): AppNotification[] => {
+  const now = Date.now();
+  return [
+    {
+      id: 'notification-canvas-share-demo',
+      domain: 'canvas',
+      node: 'canvas-share',
+      trigger: '画布被分享 / 授权',
+      recipient: '被分享用户',
+      title: '分享画布权限',
+      content: '赵云 将画布「赵云盔甲细节讨论」分享给您，权限：编辑者',
+      canvasName: '赵云盔甲细节讨论',
+      actorName: '赵云',
+      createdAt: new Date(now - 1000 * 60 * 12).toISOString(),
+      unread: true
+    },
+    {
+      id: 'notification-discussion-invite-demo',
+      domain: 'canvas',
+      node: 'discussion-invite',
+      trigger: '发起或邀请加入音频讨论',
+      recipient: '被邀请协作者',
+      title: '邀请讨论',
+      content: '慕也 邀请您加入画布「冰河三国主视觉方向」的音频讨论',
+      canvasName: '冰河三国主视觉方向',
+      actorName: '慕也',
+      createdAt: new Date(now - 1000 * 60 * 37).toISOString(),
+      unread: true
+    },
+    {
+      id: 'notification-discussion-summary-demo',
+      domain: 'canvas',
+      node: 'discussion-summary',
+      trigger: 'AI 讨论总结生成完成',
+      recipient: '讨论发起人',
+      title: '讨论总结完成',
+      content: '画布「冰河三国主视觉方向」的讨论总结已生成，点击查看',
+      canvasName: '冰河三国主视觉方向',
+      actorName: 'AI 讨论总结',
+      createdAt: new Date(now - 1000 * 60 * 58).toISOString(),
+      unread: false
+    },
+    {
+      id: 'notification-comment-mention-demo',
+      domain: 'canvas',
+      node: 'comment-mention',
+      trigger: '评论中 @某用户',
+      recipient: '被@用户',
+      title: '评论 @提醒',
+      content: '诸葛亮 在画布「场景雾效参考整合」中提到了您：@慕也 这里的雾效层次可以更明确一些',
+      canvasName: '场景雾效参考整合',
+      actorName: '诸葛亮',
+      createdAt: new Date(now - 1000 * 60 * 83).toISOString(),
+      unread: false
+    }
+  ];
+};
 
 export default function App() {
   const isCanvasEditorWindow = new URLSearchParams(window.location.search).has('canvasId');
@@ -89,6 +158,8 @@ export default function App() {
   );
   const [isInitial, setIsInitial] = useState<boolean>(true);
   const [toast, setToast] = useState<{ id: number; message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>(buildInitialNotifications);
+  const [notificationDetailId, setNotificationDetailId] = useState<string | null>(null);
 
   // Global Sync Status Containers
   const [apps, setApps] = useState<AppConfig[]>(INITIAL_APPS);
@@ -136,6 +207,29 @@ export default function App() {
       setToast({ id: Date.now(), message, type });
     }
   };
+
+  const addNotification = (notification: Omit<AppNotification, 'id' | 'createdAt' | 'unread'> & { createdAt?: string; unread?: boolean }) => {
+    const nextNotification: AppNotification = {
+      ...notification,
+      id: `notification-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      createdAt: notification.createdAt ?? new Date().toISOString(),
+      unread: notification.unread ?? true
+    };
+    setNotifications(prev => [nextNotification, ...prev]);
+  };
+
+  const markAllNotificationsRead = () => {
+    setNotifications(prev => prev.map(item => ({ ...item, unread: false })));
+  };
+
+  const openNotificationDetail = (id: string) => {
+    setNotificationDetailId(id);
+    setNotifications(prev => prev.map(item => item.id === id ? { ...item, unread: false } : item));
+  };
+
+  const notificationDetail = notificationDetailId
+    ? notifications.find(item => item.id === notificationDetailId) ?? null
+    : null;
 
   // Switch Space side effect logging
   useEffect(() => {
@@ -265,6 +359,8 @@ export default function App() {
             currentSpace={currentSpace}
             setCurrentSpace={setCurrentSpace}
             addLog={addLog}
+            addNotification={addNotification}
+            theme={theme}
           />
         );
       case 'permissions':
@@ -342,6 +438,9 @@ export default function App() {
         addLog={addLog}
         session={session}
         onLogout={handleLogout}
+        notifications={notifications}
+        onMarkAllNotificationsRead={markAllNotificationsRead}
+        onOpenNotification={openNotificationDetail}
       />
 
       {/* 2. Main Work Content Area (split with bottom collapsible terminal log) */}
@@ -410,6 +509,94 @@ export default function App() {
       </div>
     </div>
         )
+    )}
+    {notificationDetail && (
+      <div
+        className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+        onClick={() => setNotificationDetailId(null)}
+      >
+        <div
+          className={`w-full max-w-[460px] overflow-hidden rounded-xl border shadow-2xl ${
+            theme === 'light' ? 'border-slate-200 bg-white text-slate-900' : 'border-[#27272a] bg-[#0c0c0e] text-zinc-100'
+          }`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {(() => {
+            const meta = NOTIFICATION_DOMAIN_META[notificationDetail.domain];
+            const DetailIcon = meta.icon;
+            return (
+              <>
+                <div className={`flex items-center justify-between border-b px-5 py-4 ${theme === 'light' ? 'border-slate-100' : 'border-[#1c1c1f]'}`}>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded border"
+                      style={{ backgroundColor: `${meta.accent}18`, borderColor: `${meta.accent}55`, color: meta.accent }}
+                    >
+                      <DetailIcon size={17} />
+                    </span>
+                    <div className="min-w-0">
+                      <h3 className="truncate text-sm font-bold">{meta.label}</h3>
+                      <p className={`mt-0.5 font-mono text-[10px] ${theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}`}>
+                        {new Date(notificationDetail.createdAt).toLocaleString('zh-CN', { hour12: false })}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setNotificationDetailId(null)}
+                    className={`inline-flex h-7 w-7 items-center justify-center rounded transition-colors ${
+                      theme === 'light' ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-700' : 'text-zinc-500 hover:bg-[#18181b] hover:text-white'
+                    }`}
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+
+                <div className="space-y-4 px-5 py-5">
+                  <p className={`rounded-lg border px-3 py-3 text-sm leading-relaxed ${
+                    theme === 'light' ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-zinc-800 bg-black/30 text-zinc-200'
+                  }`}>
+                    {notificationDetail.content}
+                  </p>
+
+                  <div className="grid grid-cols-[96px_1fr] gap-x-3 gap-y-2 text-xs">
+                    <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>节点</span>
+                    <span>{meta.label}</span>
+                    <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>触发时机</span>
+                    <span>{notificationDetail.trigger}</span>
+                    <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>通知对象</span>
+                    <span>{notificationDetail.recipient}</span>
+                    <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>画布</span>
+                    <span>{notificationDetail.canvasName}</span>
+                    <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>发起人</span>
+                    <span>{notificationDetail.actorName}</span>
+                  </div>
+                </div>
+
+                <div className={`flex justify-end gap-2 border-t px-5 py-4 ${theme === 'light' ? 'border-slate-100' : 'border-[#1c1c1f]'}`}>
+                  <button
+                    type="button"
+                    onClick={markAllNotificationsRead}
+                    className={`inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs transition-colors ${
+                      theme === 'light' ? 'border-slate-200 bg-white text-slate-500 hover:text-slate-900' : 'border-zinc-800 bg-black text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    <CheckCheck size={12} />
+                    全部已读
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNotificationDetailId(null)}
+                    className="rounded bg-[#00ff00] px-4 py-1.5 text-xs font-semibold text-black"
+                  >
+                    知道了
+                  </button>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      </div>
     )}
     </>
   );

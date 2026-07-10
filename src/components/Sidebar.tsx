@@ -15,8 +15,9 @@ import {
   IdCard,
   X
 } from 'lucide-react';
-import { SpaceId, ProjectSpace, AppConfig, AuthSession } from '../types';
+import { SpaceId, ProjectSpace, AppConfig, AuthSession, AppNotification } from '../types';
 import DccMonitor from './DccMonitor';
+import NotificationCenter from './NotificationCenter';
 import { Tooltip } from './Tooltip';
 
 interface SidebarProps {
@@ -33,6 +34,9 @@ interface SidebarProps {
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
   session: AuthSession | null;
   onLogout: () => void;
+  notifications: AppNotification[];
+  onMarkAllNotificationsRead: () => void;
+  onOpenNotification: (id: string) => void;
 }
 
 export default function Sidebar({
@@ -48,7 +52,10 @@ export default function Sidebar({
   setApps,
   addLog,
   session,
-  onLogout
+  onLogout,
+  notifications,
+  onMarkAllNotificationsRead,
+  onOpenNotification
 }: SidebarProps) {
   // V1 sharing mode keeps the primary navigation collapsed; expansion is disabled for now.
   const isCollapsed = true;
@@ -167,6 +174,17 @@ export default function Sidebar({
 
       {/* Bottom: DCC monitor + theme selector + profile */}
       <div className={`${isCollapsed ? 'p-2' : 'p-4'} border-t border-[#27272a] bg-[#0c0c0e] font-mono`}>
+        {/* Canvas collaboration notifications */}
+        <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
+          <NotificationCenter
+            notifications={notifications}
+            onMarkAllRead={onMarkAllNotificationsRead}
+            onOpen={onOpenNotification}
+            theme={theme}
+            isCollapsed={isCollapsed}
+          />
+        </div>
+
         {/* Persistent DCC connection-status monitor */}
         <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
           <DccMonitor

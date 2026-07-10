@@ -183,6 +183,23 @@ export interface CanvasElement {
   createdAt: string;
 }
 
+export type NotificationNode = 'canvas-share' | 'discussion-invite' | 'discussion-summary' | 'comment-mention';
+export type NotificationDomain = 'canvas' | 'asset' | 'tool';
+
+export interface AppNotification {
+  id: string;
+  domain: NotificationDomain;
+  node: NotificationNode;
+  trigger: string;
+  recipient: string;
+  title: string;
+  content: string;
+  canvasName: string;
+  actorName: string;
+  createdAt: string;
+  unread: boolean;
+}
+
 export interface DownloadTask {
   assetId: string;
   progress: number; // 0-100
