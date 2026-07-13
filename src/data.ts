@@ -17,15 +17,15 @@ export const PROJECT_SPACES: ProjectSpace[] = [
   },
   {
     id: SpaceId.Shared,
-    name: '全员共享空间',
-    extensionCount: 0,
+    name: '与我共享',
+    extensionCount: 1,
     assetCount: 0,
     description: '跨项目通用的底层引擎插件、公共资产、规范说明等。V1 暂无内容。'
   },
   {
     id: SpaceId.Personal,
-    name: '慕也的个人空间',
-    extensionCount: 0,
+    name: '个人空间',
+    extensionCount: 2,
     assetCount: 0,
     description: '每位美术师的专属云盘，用于存放草稿、个人资产与偏好工具。V1 暂无内容。'
   }
@@ -38,10 +38,20 @@ export const INITIAL_APPS: AppConfig[] = [
     isPlatformHosted: true,
     status: AppStatus.Connected,
     version: 'v4.1.0',
-    newVersion: 'v4.2.0', // corner purple badge
+    newVersion: 'v4.2.0',
     diskRequiredGB: 4,
     sizeGB: 4.2,
     installPath: 'C:\\Program Files\\ArtPlatform\\managed\\blender'
+  },
+  {
+    id: AppId.Photoshop,
+    name: 'Adobe Photoshop',
+    isPlatformHosted: false,
+    status: AppStatus.InstalledOffline,
+    version: '2025.2',
+    diskRequiredGB: 6,
+    sizeGB: 5.8,
+    installPath: 'C:\\Program Files\\Adobe\\Adobe Photoshop 2025'
   },
   {
     id: AppId.Maya,
@@ -67,7 +77,7 @@ export const INITIAL_APPS: AppConfig[] = [
   {
     id: AppId.Houdini,
     name: 'Houdini',
-    isPlatformHosted: false,
+    isPlatformHosted: true,
     status: AppStatus.NotReady, // 未找到安装，演示手动设置路径流程
     version: '20.5',
     diskRequiredGB: 12,
@@ -76,117 +86,313 @@ export const INITIAL_APPS: AppConfig[] = [
   }
 ];
 
-// 22 extensions in Project A (we show a subset but label with counts)
+const EXTENSION_THUMBNAILS = [
+  'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=900&auto=format&fit=crop&q=82',
+  'https://images.unsplash.com/photo-1535378917042-10a22c95931a?w=900&auto=format&fit=crop&q=82',
+  'https://images.unsplash.com/photo-1519608487953-e999c86e7455?w=900&auto=format&fit=crop&q=82',
+  'https://images.unsplash.com/photo-1614064641938-3bbee52942c7?w=900&auto=format&fit=crop&q=82',
+  'https://images.unsplash.com/photo-1558655146-9f40138edfeb?w=900&auto=format&fit=crop&q=82'
+];
+
+const PROJECT_EXTENSION_EXTRAS: Array<{
+  id: string;
+  name: string;
+  dccId: AppId;
+  stage: DccExtension['stage'];
+  version: string;
+  latestVersion: string;
+  lifecycle: DccExtension['lifecycle'];
+  desc: string;
+}> = [
+  { id: 'ext-11', name: 'Layer Batch Publisher', dccId: AppId.Photoshop, stage: 'concept', version: 'v1.6', latestVersion: 'v1.6', lifecycle: 'installed_latest', desc: '按项目命名规范批量整理图层并导出角色、场景与 GUI 切图。' },
+  { id: 'ext-12', name: 'LOD Batch Builder', dccId: AppId.Max3ds, stage: 'model', version: 'v2.0', latestVersion: 'v2.2', lifecycle: 'update_available', desc: '批量生成模型 LOD，检查材质槽与枢轴，并输出引擎侧报告。' },
+  { id: 'ext-13', name: 'Houdini Terrain Stamp', dccId: AppId.Houdini, stage: 'vfx', version: 'v1.4', latestVersion: 'v1.4', lifecycle: 'not_downloaded', desc: '项目地形侵蚀、道路压印与积雪遮罩的程序化 HDA 工具。' },
+  { id: 'ext-14', name: 'Maya Camera Toolkit', dccId: AppId.Maya, stage: 'animation', version: 'v3.1', latestVersion: 'v3.1', lifecycle: 'installed_latest', desc: '镜头焦段预设、运动轨迹清理和批量 Playblast 发布工具。' },
+  { id: 'ext-15', name: 'Blender Hair Card Lab', dccId: AppId.Blender, stage: 'model', version: 'v0.9', latestVersion: 'v1.0', lifecycle: 'update_available', desc: '从曲线快速生成发片、自动展开 UV 并检查发片朝向。' },
+  { id: 'ext-16', name: 'PS Concept Grid', dccId: AppId.Photoshop, stage: 'concept', version: 'v1.2', latestVersion: 'v1.2', lifecycle: 'not_downloaded', desc: '快速创建透视网格、构图框与项目标准画布尺寸。' },
+  { id: 'ext-17', name: 'Max Collision Helper', dccId: AppId.Max3ds, stage: 'model', version: 'v2.7', latestVersion: 'v2.7', lifecycle: 'not_downloaded', desc: '根据模型层级生成碰撞体并检查命名、比例与导出轴向。' },
+  { id: 'ext-18', name: 'Houdini Flip Cache Pack', dccId: AppId.Houdini, stage: 'vfx', version: 'v4.0', latestVersion: 'v4.0', lifecycle: 'installed_latest', desc: '统一水体模拟缓存路径、版本号和代理预览输出。' },
+  { id: 'ext-19', name: 'Maya Pose Library', dccId: AppId.Maya, stage: 'animation', version: 'v1.9', latestVersion: 'v2.0', lifecycle: 'update_available', desc: '保存、检索和镜像项目角色姿势，支持局部控制器混合。' },
+  { id: 'ext-20', name: 'Blender GUI Mockup', dccId: AppId.Blender, stage: 'gui', version: 'v1.0', latestVersion: 'v1.0', lifecycle: 'not_downloaded', desc: '在 Blender 中快速搭建游戏界面三维动效与镜头预演。' },
+  { id: 'ext-21', name: 'PS Nine-Slice Exporter', dccId: AppId.Photoshop, stage: 'gui', version: 'v2.3', latestVersion: 'v2.3', lifecycle: 'installed_latest', desc: '读取切片标注并批量导出九宫格资源与配置清单。' },
+  { id: 'ext-22', name: 'Houdini VAT Publisher', dccId: AppId.Houdini, stage: 'vfx', version: 'v3.5', latestVersion: 'v3.5', lifecycle: 'not_downloaded', desc: '统一 Vertex Animation Texture 烘焙参数并发布至项目资源库。' }
+];
+
+// 项目空间 A 22 个工具，并补充个人/共享演示数据以覆盖授权和删除流程。
 export const EXTENSIONS_PROJECT_A: DccExtension[] = [
   {
     id: 'ext-01',
     name: 'L36-Scene Generator',
-    dccId: AppId.ComfyUI,
+    dccId: AppId.Houdini,
     version: 'v2.1',
-    desc: '基于项目Lora的自动高精场景参考图生成节点，集成风格遮罩，加速初期概念迭代。',
+    latestVersion: 'v2.1',
+    desc: '基于项目程序化规则的高精场景生成节点，集成地形遮罩，加速场景迭代。',
     author: 'TA_Guanyu',
-    installed: false,
+    ownerEmail: 'guanyu@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'vfx',
+    lifecycle: 'not_downloaded',
+    fileSizeMB: 386,
+    thumbnail: EXTENSION_THUMBNAILS[0],
+    previewUrl: EXTENSION_THUMBNAILS[0],
+    updatedAt: '2026-06-23T09:30:00.000Z',
     needsRestart: true,
-    isActivated: false
+    isActivated: false,
+    sharedWith: []
   },
   {
     id: 'ext-02',
     name: 'Auto-UV Unwrapper',
     dccId: AppId.Blender,
     version: 'v1.3.2',
+    latestVersion: 'v1.3.2',
     desc: '次世代角色硬表面一键UV拆解并自动排布，支持多象限UDIM分块。',
     author: 'TA_LaoLi',
-    installed: true,
+    ownerEmail: 'lubu@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'model',
+    lifecycle: 'installed_latest',
+    fileSizeMB: 48,
+    thumbnail: EXTENSION_THUMBNAILS[1],
+    previewUrl: EXTENSION_THUMBNAILS[1],
+    updatedAt: '2026-06-21T14:20:00.000Z',
     needsRestart: false,
-    isActivated: true
+    isActivated: true,
+    sharedWith: []
   },
   {
     id: 'ext-03',
-    name: 'Sangokuo Character Lora',
-    dccId: AppId.ComfyUI,
-    version: 'v3.0',
-    desc: '三国武将重彩水墨风大模型微调权重，用于 ComfyUI 原画细化。',
+    name: 'Procedural Battle Fog',
+    dccId: AppId.Houdini,
+    version: 'v2.8',
+    latestVersion: 'v3.0',
+    desc: '三国战场体积雾、风场与远景层次的程序化生成工具。',
     author: 'AI_Studio',
-    installed: false,
+    ownerEmail: 'zhouyu@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'vfx',
+    lifecycle: 'update_available',
+    fileSizeMB: 724,
+    thumbnail: EXTENSION_THUMBNAILS[2],
+    previewUrl: EXTENSION_THUMBNAILS[2],
+    updatedAt: '2026-06-24T08:45:00.000Z',
     needsRestart: true,
-    isActivated: false
+    isActivated: true,
+    sharedWith: []
   },
   {
     id: 'ext-04',
     name: 'Maya Rigging Helper',
     dccId: AppId.Maya,
     version: 'v2.5',
+    latestVersion: 'v2.5',
     desc: '一键自动四足与人形骨架搭接工具，适配项目A专属动画状态机。',
     author: 'AnimTech_Z',
-    installed: false,
+    ownerEmail: 'zhaoyun@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'animation',
+    lifecycle: 'not_downloaded',
+    fileSizeMB: 82,
+    thumbnail: EXTENSION_THUMBNAILS[3],
+    previewUrl: EXTENSION_THUMBNAILS[3],
+    updatedAt: '2026-06-20T16:10:00.000Z',
     needsRestart: false,
-    isActivated: false
+    isActivated: false,
+    sharedWith: []
   },
   {
     id: 'ext-05',
     name: 'Smart Exporter',
     dccId: AppId.Maya,
     version: 'v4.0',
+    latestVersion: 'v4.0',
     desc: '将模型、蒙皮与关节动画一键导出为游戏引擎优化格式，自动清理命名空间。',
     author: 'TA_Guanyu',
-    installed: true,
+    ownerEmail: 'guanyu@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'model',
+    lifecycle: 'installed_latest',
+    fileSizeMB: 35,
+    thumbnail: EXTENSION_THUMBNAILS[4],
+    previewUrl: EXTENSION_THUMBNAILS[4],
+    updatedAt: '2026-06-19T11:40:00.000Z',
     needsRestart: false,
-    isActivated: true
+    isActivated: true,
+    sharedWith: []
   },
   {
     id: 'ext-06',
     name: 'PS Texture Sync Node',
     dccId: AppId.Photoshop,
     version: 'v2.1',
+    latestVersion: 'v2.1',
     desc: 'Photoshop 绘制贴图实时双向同步投影至 DCC 表面，打通绘制闭环。',
     author: 'IT_TechDept',
-    installed: false,
+    ownerEmail: 'kongming@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'concept',
+    lifecycle: 'not_downloaded',
+    fileSizeMB: 126,
+    thumbnail: EXTENSION_THUMBNAILS[0],
+    previewUrl: EXTENSION_THUMBNAILS[0],
+    updatedAt: '2026-06-18T10:15:00.000Z',
     needsRestart: true,
-    isActivated: false
+    isActivated: false,
+    sharedWith: []
   },
   {
     id: 'ext-07',
     name: 'Vertex Color Baker',
     dccId: AppId.Max3ds,
     version: 'v1.1',
+    latestVersion: 'v1.3',
     desc: '烘焙手绘光影至顶点色/自发光，适配轻量化高效率手绘渲染管线。',
     author: 'TA_LaoLi',
-    installed: false,
-    needsRestart: false,
-    isActivated: false
+    ownerEmail: 'lubu@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'model',
+    lifecycle: 'update_available',
+    fileSizeMB: 63,
+    thumbnail: EXTENSION_THUMBNAILS[1],
+    previewUrl: EXTENSION_THUMBNAILS[1],
+    updatedAt: '2026-06-22T15:25:00.000Z',
+    needsRestart: true,
+    isActivated: true,
+    sharedWith: []
   },
   {
     id: 'ext-08',
     name: 'PBR Material Manager',
     dccId: AppId.Blender,
     version: 'v2.2.1',
+    latestVersion: 'v2.2.1',
     desc: '快速从项目 A PBR库拉取标准的次世代材质，包含金属、软皮革、铠甲、半透明丝绸。',
     author: 'TA_ArtLead',
-    installed: false,
-    needsRestart: true,
-    isActivated: false
+    ownerEmail: 'diaochan@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'model',
+    lifecycle: 'not_downloaded',
+    fileSizeMB: 218,
+    thumbnail: EXTENSION_THUMBNAILS[2],
+    previewUrl: EXTENSION_THUMBNAILS[2],
+    updatedAt: '2026-06-17T12:35:00.000Z',
+    needsRestart: false,
+    isActivated: false,
+    sharedWith: []
   },
   {
     id: 'ext-09',
     name: 'Animate Optimizer',
     dccId: AppId.Maya,
     version: 'v1.8',
+    latestVersion: 'v1.8',
     desc: '动画曲线帧数精简、抖动平滑、双脚触地滑脚自动检测修正工具。',
     author: 'Anim_Jie',
-    installed: false,
+    ownerEmail: 'zhaoyun@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'animation',
+    lifecycle: 'not_downloaded',
+    fileSizeMB: 54,
+    thumbnail: EXTENSION_THUMBNAILS[3],
+    previewUrl: EXTENSION_THUMBNAILS[3],
+    updatedAt: '2026-06-16T17:05:00.000Z',
     needsRestart: false,
-    isActivated: false
+    isActivated: false,
+    sharedWith: []
   },
   {
     id: 'ext-10',
-    name: 'ComfyUI ControlNet FaceFix',
-    dccId: AppId.ComfyUI,
+    name: 'Houdini Pyro Shelf',
+    dccId: AppId.Houdini,
     version: 'v1.0.4',
-    desc: '针对写实东方角色五官及神情进行二次高精修复重绘的插件节点。',
+    latestVersion: 'v1.0.4',
+    desc: '项目爆炸、烟尘和燃烧效果的标准化 Pyro 预设与缓存发布工具。',
     author: 'AI_Studio',
-    installed: true,
+    ownerEmail: 'zhouyu@studio.com',
+    spaceId: SpaceId.ProjectA,
+    stage: 'vfx',
+    lifecycle: 'installed_latest',
+    fileSizeMB: 292,
+    thumbnail: EXTENSION_THUMBNAILS[4],
+    previewUrl: EXTENSION_THUMBNAILS[4],
+    updatedAt: '2026-06-15T09:55:00.000Z',
     needsRestart: true,
-    isActivated: false // Needs restart still
+    isActivated: false,
+    sharedWith: []
+  },
+  ...PROJECT_EXTENSION_EXTRAS.map((item, index): DccExtension => ({
+    ...item,
+    author: index % 2 === 0 ? 'TA_Guanyu' : 'Pipeline_Team',
+    ownerEmail: index % 2 === 0 ? 'guanyu@studio.com' : 'kongming@studio.com',
+    spaceId: SpaceId.ProjectA,
+    fileSizeMB: 42 + index * 31,
+    thumbnail: EXTENSION_THUMBNAILS[index % EXTENSION_THUMBNAILS.length],
+    previewUrl: EXTENSION_THUMBNAILS[index % EXTENSION_THUMBNAILS.length],
+    updatedAt: new Date(Date.UTC(2026, 5, 14 - index, 10, 0, 0)).toISOString(),
+    needsRestart: item.dccId === AppId.Photoshop || item.dccId === AppId.Max3ds || item.dccId === AppId.Houdini,
+    isActivated: item.lifecycle !== 'not_downloaded',
+    sharedWith: []
+  })),
+  {
+    id: 'ext-personal-01',
+    name: '冰河角色材质检查器',
+    dccId: AppId.Blender,
+    version: 'v1.2',
+    latestVersion: 'v1.2',
+    desc: '慕也维护的角色材质命名、贴图通道和缺失资源检查工具。',
+    author: '慕也',
+    ownerEmail: 'likemuye@gmail.com',
+    spaceId: SpaceId.Personal,
+    stage: 'model',
+    lifecycle: 'installed_latest',
+    fileSizeMB: 28,
+    thumbnail: EXTENSION_THUMBNAILS[1],
+    previewUrl: EXTENSION_THUMBNAILS[1],
+    updatedAt: '2026-06-24T12:00:00.000Z',
+    needsRestart: false,
+    isActivated: true,
+    sharedWith: [{ email: 'zhaoyun@studio.com', name: '赵云', sharedAt: '2026-06-25T09:00:00.000Z' }]
+  },
+  {
+    id: 'ext-personal-02',
+    name: 'GUI 导出命名助手',
+    dccId: AppId.Photoshop,
+    version: 'v0.8',
+    latestVersion: 'v0.8',
+    desc: '个人维护的 GUI 切图命名和尺寸检查脚本，可用于分享与删除流程演示。',
+    author: '慕也',
+    ownerEmail: 'likemuye@gmail.com',
+    spaceId: SpaceId.Personal,
+    stage: 'gui',
+    lifecycle: 'not_downloaded',
+    fileSizeMB: 16,
+    thumbnail: EXTENSION_THUMBNAILS[4],
+    previewUrl: EXTENSION_THUMBNAILS[4],
+    updatedAt: '2026-06-22T10:20:00.000Z',
+    needsRestart: true,
+    isActivated: false,
+    sharedWith: []
+  },
+  {
+    id: 'ext-shared-01',
+    name: '镜头节奏标记工具',
+    dccId: AppId.Maya,
+    version: 'v2.0',
+    latestVersion: 'v2.2',
+    desc: '诸葛亮分享的镜头节奏、关键帧密度与评审批注辅助工具。',
+    author: '诸葛亮',
+    ownerEmail: 'kongming@studio.com',
+    spaceId: SpaceId.Personal,
+    stage: 'animation',
+    lifecycle: 'update_available',
+    fileSizeMB: 74,
+    thumbnail: EXTENSION_THUMBNAILS[3],
+    previewUrl: EXTENSION_THUMBNAILS[3],
+    updatedAt: '2026-06-23T13:40:00.000Z',
+    needsRestart: false,
+    isActivated: true,
+    sharedWith: [{ email: 'likemuye@gmail.com', name: '慕也', sharedAt: '2026-06-24T08:00:00.000Z' }],
+    simulateHotLoadFailure: true
   }
 ];
 
@@ -293,7 +499,7 @@ const RAW_ART_ASSETS_PROJECT_A: ArtAsset[] = [
     previewUrl: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=1000&auto=format&fit=crop&q=80',
     author: 'VFX_LaoXie',
     platform: '特效序列中心',
-    desc: '武将大招附带闪电碎石砸落的法线通道动画预览视频，支持 ComfyUI 输入节点获取。',
+    desc: '武将大招附带闪电碎石砸落的法线通道动画预览视频，支持 Houdini COP 输入节点获取。',
     tags: ['特效', '视频', '闪电', '大招']
   },
   {

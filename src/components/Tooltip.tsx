@@ -184,12 +184,12 @@ export function Tooltip({
     updatePosition();
   }, [content, open, updatePosition]);
 
-  const child = React.Children.only(children) as React.ReactElement<any> & { ref?: React.Ref<HTMLElement> };
+  const child = React.Children.only(children) as React.ReactElement<any>;
   const childProps = child.props as Record<string, unknown>;
   const childAriaLabel = childProps['aria-label'];
 
   const clonedChild = React.cloneElement(child, {
-    ref: mergeRefs<HTMLElement>(child.ref, (value) => {
+    ref: mergeRefs<HTMLElement>(child.props.ref, (value) => {
       triggerRef.current = value;
     }),
     onMouseEnter: (event: React.MouseEvent<HTMLElement>) => {

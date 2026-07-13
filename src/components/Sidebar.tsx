@@ -1,11 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Layers,
-  Settings,
   HardDrive,
   User,
   FolderOpen,
-  Palette,
   Sun,
   Moon,
   Monitor,
@@ -17,7 +14,6 @@ import {
 } from 'lucide-react';
 import { SpaceId, ProjectSpace, AppConfig, AuthSession, AppNotification } from '../types';
 import DccMonitor from './DccMonitor';
-import NotificationCenter from './NotificationCenter';
 import { Tooltip } from './Tooltip';
 
 interface SidebarProps {
@@ -109,11 +105,7 @@ export default function Sidebar({
 
   const mainTabs = [
     { id: 'assets', name: '素材', icon: FolderOpen, badge: currentSpace.id === SpaceId.ProjectA ? '100+' : '0' },
-    { id: 'canvas', name: '画布', icon: Palette },
     { id: 'permissions', name: '权限管理', icon: ShieldCheck },
-    // V1 暂不开放：工具、缓存与设置
-    // { id: 'extensions', name: '工具', icon: Layers, badge: currentSpace.id === SpaceId.ProjectA ? '22' : '0' },
-    // { id: 'settings', name: '缓存与设置', icon: Settings },
   ];
 
   return (
@@ -121,7 +113,7 @@ export default function Sidebar({
       {/* Upper Area */}
       <div className="flex flex-col flex-1 min-h-0">
         {/* Platform Title */}
-        <div className={`border-b border-[#27272a] bg-[#0c0c0e] ${isCollapsed ? 'p-3 flex items-center justify-center relative' : 'p-5 flex items-center justify-between'}`}>
+        <div className={`app-sidebar-brand h-[52px] shrink-0 border-b border-[#27272a] bg-[#0c0c0e] ${isCollapsed ? 'px-3 flex items-center justify-center relative' : 'px-5 flex items-center justify-between'}`}>
           <div className={`flex items-center ${isCollapsed ? '' : 'gap-2'}`}>
             <div className="w-3 h-3 bg-[#00ff00] animate-pulse"></div>
             {!isCollapsed && (
@@ -174,17 +166,6 @@ export default function Sidebar({
 
       {/* Bottom: DCC monitor + theme selector + profile */}
       <div className={`${isCollapsed ? 'p-2' : 'p-4'} border-t border-[#27272a] bg-[#0c0c0e] font-mono`}>
-        {/* Canvas collaboration notifications */}
-        <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
-          <NotificationCenter
-            notifications={notifications}
-            onMarkAllRead={onMarkAllNotificationsRead}
-            onOpen={onOpenNotification}
-            theme={theme}
-            isCollapsed={isCollapsed}
-          />
-        </div>
-
         {/* Persistent DCC connection-status monitor */}
         <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
           <DccMonitor

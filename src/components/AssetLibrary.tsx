@@ -80,6 +80,14 @@ interface PersonalUploadDraft {
   isTagging: boolean;
 }
 
+type PersonalUploadHierarchyEntry =
+  | { kind: 'folder'; key: string; path: string; name: string; depth: number; fileCount: number }
+  | { kind: 'file'; key: string; item: PendingPersonalUploadItem; depth: number };
+
+type PersonalUploadDisplayBlock =
+  | { kind: 'folder-group'; key: string; entries: PersonalUploadHierarchyEntry[] }
+  | { kind: 'loose-file'; key: string; entries: PersonalUploadHierarchyEntry[] };
+
 type ExternalAssetType = 'model_anim' | 'image_texture' | 'video' | 'audio' | 'project';
 type ExternalAssetSource = 'artstation' | 'pinterest' | 'huaban';
 
@@ -1126,6 +1134,14 @@ const inferUploadType = (file: File): PersonalUploadType | null => {
   return null;
 };
 
+const getUploadFolderSegments = (sourceFileName: string) => {
+  const normalizedPath = sourceFileName.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const segments = normalizedPath.split('/').filter(Boolean);
+  return segments.length > 1 ? segments.slice(0, -1) : [];
+};
+
+const getUploadFolderPath = (sourceFileName: string) => getUploadFolderSegments(sourceFileName).join('/');
+
 const readImageDimensions = (file: File): Promise<{ width: number; height: number } | null> => {
   return new Promise((resolve) => {
     const objectUrl = URL.createObjectURL(file);
@@ -2132,6 +2148,7 @@ export default function AssetLibrary({
   const [isPersonalUploadInfoOpen, setIsPersonalUploadInfoOpen] = useState<boolean>(false);
   const [isPersonalUploadDropzoneActive, setIsPersonalUploadDropzoneActive] = useState<boolean>(false);
   const [personalUploadDraft, setPersonalUploadDraft] = useState<PersonalUploadDraft | null>(null);
+  const [collapsedPersonalUploadFolderPaths, setCollapsedPersonalUploadFolderPaths] = useState<Set<string>>(new Set());
   const [aiTagThreshold, setAiTagThreshold] = useState<number>(DEFAULT_AI_TAG_THRESHOLD);
   const [pendingTagInputs, setPendingTagInputs] = useState<Record<string, string>>({});
   // 当前展开分类多选下拉的草稿项 id（null 表示全部收起）
@@ -2142,7 +2159,9 @@ export default function AssetLibrary({
   const assetLayoutRef = useRef<HTMLDivElement | null>(null);
   const categoryMenuRef = useRef<HTMLDivElement | null>(null);
   const personalUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const personalUploadFolderInputRef = useRef<HTMLInputElement | null>(null);
   const personalAppendInputRef = useRef<HTMLInputElement | null>(null);
+  const personalAppendFolderInputRef = useRef<HTMLInputElement | null>(null);
   const uploadSessionRef = useRef<number>(0);
   const aiTagThresholdRef = useRef<number>(DEFAULT_AI_TAG_THRESHOLD);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
@@ -2859,6 +2878,7 @@ export default function AssetLibrary({
   const closePersonalUploadDraft = () => {
     uploadSessionRef.current += 1;
     setPersonalUploadDraft(null);
+    setCollapsedPersonalUploadFolderPaths(new Set());
     aiTagThresholdRef.current = DEFAULT_AI_TAG_THRESHOLD;
     setAiTagThreshold(DEFAULT_AI_TAG_THRESHOLD);
     setPendingTagInputs({});
@@ -3000,6 +3020,51 @@ export default function AssetLibrary({
     const personalDefaultFolderId = getDefaultFolderIdBySpace(SpaceId.Personal);
 
     const timestampBase = Date.now();
+    const createdFolders: AssetFolder[] = [];
+    const foldersAfterUpload = [...folders];
+    const pathToFolderId = new Map<string, string>();
+    let folderSequence = 0;
+
+    const targetFolderIds = personalUploadDraft.items.map((item) => {
+      const segments = getUploadFolderSegments(item.sourceFileName);
+      let parentId = personalDefaultFolderId;
+      let currentPath = '';
+
+      segments.forEach((segment) => {
+        currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+        const resolvedFolderId = pathToFolderId.get(currentPath);
+        if (resolvedFolderId) {
+          parentId = resolvedFolderId;
+          return;
+        }
+
+        const existingFolder = foldersAfterUpload.find(folder => (
+          folder.parentId === parentId &&
+          folder.name.trim().toLocaleLowerCase() === segment.trim().toLocaleLowerCase()
+        ));
+
+        if (existingFolder) {
+          parentId = existingFolder.id;
+          pathToFolderId.set(currentPath, existingFolder.id);
+          return;
+        }
+
+        const newFolder: AssetFolder = {
+          id: buildScopedFolderId(SpaceId.Personal, `folder-${timestampBase + folderSequence}`),
+          name: segment,
+          parentId,
+          createdAt: new Date(timestampBase).toISOString()
+        };
+        folderSequence += 1;
+        foldersAfterUpload.push(newFolder);
+        createdFolders.push(newFolder);
+        pathToFolderId.set(currentPath, newFolder.id);
+        parentId = newFolder.id;
+      });
+
+      return parentId;
+    });
+
     const newAssets: PersonalUploadedAsset[] = personalUploadDraft.items.map((item, index) => ({
       id: `personal-asset-${timestampBase}-${index}`,
       name: item.fileName.trim() || getFileBaseName(item.sourceFileName),
@@ -3009,7 +3074,7 @@ export default function AssetLibrary({
       thumbnail: item.previewUrl,
       previewUrl: item.previewUrl,
       author: '当前用户',
-      platform: '个人空间·置顶目录',
+      platform: `个人空间·${getUploadFolderPath(item.sourceFileName) || '置顶目录'}`,
       desc: `用户上传文件 ${item.sourceFileName}，已完成 AI 自动识别与标签确认。`,
       tags: dedupeTags(item.tags),
       uploadType: item.uploadType,
@@ -3017,18 +3082,55 @@ export default function AssetLibrary({
       uploadedAt: new Date().toISOString()
     }));
 
+    if (createdFolders.length > 0) {
+      setFolders(foldersAfterUpload);
+    }
     setPersonalAssets(prev => [...newAssets, ...prev]);
     setFolderAssignments(prev => {
       const next = { ...prev };
-      newAssets.forEach((asset) => {
-        next[asset.id] = personalDefaultFolderId;
+      newAssets.forEach((asset, index) => {
+        next[asset.id] = targetFolderIds[index] ?? personalDefaultFolderId;
       });
       return next;
     });
-    setSelectedFolderId(personalDefaultFolderId);
-    setExpandedFolderIds(prev => new Set(prev).add(personalDefaultFolderId));
-    addLog(`📤 个人空间上传完成：${newAssets.length} 条素材已归档到【置顶目录】。`, 'success');
+
+    const rootFolderIds = new Set(
+      personalUploadDraft.items
+        .map(item => getUploadFolderSegments(item.sourceFileName)[0])
+        .filter((name): name is string => Boolean(name))
+        .map(name => pathToFolderId.get(name))
+        .filter((folderId): folderId is string => Boolean(folderId))
+    );
+    const hasLooseFiles = personalUploadDraft.items.some(item => getUploadFolderSegments(item.sourceFileName).length === 0);
+    const destinationFolderId = !hasLooseFiles && rootFolderIds.size === 1
+      ? [...rootFolderIds][0]
+      : personalDefaultFolderId;
+    setSelectedFolderId(destinationFolderId);
+    setExpandedFolderIds(prev => {
+      const next = new Set(prev);
+      next.add(personalDefaultFolderId);
+      pathToFolderId.forEach(folderId => next.add(folderId));
+      return next;
+    });
+    addLog(
+      createdFolders.length > 0
+        ? `📤 个人空间上传完成：${newAssets.length} 条素材已按本地结构归档，并创建 ${createdFolders.length} 个文件夹。`
+        : `📤 个人空间上传完成：${newAssets.length} 条素材已归档到对应目录。`,
+      'success'
+    );
     closePersonalUploadDraft();
+  };
+
+  const togglePersonalUploadFolder = (folderPath: string) => {
+    setCollapsedPersonalUploadFolderPaths(previous => {
+      const next = new Set(previous);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
+      } else {
+        next.add(folderPath);
+      }
+      return next;
+    });
   };
 
   const startPersonalUploadFromFiles = async (files: File[]) => {
@@ -3067,7 +3169,7 @@ export default function AssetLibrary({
       return {
         id: `pending-${sessionId}-${index}`,
         fileName: fileBaseName,
-        sourceFileName: file.name,
+        sourceFileName: file.webkitRelativePath || file.name,
         sizeBytes: file.size,
         format: getFileExtension(file.name).toUpperCase() || 'BIN',
         uploadType,
@@ -3081,6 +3183,7 @@ export default function AssetLibrary({
     });
 
     setPendingTagInputs({});
+    setCollapsedPersonalUploadFolderPaths(new Set());
     setPersonalUploadDraft({
       items: initialItems,
       totalBytes,
@@ -3117,6 +3220,12 @@ export default function AssetLibrary({
   };
 
   const handlePersonalFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    await startPersonalUploadFromFiles(files);
+  };
+
+  const handlePersonalFolderSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = '';
     await startPersonalUploadFromFiles(files);
@@ -3161,7 +3270,7 @@ export default function AssetLibrary({
       return {
         id: `pending-${sessionId}-${index}`,
         fileName: fileBaseName,
-        sourceFileName: file.name,
+        sourceFileName: file.webkitRelativePath || file.name,
         sizeBytes: file.size,
         format: getFileExtension(file.name).toUpperCase() || 'BIN',
         uploadType,
@@ -3215,6 +3324,12 @@ export default function AssetLibrary({
     await appendFilesToPersonalDraft(files);
   };
 
+  const handlePersonalAppendFolderSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    await appendFilesToPersonalDraft(files);
+  };
+
   const handlePersonalUploadDrop = (event: React.DragEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -3250,6 +3365,10 @@ export default function AssetLibrary({
 
   const openPersonalUploadPicker = () => {
     personalUploadInputRef.current?.click();
+  };
+
+  const openPersonalUploadFolderPicker = () => {
+    personalUploadFolderInputRef.current?.click();
   };
 
   const openPersonalUploadInfo = () => {
@@ -3762,11 +3881,11 @@ export default function AssetLibrary({
   const checkCompatibility = (format: string, appId: AppId): { compatible: boolean; reason?: string } => {
     const fmt = format.toLowerCase();
     
-    // ComfyUI (PNG, JPG, MP4, MOV, Sequence)
-    if (appId === AppId.ComfyUI) {
+    // Houdini (images, geometry, caches and common review video)
+    if (appId === AppId.Houdini) {
       const allowed = ['png', 'jpg', 'jpeg', 'mp4', 'mov'];
       if (allowed.includes(fmt)) return { compatible: true };
-      return { compatible: false, reason: 'ComfyUI 仅支持JPG/PNG图像及MP4/MOV视频输入加载' };
+      return { compatible: false, reason: 'Houdini 仅支持常用图像、模型、缓存及 MP4/MOV 评审文件导入' };
     }
 
     // Photoshop (PNG, JPG)
@@ -3811,7 +3930,7 @@ export default function AssetLibrary({
     const fmt = format.toLowerCase();
     const isImg = ['png', 'jpg', 'jpeg'].includes(fmt);
 
-    if (appId === AppId.ComfyUI) {
+    if (appId === AppId.Houdini) {
       return isImg ? '投射至输入图像节点' : '投射至视频加载器';
     }
     if (appId === AppId.Photoshop) {
@@ -5191,6 +5310,78 @@ export default function AssetLibrary({
     );
   }, [personalUploadDraft?.items]);
 
+  const personalUploadHierarchyEntries = useMemo<PersonalUploadHierarchyEntry[]>(() => {
+    const nodes = new Map<string, { path: string; name: string; depth: number; fileCount: number }>();
+    const filesByFolder = new Map<string, PendingPersonalUploadItem[]>();
+
+    (personalUploadDraft?.items ?? []).forEach((item) => {
+      const segments = getUploadFolderSegments(item.sourceFileName);
+      const folderPath = segments.join('/');
+      filesByFolder.set(folderPath, [...(filesByFolder.get(folderPath) ?? []), item]);
+
+      segments.forEach((name, index) => {
+        const path = segments.slice(0, index + 1).join('/');
+        const existing = nodes.get(path);
+        nodes.set(path, {
+          path,
+          name,
+          depth: index,
+          fileCount: (existing?.fileCount ?? 0) + 1
+        });
+      });
+    });
+
+    const childFolders = new Map<string, Array<{ path: string; name: string; depth: number; fileCount: number }>>();
+    nodes.forEach((node) => {
+      const parentPath = node.path.includes('/') ? node.path.slice(0, node.path.lastIndexOf('/')) : '';
+      childFolders.set(parentPath, [...(childFolders.get(parentPath) ?? []), node]);
+    });
+    childFolders.forEach(children => children.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')));
+
+    const entries: PersonalUploadHierarchyEntry[] = [];
+    const appendFolder = (node: { path: string; name: string; depth: number; fileCount: number }) => {
+      entries.push({ kind: 'folder', key: `folder-${node.path}`, ...node });
+      if (collapsedPersonalUploadFolderPaths.has(node.path)) return;
+      (childFolders.get(node.path) ?? []).forEach(appendFolder);
+      (filesByFolder.get(node.path) ?? []).forEach(item => {
+        entries.push({ kind: 'file', key: item.id, item, depth: node.depth + 1 });
+      });
+    };
+
+    (childFolders.get('') ?? []).forEach(appendFolder);
+    (filesByFolder.get('') ?? []).forEach(item => {
+      entries.push({ kind: 'file', key: item.id, item, depth: 0 });
+    });
+    return entries;
+  }, [collapsedPersonalUploadFolderPaths, personalUploadDraft?.items]);
+
+  const personalUploadDisplayBlocks = useMemo<PersonalUploadDisplayBlock[]>(() => {
+    const blocks: PersonalUploadDisplayBlock[] = [];
+    let activeFolderBlock: Extract<PersonalUploadDisplayBlock, { kind: 'folder-group' }> | null = null;
+
+    personalUploadHierarchyEntries.forEach((entry) => {
+      if (entry.kind === 'folder' && entry.depth === 0) {
+        activeFolderBlock = {
+          kind: 'folder-group',
+          key: `group-${entry.path}`,
+          entries: [entry]
+        };
+        blocks.push(activeFolderBlock);
+        return;
+      }
+
+      if (activeFolderBlock && entry.depth > 0) {
+        activeFolderBlock.entries.push(entry);
+        return;
+      }
+
+      activeFolderBlock = null;
+      blocks.push({ kind: 'loose-file', key: `loose-${entry.key}`, entries: [entry] });
+    });
+
+    return blocks;
+  }, [personalUploadHierarchyEntries]);
+
   // 卡片宽度调节：auto-fill + minmax 让卡片按设定宽度排布；宽度超过内容区时自动退化为单列填满。
   const assetGridStyle: React.CSSProperties = {
     display: 'grid',
@@ -5892,12 +6083,36 @@ export default function AssetLibrary({
       />
 
       <input
+        ref={personalUploadFolderInputRef}
+        data-upload-input="initial-folder"
+        aria-label="选择上传文件夹"
+        type="file"
+        multiple
+        accept="image/*,video/*,.gif"
+        onChange={handlePersonalFolderSelection}
+        className="hidden"
+        {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
+      />
+
+      <input
         ref={personalAppendInputRef}
         type="file"
         multiple
         accept="image/*,video/*,.gif"
         onChange={handlePersonalAppendSelection}
         className="hidden"
+      />
+
+      <input
+        ref={personalAppendFolderInputRef}
+        data-upload-input="append-folder"
+        aria-label="继续添加文件夹"
+        type="file"
+        multiple
+        accept="image/*,video/*,.gif"
+        onChange={handlePersonalAppendFolderSelection}
+        className="hidden"
+        {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
       />
 
       <input
@@ -6101,9 +6316,9 @@ export default function AssetLibrary({
             className="w-full shrink-0 border-b lg:border-b-0 border-[#27272a] bg-[#070708] flex flex-col min-h-0"
             style={isDesktopLayout ? { width: `${folderPaneWidth}px` } : undefined}
           >
-            <div className="p-3 border-b border-[#1c1c1f]">
+            <div className="asset-folder-header flex h-[52px] shrink-0 items-center border-b border-[#1c1c1f] px-3">
               {isFolderSearchActive ? (
-                <div className="relative">
+                <div className="relative w-full">
                   <Search size={13} className="absolute left-2.5 top-2.5 text-zinc-500" />
                   <input
                     autoFocus
@@ -6138,7 +6353,7 @@ export default function AssetLibrary({
                   </button>
                 </div>
               ) : (
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex w-full items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <Archive size={15} className="text-[#00ff00]" />
                     <span className="text-xs font-bold text-white truncate">文件目录</span>
@@ -6214,7 +6429,7 @@ export default function AssetLibrary({
                             className="inline-flex items-center gap-1.5 rounded border border-zinc-700 bg-black px-2.5 py-1.5 text-[10.5px] font-mono text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <CheckCircle size={12} className={allSelected ? 'text-[#00ff00]' : ''} />
-                            {allSelected ? '取消全选' : `全选（${allIds.length}）`}
+                            {allSelected ? '取消全选' : `全选本页（${allIds.length}）`}
                           </button>
                         );
                       })()}
@@ -6805,7 +7020,7 @@ export default function AssetLibrary({
 
       {isPersonalUploadInfoOpen && (
         <div className="personal-upload-info-modal fixed inset-0 z-50 bg-black/80 backdrop-blur-sm p-4 flex items-center justify-center">
-          <div className="personal-upload-info-panel w-full max-w-[560px] rounded-xl border border-[#27272a] bg-[#0c0c0e] p-5">
+          <div className="personal-upload-info-panel w-full max-w-[640px] rounded-xl border border-[#27272a] bg-[#0c0c0e] p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
@@ -6824,11 +7039,41 @@ export default function AssetLibrary({
             </div>
 
             <div className="personal-upload-info-body mt-4 rounded border border-zinc-800 bg-black/40 p-3 text-[11px] font-mono text-zinc-300 space-y-1.5">
-              <p>1. 目录逻辑一致：支持一级目录、子目录、目录搜索、右键管理。</p>
-              <p>2. 入库目录：确认上传后自动写入个人空间指定目录</p>
-              <p>3. 格式限制：支持图片、动图(GIF)、视频。</p>
-              <p>4. 批量限制：单次最多 500 条，总大小不超过 10 GB。</p>
-              <p>5. 智能处理：上传阶段自动 AI 打标，支持标签增删改后再确认。</p>
+              <p>支持图片、动图（GIF）和视频；单次最多 500 条，总大小不超过 10 GB。</p>
+              <p>确认上传前会自动完成 AI 打标，可继续调整素材名称、分类和标签。</p>
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-2 text-[10px] font-mono uppercase text-zinc-500">选择上传方式</p>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={openPersonalUploadPicker}
+                  className="personal-upload-source-card group flex min-h-[92px] items-center gap-3 rounded-lg border border-zinc-700 bg-black/30 p-3.5 text-left transition-colors hover:border-[#00ff00]/70 hover:bg-[#00ff00]/5"
+                >
+                  <span className="personal-upload-source-icon inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-[#00ff00] transition-colors group-hover:border-[#00ff00]/50">
+                    <Files size={18} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-semibold text-zinc-100">上传文件</span>
+                    <span className="mt-1 block text-[10.5px] leading-4 text-zinc-500">选择一个或多个本地素材文件</span>
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={openPersonalUploadFolderPicker}
+                  className="personal-upload-source-card group flex min-h-[92px] items-center gap-3 rounded-lg border border-zinc-700 bg-black/30 p-3.5 text-left transition-colors hover:border-[#00ff00]/70 hover:bg-[#00ff00]/5"
+                >
+                  <span className="personal-upload-source-icon inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-[#00ff00] transition-colors group-hover:border-[#00ff00]/50">
+                    <FolderOpen size={18} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-semibold text-zinc-100">上传文件夹</span>
+                    <span className="mt-1 block text-[10.5px] leading-4 text-zinc-500">批量读取文件夹内的支持格式</span>
+                  </span>
+                </button>
+              </div>
             </div>
 
             <button
@@ -6847,24 +7092,17 @@ export default function AssetLibrary({
             >
               <div className="pointer-events-none flex flex-col items-center gap-2">
                 <Upload size={16} />
-                <p className="text-[11.5px] font-semibold">点击或拖拽文件到此处上传</p>
+                <p className="text-[11.5px] font-semibold">也可拖拽文件到此处上传</p>
               </div>
             </button>
 
-            <div className="mt-4 flex items-center justify-end gap-3">
+            <div className="mt-4 flex items-center justify-end">
               <button
                 type="button"
                 onClick={() => setIsPersonalUploadInfoOpen(false)}
                 className="personal-upload-info-cancel rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 hover:border-zinc-600 hover:text-white"
               >
                 取消
-              </button>
-              <button
-                type="button"
-                onClick={openPersonalUploadPicker}
-                className="rounded bg-[#00ff00] px-4 py-1.5 text-xs font-bold text-black hover:bg-[#00dd00]"
-              >
-                选择本地文件
               </button>
             </div>
           </div>
@@ -7518,7 +7756,7 @@ export default function AssetLibrary({
         <div className="personal-upload-modal fixed inset-0 z-50 bg-black/85 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center">
           <div className="personal-upload-modal-panel w-full max-w-[1080px] h-[76vh] min-h-[520px] max-h-[760px] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] flex flex-col">
             <div className="shrink-0 px-5 py-4 border-b border-[#27272a] flex items-start justify-between gap-4">
-              <div>
+              <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
                   <Sparkles size={14} className="text-[#00ff00]" />
                   上传预处理与 AI 自动打标
@@ -7526,6 +7764,12 @@ export default function AssetLibrary({
                 <p className="mt-1 text-[11px] text-zinc-500 font-mono">
                   总数 {personalUploadStats.total} | 上传中 {personalUploadStats.uploading} | 已打标 {personalUploadStats.ready} | 失败 {personalUploadStats.failed}
                 </p>
+                {personalUploadDraft.isTagging && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+                    <Loader2 size={11} className="animate-spin text-[#00ff00]" />
+                    正在执行上传预处理和智能打标...
+                  </div>
+                )}
               </div>
               <button
                 type="button"
@@ -7552,6 +7796,9 @@ export default function AssetLibrary({
                     value={aiTagThreshold}
                     onChange={(event) => updateAiTagThreshold(Number(event.target.value))}
                     className="personal-upload-threshold-slider h-1.5 min-w-0 flex-1 cursor-pointer accent-[#00ff00]"
+                    style={{
+                      '--range-progress': `${((aiTagThreshold - AI_TAG_THRESHOLD_MIN) / (AI_TAG_THRESHOLD_MAX - AI_TAG_THRESHOLD_MIN)) * 100}%`
+                    } as React.CSSProperties}
                   />
                   <span className="w-7 text-[10px] font-mono text-zinc-500">{AI_TAG_THRESHOLD_MAX}</span>
                 </div>
@@ -7561,28 +7808,51 @@ export default function AssetLibrary({
               </div>
             </div>
 
-            <div className="shrink-0 px-5 py-3 border-b border-[#27272a]">
-              <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+            <div className="personal-upload-modal-list min-h-0 flex-1 overflow-y-auto p-3 space-y-3">
+              {personalUploadDisplayBlocks.map((block) => (
                 <div
-                  className="h-full bg-[#00ff00] transition-all"
-                  style={{
-                    width: `${personalUploadStats.total === 0 ? 0 : (personalUploadStats.ready / personalUploadStats.total) * 100}%`
-                  }}
-                />
-              </div>
-              {personalUploadDraft.isTagging && (
-                <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono text-zinc-400">
-                  <Loader2 size={12} className="animate-spin text-[#00ff00]" />
-                  正在执行上传预处理和智能打标，请稍候...
-                </div>
-              )}
-            </div>
+                  key={block.key}
+                  className={block.kind === 'folder-group'
+                    ? `personal-upload-folder-group space-y-2 overflow-hidden rounded bg-zinc-950/60 ${block.entries.length > 1 ? 'pb-3' : ''}`
+                    : ''}
+                >
+                  {block.entries.map((entry) => {
+                  if (entry.kind === 'folder') {
+                    const isCollapsed = collapsedPersonalUploadFolderPaths.has(entry.path);
+                    const indent = entry.depth > 0 ? 12 + (Math.min(entry.depth, 8) - 1) * 18 : 0;
+                    const rightInset = entry.depth > 0 ? 12 : 0;
+                    return (
+                      <button
+                        type="button"
+                        key={entry.key}
+                        onClick={() => togglePersonalUploadFolder(entry.path)}
+                        aria-expanded={!isCollapsed}
+                        className={`personal-upload-hierarchy-folder flex h-11 w-full min-w-0 items-center gap-2 bg-zinc-900/70 pr-3 text-left text-zinc-200 transition-colors hover:bg-zinc-800/80 ${isCollapsed ? '' : 'border-b border-zinc-700'}`}
+                        style={{ marginLeft: `${indent}px`, width: `calc(100% - ${indent + rightInset}px)`, paddingLeft: '12px' }}
+                        title={`${isCollapsed ? '展开' : '收起'}文件夹：${entry.path}`}
+                      >
+                        {isCollapsed
+                          ? <ChevronRight size={13} className="shrink-0 text-zinc-500" />
+                          : <ChevronDown size={13} className="shrink-0 text-zinc-500" />}
+                        {isCollapsed
+                          ? <Folder size={15} className="shrink-0 text-zinc-400" />
+                          : <FolderOpen size={15} className="shrink-0 text-zinc-400" />}
+                        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{entry.name}</span>
+                        <span className="shrink-0 text-[9.5px] font-mono text-zinc-500">{entry.fileCount} 个文件</span>
+                      </button>
+                    );
+                  }
 
-            <div className="personal-upload-modal-list min-h-0 flex-1 overflow-y-auto p-5 space-y-3">
-              {personalUploadDraft.items.map((item) => {
-                const tagSuggestions = getTagSuggestions(item.id);
-                return (
-                <div key={item.id} className="personal-upload-modal-item rounded border border-[#27272a] bg-black/35 p-3">
+                  const item = entry.item;
+                  const tagSuggestions = getTagSuggestions(item.id);
+                  const sourceFolderPath = getUploadFolderPath(item.sourceFileName) || null;
+                  const fileIndent = entry.depth > 0 ? 12 + (Math.min(entry.depth, 8) - 1) * 18 : 0;
+                  return (
+                <div
+                  key={entry.key}
+                  className={`personal-upload-modal-item personal-upload-hierarchy-file ${entry.depth > 0 ? 'is-nested' : ''} relative rounded border border-[#27272a] bg-black/35 p-3`}
+                  style={{ marginLeft: `${fileIndent}px`, marginRight: entry.depth > 0 ? '12px' : undefined }}
+                >
                   <div className="flex items-start gap-3">
                     <div className="w-28 sm:w-32 shrink-0">
                       <div className="personal-upload-modal-preview relative aspect-[4/3] rounded border border-zinc-800 overflow-hidden bg-black">
@@ -7622,6 +7892,12 @@ export default function AssetLibrary({
                           <span className="ml-2 border-l border-zinc-800 pl-2 text-zinc-500">{toDisplayMB(item.sizeBytes)} MB</span>
                           <span className="ml-2 border-l border-zinc-800 pl-2 text-[#00ff00]">{personalTypeLabel[item.uploadType]}</span>
                         </div>
+                        {sourceFolderPath && (
+                          <div className="flex min-w-0 items-center gap-1.5 text-[10px] font-mono text-zinc-500" title={item.sourceFileName}>
+                            <FolderOpen size={11} className="shrink-0" />
+                            <span className="truncate">{sourceFolderPath}</span>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -7767,23 +8043,32 @@ export default function AssetLibrary({
                   </div>
                 </div>
                 );
-              })}
+                  })}
+                </div>
+              ))}
             </div>
 
             <div className="shrink-0 px-5 py-4 border-t border-[#27272a] flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => personalAppendInputRef.current?.click()}
-                disabled={personalUploadDraft.isTagging}
-                className={`personal-upload-append inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs font-mono transition-colors ${
-                  personalUploadDraft.isTagging
-                    ? 'border-zinc-800 bg-black text-zinc-600 cursor-not-allowed'
-                    : 'border-zinc-700 bg-black text-zinc-300 hover:border-[#00ff00]/60 hover:text-[#00ff00]'
-                }`}
-              >
-                <Plus size={13} />
-                继续添加素材
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => personalAppendInputRef.current?.click()}
+                  disabled={personalUploadDraft.isTagging}
+                  className={`personal-upload-modal-cancel inline-flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white ${personalUploadDraft.isTagging ? 'cursor-not-allowed opacity-50' : ''}`}
+                >
+                  <Plus size={13} />
+                  添加文件
+                </button>
+                <button
+                  type="button"
+                  onClick={() => personalAppendFolderInputRef.current?.click()}
+                  disabled={personalUploadDraft.isTagging}
+                  className={`personal-upload-modal-cancel inline-flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white ${personalUploadDraft.isTagging ? 'cursor-not-allowed opacity-50' : ''}`}
+                >
+                  <FolderOpen size={13} />
+                  添加文件夹
+                </button>
+              </div>
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -8331,7 +8616,7 @@ export default function AssetLibrary({
 
                     {/* Compatible DCC targets mapping matrix */}
                     <div className="space-y-1.5">
-                      {[AppId.ComfyUI, AppId.Blender, AppId.Photoshop, AppId.Maya, AppId.Max3ds].map((appId) => {
+                      {[AppId.Houdini, AppId.Blender, AppId.Photoshop, AppId.Maya, AppId.Max3ds].map((appId) => {
                         const dccApp = apps.find(app => app.id === appId);
                         const isConnected = dccApp?.status === AppStatus.Connected;
                         const { compatible, reason } = checkCompatibility(selectedAsset.format, appId);

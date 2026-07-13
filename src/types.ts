@@ -14,7 +14,6 @@ export interface ProjectSpace {
 }
 
 export enum AppId {
-  ComfyUI = 'comfyui',
   Blender = 'blender',
   Photoshop = 'photoshop',
   Maya = 'maya',
@@ -33,7 +32,7 @@ export enum AppStatus {
 export interface AppConfig {
   id: AppId;
   name: string;
-  isPlatformHosted: boolean; // true = comfyui/blender, false = ps/maya/3dsmax
+  isPlatformHosted: boolean; // true = open-source DCC, false = commercial DCC
   status: AppStatus;
   version: string;
   newVersion?: string; // If 'newVersion' exists, update badge is active
@@ -44,16 +43,35 @@ export interface AppConfig {
   sizeGB: number;
 }
 
+export type ExtensionLifecycle = 'not_downloaded' | 'installed_latest' | 'update_available';
+export type ExtensionArtStage = 'concept' | 'model' | 'animation' | 'vfx' | 'gui';
+
+export interface ExtensionShareGrant {
+  email: string;
+  name: string;
+  sharedAt: string;
+}
+
 export interface DccExtension {
   id: string;
   name: string;
   dccId: AppId;
   version: string;
+  latestVersion: string;
   desc: string;
   author: string;
-  installed: boolean;
-  needsRestart: boolean; // True to require restarted DCC to apply
-  isActivated: boolean; // True if active
+  ownerEmail: string;
+  spaceId: SpaceId;
+  stage: ExtensionArtStage;
+  lifecycle: ExtensionLifecycle;
+  fileSizeMB: number;
+  thumbnail: string;
+  previewUrl: string;
+  updatedAt: string;
+  needsRestart: boolean;
+  isActivated: boolean;
+  sharedWith: ExtensionShareGrant[];
+  simulateHotLoadFailure?: boolean;
 }
 
 export enum AssetCategory {
@@ -76,7 +94,7 @@ export interface ArtAsset {
   thumbnail: string;
   previewUrl: string; // Larger image for display
   author: string;
-  platform: string; // 来源平台 (e.g., IT Asset System, ComfyUI Export, CG Share)
+  platform: string; // 来源平台 (e.g., IT Asset System, DCC Export, CG Share)
   desc: string;
   tags: string[];
   createdAt?: string; // ISO timestamp; used by combined filters for time range + sorting

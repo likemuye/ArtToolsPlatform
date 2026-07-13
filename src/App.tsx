@@ -41,6 +41,9 @@ interface LogLine {
   type: 'info' | 'success' | 'warning' | 'error';
 }
 
+const EXTENSION_STATE_STORAGE_KEY = 'pixgo-extensions-v03';
+const DCC_STATE_STORAGE_KEY = 'pixgo-dcc-state-v03';
+
 const NOTIFICATION_DOMAIN_META: Record<NotificationDomain, { label: string; icon: typeof Bell; accent: string }> = {
   canvas: { label: '画布', icon: Palette, accent: '#38bdf8' },
   asset: { label: '素材', icon: FolderOpen, accent: '#22c55e' },
@@ -162,10 +165,26 @@ export default function App() {
   const [notificationDetailId, setNotificationDetailId] = useState<string | null>(null);
 
   // Global Sync Status Containers
-  const [apps, setApps] = useState<AppConfig[]>(INITIAL_APPS);
-  const [extensions, setExtensions] = useState<DccExtension[]>(EXTENSIONS_PROJECT_A);
+  const [apps, setApps] = useState<AppConfig[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(DCC_STATE_STORAGE_KEY) ?? '[]') as AppConfig[];
+      if (!Array.isArray(stored)) return INITIAL_APPS;
+      return INITIAL_APPS.map(initial => ({ ...initial, ...stored.find(item => item.id === initial.id) }));
+    } catch {
+      return INITIAL_APPS;
+    }
+  });
+  const [extensions, setExtensions] = useState<DccExtension[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(EXTENSION_STATE_STORAGE_KEY) ?? '[]') as DccExtension[];
+      return Array.isArray(stored) && stored.length > 0 ? stored : EXTENSIONS_PROJECT_A;
+    } catch {
+      return EXTENSIONS_PROJECT_A;
+    }
+  });
   const [assets] = useState<ArtAsset[]>(ART_ASSETS_PROJECT_A);
   const [personalAssets, setPersonalAssets] = useState<PersonalUploadedAsset[]>([]);
+  const [activeExtensionDownloadCount, setActiveExtensionDownloadCount] = useState(0);
 
   // Pre-seed some downloaded assets to show the "Already Downloaded" status immediately in V1 demo
   const [downloadedAssetIds, setDownloadedAssetIds] = useState<Set<string>>(
@@ -173,7 +192,7 @@ export default function App() {
   );
 
   // Simulation settings - F10 Cache Sizes & Storage Bounds
-  const [simulatedDiskGB, setSimulatedDiskGB] = useState<number>(12.0); // 12GB available by default to trigger ComfyUI 15GB space check!
+  const [simulatedDiskGB, setSimulatedDiskGB] = useState<number>(12.0);
   const [tempCacheMB, setTempCacheMB] = useState<number>(2457.6); // 2.4 GB of temp logs
 
   // Retractable Terminal Console States
@@ -188,6 +207,14 @@ export default function App() {
     addLog('⚠️ 警告: Autodesk 3ds Max 运行文件校验失败，状态变更为【未就绪】，请配置手工桥接。', 'warning');
     addLog('📁 项目空间【三国奇幻RPGA】分发中心握手完毕，已加载 22 个定制插件、100+美术共享元数据。', 'success');
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(DCC_STATE_STORAGE_KEY, JSON.stringify(apps));
+  }, [apps]);
+
+  useEffect(() => {
+    localStorage.setItem(EXTENSION_STATE_STORAGE_KEY, JSON.stringify(extensions));
+  }, [extensions]);
 
   // System logging helper. Success/error also raise a global toast (1.5s), unless the caller
   // opts out via { toast: false } — used by sub-flows that already show an inline message.
@@ -280,6 +307,8 @@ export default function App() {
     setDownloadedAssetIds(new Set());
     setPersonalAssets([]);
     setCurrentTab('assets');
+    localStorage.removeItem('pixgo-extension-download-tasks-v03');
+    setActiveExtensionDownloadCount(0);
     addLog('👋 已退出登录，本地令牌与下载任务已清除。', 'info', { toast: false });
   };
 
@@ -310,19 +339,7 @@ export default function App() {
   const renderTabContent = () => {
     switch (currentTab) {
       case 'extensions':
-        return (
-          <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
-            <ExtensionManager
-              currentSpace={currentSpace}
-              apps={apps}
-              setApps={setApps}
-              extensions={extensions}
-              setExtensions={setExtensions}
-              addLog={addLog}
-              theme={theme}
-            />
-          </div>
-        );
+        return null;
       case 'assets':
         return (
           <AssetLibrary
@@ -344,12 +361,15 @@ export default function App() {
           <SettingsPanel
             apps={apps}
             setApps={setApps}
+            extensions={extensions}
             assets={assets}
             downloadedAssetIds={downloadedAssetIds}
             simulatedDiskGB={simulatedDiskGB}
             setSimulatedDiskGB={setSimulatedDiskGB}
             tempCacheMB={tempCacheMB}
             setTempCacheMB={setTempCacheMB}
+            activeDownloadCount={activeExtensionDownloadCount}
+            theme={theme}
             addLog={addLog}
           />
         );
@@ -450,7 +470,20 @@ export default function App() {
         
         {/* Core panel interface renderer */}
         <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-          {renderTabContent()}
+          <div className={currentTab === 'extensions' ? 'flex flex-1 min-h-0' : 'hidden'}>
+            <ExtensionManager
+              apps={apps}
+              setApps={setApps}
+              extensions={extensions}
+              setExtensions={setExtensions}
+              simulatedDiskGB={simulatedDiskGB}
+              onOpenSettings={() => setCurrentTab('settings')}
+              onDownloadActivityChange={setActiveExtensionDownloadCount}
+              addLog={addLog}
+              theme={theme}
+            />
+          </div>
+          {currentTab !== 'extensions' && renderTabContent()}
         </div>
 
         {/* 3. Retractable PixGo System Console Drawer at Bottom */}

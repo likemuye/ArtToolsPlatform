@@ -1,607 +1,882 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Layers, 
-  Search, 
-  Download, 
-  Trash2, 
-  AlertCircle, 
-  CheckCircle, 
-  RefreshCw, 
-  HelpCircle,
-  Clock,
-  X,
-  ChevronDown,
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  Boxes,
   Check,
-  Puzzle
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  FolderOpen,
+  MoreHorizontal,
+  Pause,
+  Play,
+  Puzzle,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Share2,
+  SlidersHorizontal,
+  Trash2,
+  User,
+  Users,
+  WifiOff,
+  X
 } from 'lucide-react';
-import { AppId, AppStatus, AppConfig, DccExtension, SpaceId, ProjectSpace } from '../types';
+import { CURRENT_USER_EMAIL, PLATFORM_USERS, PROJECT_SPACES } from '../data';
+import {
+  AppConfig,
+  AppId,
+  AppStatus,
+  DccExtension,
+  ExtensionArtStage,
+  ExtensionLifecycle,
+  SpaceId
+} from '../types';
 
 interface ExtensionManagerProps {
-  currentSpace: ProjectSpace;
   apps: AppConfig[];
   setApps: React.Dispatch<React.SetStateAction<AppConfig[]>>;
   extensions: DccExtension[];
   setExtensions: React.Dispatch<React.SetStateAction<DccExtension[]>>;
+  simulatedDiskGB: number;
+  onOpenSettings: () => void;
+  onDownloadActivityChange: (count: number) => void;
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
   theme: 'light' | 'dark';
 }
 
+type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'waiting_network' | 'completed';
+type DownloadKind = 'download' | 'update';
+
+interface ExtensionDownloadTask {
+  id: string;
+  extensionId: string;
+  kind: DownloadKind;
+  status: DownloadStatus;
+  progress: number;
+  speedMBps: number;
+  createdAt: number;
+}
+
+interface LaunchPrompt {
+  extension: DccExtension;
+  type: 'missing' | 'restart' | 'hotload_failure' | 'update_close';
+}
+
+const DOWNLOAD_STORAGE_KEY = 'pixgo-extension-download-tasks-v03';
+const MAX_CONCURRENT_DOWNLOADS = 3;
+
+const DCC_META: Record<AppId, { label: string; short: string; color: string }> = {
+  [AppId.Photoshop]: { label: 'Photoshop', short: 'Ps', color: '#31a8ff' },
+  [AppId.Maya]: { label: 'Maya', short: 'M', color: '#00a6a6' },
+  [AppId.Max3ds]: { label: '3ds Max', short: '3D', color: '#37a5cc' },
+  [AppId.Blender]: { label: 'Blender', short: 'B', color: '#f5792a' },
+  [AppId.Houdini]: { label: 'Houdini', short: 'H', color: '#ff4713' }
+};
+
+const DCC_OPTIONS = [AppId.Photoshop, AppId.Maya, AppId.Max3ds, AppId.Blender, AppId.Houdini];
+
+const STAGE_META: Record<ExtensionArtStage, string> = {
+  concept: '原画',
+  model: '模型',
+  animation: '动画',
+  vfx: '动效',
+  gui: 'GUI'
+};
+
+const SPACE_META: Record<SpaceId, { icon: typeof User; color: string }> = {
+  [SpaceId.Personal]: { icon: User, color: '#38bdf8' },
+  [SpaceId.Shared]: { icon: Users, color: '#a78bfa' },
+  [SpaceId.ProjectA]: { icon: Boxes, color: '#00ff00' },
+  [SpaceId.ProjectB]: { icon: Boxes, color: '#00ff00' }
+};
+
+const LIFECYCLE_META: Record<ExtensionLifecycle, { label: string; dot: string; text: string }> = {
+  not_downloaded: { label: '未下载', dot: 'bg-zinc-500', text: 'text-zinc-400' },
+  installed_latest: { label: '已安装·最新', dot: 'bg-emerald-400', text: 'text-emerald-400' },
+  update_available: { label: '有新版本', dot: 'bg-amber-400', text: 'text-amber-400' }
+};
+
+const LIFECYCLE_OPTIONS: ExtensionLifecycle[] = ['not_downloaded', 'installed_latest', 'update_available'];
+const STAGE_OPTIONS: ExtensionArtStage[] = ['concept', 'model', 'animation', 'vfx', 'gui'];
+
+const readDownloadTasks = (): ExtensionDownloadTask[] => {
+  try {
+    const raw = localStorage.getItem(DOWNLOAD_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(item => item && typeof item.extensionId === 'string' && typeof item.progress === 'number')
+      .map(item => ({
+        ...item,
+        id: String(item.id ?? `task-${item.extensionId}`),
+        kind: item.kind === 'update' ? 'update' : 'download',
+        status: 'paused' as DownloadStatus,
+        progress: Math.max(0, Math.min(99, item.progress)),
+        speedMBps: Number(item.speedMBps) || 6.8,
+        createdAt: Number(item.createdAt) || Date.now()
+      }));
+  } catch {
+    return [];
+  }
+};
+
+const formatDate = (value: string) => new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+}).format(new Date(value));
+
+const spaceLabel = (spaceId: SpaceId) => {
+  if (spaceId === SpaceId.Personal) return '个人空间';
+  if (spaceId === SpaceId.Shared) return '与我共享';
+  return PROJECT_SPACES.find(space => space.id === spaceId)?.name ?? '项目空间';
+};
+
 export default function ExtensionManager({
-  currentSpace,
   apps,
   setApps,
   extensions,
   setExtensions,
+  simulatedDiskGB,
+  onOpenSettings,
+  onDownloadActivityChange,
   addLog,
   theme
 }: ExtensionManagerProps) {
-  // Filters
-  const [selectedDccFilter, setSelectedDccFilter] = useState<string>('all');
-  const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('all');
-  const [keywordSearch, setKeywordSearch] = useState<string>('');
+  const [selectedSpaceId, setSelectedSpaceId] = useState<SpaceId>(SpaceId.ProjectA);
+  const [keyword, setKeyword] = useState('');
+  const [selectedDccs, setSelectedDccs] = useState<AppId[]>([]);
+  const [selectedStages, setSelectedStages] = useState<ExtensionArtStage[]>([]);
+  const [selectedLifecycles, setSelectedLifecycles] = useState<ExtensionLifecycle[]>([]);
+  const [selectedExtensionId, setSelectedExtensionId] = useState<string | null>(null);
+  const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+  const [tasks, setTasks] = useState<ExtensionDownloadTask[]>(readDownloadTasks);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [showResumePrompt, setShowResumePrompt] = useState(() => readDownloadTasks().length > 0);
+  const [cancelTaskId, setCancelTaskId] = useState<string | null>(null);
+  const [launchPrompt, setLaunchPrompt] = useState<LaunchPrompt | null>(null);
+  const [uninstallExtension, setUninstallExtension] = useState<DccExtension | null>(null);
+  const [deleteExtension, setDeleteExtension] = useState<DccExtension | null>(null);
+  const [shareExtension, setShareExtension] = useState<DccExtension | null>(null);
+  const [shareEmail, setShareEmail] = useState('');
+  const [shareError, setShareError] = useState('');
+  const completedTaskIds = useRef<Set<string>>(new Set());
+  const previousSpaceId = useRef<SpaceId>(SpaceId.ProjectA);
+  const isLight = theme === 'light';
 
-  // Dropdown states
-  const [dccFilterOpen, setDccFilterOpen] = useState(false);
-  const [statusFilterOpen, setStatusFilterOpen] = useState(false);
+  const extensionsForSpace = useMemo(() => extensions.filter(extension => {
+    if (selectedSpaceId === SpaceId.Shared) {
+      return extension.ownerEmail !== CURRENT_USER_EMAIL
+        && extension.sharedWith.some(grant => grant.email === CURRENT_USER_EMAIL);
+    }
+    if (selectedSpaceId === SpaceId.Personal) {
+      return extension.spaceId === SpaceId.Personal && extension.ownerEmail === CURRENT_USER_EMAIL;
+    }
+    return extension.spaceId === selectedSpaceId;
+  }), [extensions, selectedSpaceId]);
 
-  // Refs for click outside
-  const dccDropdownRef = useRef<HTMLDivElement>(null);
-  const statusDropdownRef = useRef<HTMLDivElement>(null);
+  const filteredExtensions = useMemo(() => {
+    const query = keyword.trim().toLowerCase();
+    return extensionsForSpace.filter(extension => {
+      if (selectedDccs.length > 0 && !selectedDccs.includes(extension.dccId)) return false;
+      if (selectedStages.length > 0 && !selectedStages.includes(extension.stage)) return false;
+      if (selectedLifecycles.length > 0 && !selectedLifecycles.includes(extension.lifecycle)) return false;
+      if (query && !`${extension.name} ${extension.desc}`.toLowerCase().includes(query)) return false;
+      return true;
+    });
+  }, [extensionsForSpace, keyword, selectedDccs, selectedStages, selectedLifecycles]);
+
+  const selectedExtension = selectedExtensionId
+    ? extensions.find(extension => extension.id === selectedExtensionId) ?? null
+    : null;
 
   useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dccDropdownRef.current && !dccDropdownRef.current.contains(event.target as Node)) {
-        setDccFilterOpen(false);
-      }
-      if (statusDropdownRef.current && !statusDropdownRef.current.contains(event.target as Node)) {
-        setStatusFilterOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
+    const handleOnline = () => {
+      setIsOnline(true);
+      setTasks(previous => previous.map(task => task.status === 'waiting_network' ? { ...task, status: 'queued' } : task));
+      addLog('网络已恢复，工具下载任务将从断点继续。', 'success');
     };
-  }, []);
+    const handleOffline = () => {
+      setIsOnline(false);
+      setTasks(previous => previous.map(task => (
+        task.status === 'downloading' || task.status === 'queued'
+          ? { ...task, status: 'waiting_network' }
+          : task
+      )));
+      addLog('网络已中断，工具下载进度已保留。', 'warning');
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [addLog]);
 
-  // Local UI State
-  const [installingExtId, setInstallingExtId] = useState<string | null>(null);
-  const [rebootNeededExt, setRebootNeededExt] = useState<DccExtension | null>(null);
-  const [uninstallConfirmExt, setUninstallConfirmExt] = useState<DccExtension | null>(null);
+  useEffect(() => {
+    localStorage.setItem(DOWNLOAD_STORAGE_KEY, JSON.stringify(tasks.filter(task => task.status !== 'completed')));
+    onDownloadActivityChange(tasks.filter(task => task.status !== 'completed').length);
+  }, [tasks, onDownloadActivityChange]);
 
-  // Constants
-  const isProjectA = currentSpace.id === SpaceId.ProjectA;
-
-  // Render variables helper
-  const getDccApp = (dccId: AppId): AppConfig | undefined => {
-    return apps.find(a => a.id === dccId);
-  };
-
-  // F5 Install Trigger
-  const handleInstallExt = (ext: DccExtension) => {
-    const dcc = getDccApp(ext.dccId);
-    if (!dcc || dcc.status !== AppStatus.Connected) {
-      addLog(`❌ 无法安装拓展：对应主程序 ${ext.dccId.toUpperCase()} 必须处于【已连接】状态。`, 'error');
-      return;
-    }
-
-    setInstallingExtId(ext.id);
-    addLog(`⏳ 正在将插件 ${ext.name} 分发复制到 ${dcc.name} 的 plugins 插件目录中...`, 'info');
-
-    // Simulate file copy (takes 1.2s)
-    setTimeout(() => {
-      setInstallingExtId(null);
-      
-      const updatedExtensions = extensions.map(e => {
-        if (e.id === ext.id) {
-          return { 
-            ...e, 
-            installed: true, 
-            isActivated: !e.needsRestart // Maya/3dsmax activated immediately, Blender/ComfyUI/PS requires restart
-          };
-        }
-        return e;
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTasks(previous => {
+        if (!isOnline) return previous;
+        let activeCount = previous.filter(task => task.status === 'downloading').length;
+        const promoted = previous.map(task => {
+          if (task.status === 'queued' && activeCount < MAX_CONCURRENT_DOWNLOADS) {
+            activeCount += 1;
+            return { ...task, status: 'downloading' as DownloadStatus };
+          }
+          return task;
+        });
+        return promoted.map(task => {
+          if (task.status !== 'downloading') return task;
+          const increment = 3 + (task.extensionId.charCodeAt(task.extensionId.length - 1) % 4);
+          const progress = Math.min(100, task.progress + increment);
+          return { ...task, progress, status: progress >= 100 ? 'completed' : task.status };
+        });
       });
-      setExtensions(updatedExtensions);
+    }, 650);
+    return () => window.clearInterval(timer);
+  }, [isOnline]);
 
-      addLog(`✅ 插件 ${ext.name} 写入 DCC 插件目录成功。`, 'success');
-
-      if (ext.needsRestart) {
-        // Blender, ComfyUI, Photoshop need reboot
-        const targetedExt = updatedExtensions.find(e => e.id === ext.id);
-        if (targetedExt) {
-          setRebootNeededExt(targetedExt);
-        }
-      } else {
-        addLog(`⚡ [热加载成功] ${ext.name} 已成功加载并在 ${dcc.name} 中即时激活，可立即可用！`, 'success');
-      }
-    }, 1200);
-  };
-
-  // PixGo only detects DCC state; users restart external DCC apps themselves.
-  const confirmManualDccRestart = (dccId: AppId) => {
-    setRebootNeededExt(null);
-    const dcc = getDccApp(dccId);
-    if (!dcc) return;
-
-    addLog(`🔍 已记录 ${dcc.name} 手动重启确认，正在检测插件激活状态...`, 'info');
-    setApps(prev => prev.map(a => (
-      a.id === dccId ? { ...a, status: AppStatus.Connecting } : a
-    )));
-
-    setTimeout(() => {
-      setApps(prev => prev.map(a => {
-        if (a.id === dccId) {
-          addLog(`✅ ${dcc.name} 状态检测通过，全部待加载插件已变更为【已激活】就绪状态！`, 'success');
-          return { ...a, status: AppStatus.Connected };
-        }
-        return a;
-      }));
-      
-      // Update Extensions activation status
-      setExtensions(prev => prev.map(e => {
-        if (e.dccId === dccId && e.installed) {
-          return { ...e, isActivated: true };
-        }
-        return e;
-      }));
-
-    }, 2000);
-  };
-
-  // Uninstall flow - F6
-  const requestUninstallExt = (ext: DccExtension) => {
-    setUninstallConfirmExt(ext);
-  };
-
-  const confirmUninstallExt = () => {
-    if (!uninstallConfirmExt) return;
-    const ext = uninstallConfirmExt;
-    const dcc = getDccApp(ext.dccId);
-    const isRunning = dcc?.status === AppStatus.Connected;
-
-    setExtensions(prev => prev.map(e => {
-      if (e.id === ext.id) {
-        return { ...e, installed: false, isActivated: false };
-      }
-      return e;
+  useEffect(() => {
+    const completed = tasks.filter(task => task.status === 'completed' && !completedTaskIds.current.has(task.id));
+    if (completed.length === 0) return;
+    completed.forEach(task => completedTaskIds.current.add(task.id));
+    const completedByExtension = new Map(completed.map(task => [task.extensionId, task]));
+    setExtensions(previous => previous.map(extension => {
+      const task = completedByExtension.get(extension.id);
+      if (!task) return extension;
+      return {
+        ...extension,
+        version: task.kind === 'update' ? extension.latestVersion : extension.version,
+        lifecycle: 'installed_latest',
+        isActivated: false
+      };
     }));
+    completed.forEach(task => {
+      const extension = extensions.find(item => item.id === task.extensionId);
+      if (extension) {
+        addLog(`${task.kind === 'update' ? '工具更新' : '工具下载'}完成：${extension.name}，文件完整性校验通过。`, 'success');
+      }
+    });
+    setTasks(previous => previous.filter(task => task.status !== 'completed'));
+  }, [tasks, extensions, setExtensions, addLog]);
 
-    addLog(`🗑️ 已移除 ${ext.name} 极其相关的配置文件。`, 'warning');
-    if (isRunning && ext.needsRestart) {
-      addLog(`⚠️ 提示: 由于 ${dcc?.name} 处于连接运行中，部分写入缓存将跟随下次 DCC 重启时完成彻底卸载抹除。`, 'info');
-    }
+  useEffect(() => {
+    if (previousSpaceId.current === selectedSpaceId) return;
+    addLog(`工具空间已从「${spaceLabel(previousSpaceId.current)}」切换至「${spaceLabel(selectedSpaceId)}」，后台任务保持运行。`, 'info', { toast: false });
+    previousSpaceId.current = selectedSpaceId;
+  }, [selectedSpaceId, addLog]);
 
-    setUninstallConfirmExt(null);
-  };
-
-  // Filtering Logic
-  const filteredExtensions = extensions.filter(ext => {
-    // Space Filter: Only Space A has extensions in V1, others have 0
-    if (!isProjectA) return false;
-
-    // DCC Filter
-    if (selectedDccFilter !== 'all' && ext.dccId !== selectedDccFilter) return false;
-
-    // Status Filter
-    if (selectedStatusFilter === 'installed' && !ext.installed) return false;
-    if (selectedStatusFilter === 'not_installed' && ext.installed) return false;
-
-    // Keyword Search
-    if (keywordSearch.trim() !== '') {
-      const matchWord = keywordSearch.toLowerCase();
-      const nameMatch = ext.name.toLowerCase().includes(matchWord);
-      const descMatch = ext.desc.toLowerCase().includes(matchWord);
-      const authorMatch = ext.author.toLowerCase().includes(matchWord);
-      return nameMatch || descMatch || authorMatch;
-    }
-
-    return true;
+  useEffect(() => {
+    if (!selectedExtension) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectedExtensionId(null);
+      if (event.key === 'ArrowLeft') navigateDetail(-1);
+      if (event.key === 'ArrowRight') navigateDetail(1);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  return (
-    <div className="shrink-0 px-6 pb-6 flex flex-col font-sans border-t border-[#27272a]">
-      {/* Page Title */}
-      <div className="mb-6 mt-6">
-        <h1 className="text-xl font-bold font-display tracking-tight text-white flex items-center gap-2">
-          <Layers size={22} className="text-[#00ff00]" />
-          应用插件与拓展
-        </h1>
-      </div>
+  const getTask = (extensionId: string) => tasks.find(task => task.extensionId === extensionId);
 
-      {!isProjectA ? (
-        /* Empty State for other spaces - PRD Scope V1 Empty Data */
-        <div className="min-h-[280px] border border-dashed border-[#27272a] bg-[#0c0c0e]/30 rounded flex flex-col items-center justify-center p-12 text-center select-none">
-          <div className="w-16 h-16 rounded-full bg-zinc-900 border border-[#27272a] flex items-center justify-center text-zinc-500 mb-4/5 text-zinc-600">
-            <Layers size={28} />
+  const startTask = (extension: DccExtension, kind: DownloadKind) => {
+    if (getTask(extension.id)) return;
+    const requiredGB = extension.fileSizeMB / 1024;
+    if (simulatedDiskGB < requiredGB) {
+      addLog(`磁盘空间不足，需要 ${extension.fileSizeMB} MB，当前剩余 ${(simulatedDiskGB * 1024).toFixed(0)} MB。`, 'error');
+      return;
+    }
+    const activeCount = tasks.filter(task => task.status === 'downloading').length;
+    const nextStatus: DownloadStatus = isOnline
+      ? (activeCount < MAX_CONCURRENT_DOWNLOADS ? 'downloading' : 'queued')
+      : 'waiting_network';
+    const task: ExtensionDownloadTask = {
+      id: `extension-task-${extension.id}-${Date.now()}`,
+      extensionId: extension.id,
+      kind,
+      status: nextStatus,
+      progress: 0,
+      speedMBps: 5.2 + (extension.fileSizeMB % 5),
+      createdAt: Date.now()
+    };
+    setTasks(previous => [...previous, task]);
+    addLog(`${kind === 'update' ? '开始更新' : '开始下载'}「${extension.name}」${nextStatus === 'queued' ? '，当前并行任务已满，已进入队列。' : '。'}`, 'info');
+  };
+
+  const pauseTask = (taskId: string) => {
+    setTasks(previous => previous.map(task => task.id === taskId ? { ...task, status: 'paused' } : task));
+  };
+
+  const resumeTask = (taskId: string) => {
+    setTasks(previous => previous.map(task => task.id === taskId ? { ...task, status: isOnline ? 'queued' : 'waiting_network' } : task));
+  };
+
+  const confirmCancelTask = () => {
+    if (!cancelTaskId) return;
+    setTasks(previous => previous.filter(task => task.id !== cancelTaskId));
+    setCancelTaskId(null);
+    addLog('工具下载已取消，临时文件已清理。', 'warning');
+  };
+
+  const requestUpdate = (extension: DccExtension) => {
+    const app = apps.find(item => item.id === extension.dccId);
+    if (app?.status === AppStatus.Connected) {
+      setLaunchPrompt({ extension, type: 'update_close' });
+      return;
+    }
+    startTask(extension, 'update');
+  };
+
+  const launchExtension = (extension: DccExtension) => {
+    const app = apps.find(item => item.id === extension.dccId);
+    if (!app || app.status === AppStatus.NotReady || !app.installPath) {
+      setLaunchPrompt({ extension, type: 'missing' });
+      return;
+    }
+    if (extension.needsRestart) {
+      setLaunchPrompt({ extension, type: 'restart' });
+      return;
+    }
+    if (extension.simulateHotLoadFailure) {
+      setLaunchPrompt({ extension, type: 'hotload_failure' });
+      return;
+    }
+    const alreadyConnected = app.status === AppStatus.Connected;
+    if (!alreadyConnected) {
+      setApps(previous => previous.map(item => item.id === app.id ? { ...item, status: AppStatus.Connecting } : item));
+    }
+    addLog(`${alreadyConnected ? '正在热加载' : '正在启动并连接'} ${app.name}，准备加载「${extension.name}」...`, 'info');
+    window.setTimeout(() => {
+      setApps(previous => previous.map(item => item.id === app.id ? { ...item, status: AppStatus.Connected } : item));
+      setExtensions(previous => previous.map(item => item.id === extension.id ? { ...item, isActivated: true } : item));
+      addLog(`${extension.name} 已通过 ${app.id === AppId.Maya ? 'cmds.loadPlugin()' : 'addon_enable()'} 完成热加载。`, 'success');
+    }, alreadyConnected ? 600 : 1500);
+  };
+
+  const confirmRestartLaunch = () => {
+    if (!launchPrompt) return;
+    const extension = launchPrompt.extension;
+    const app = apps.find(item => item.id === extension.dccId);
+    if (!app) return;
+    setLaunchPrompt(null);
+    setApps(previous => previous.map(item => item.id === app.id ? { ...item, status: AppStatus.Connecting } : item));
+    addLog(`正在重启 ${app.name} 并加载「${extension.name}」...`, 'warning');
+    window.setTimeout(() => {
+      setApps(previous => previous.map(item => item.id === app.id ? { ...item, status: AppStatus.Connected } : item));
+      setExtensions(previous => previous.map(item => item.id === extension.id ? { ...item, isActivated: true, simulateHotLoadFailure: false } : item));
+      addLog(`${app.name} 已重新连接，「${extension.name}」加载成功。`, 'success');
+    }, 1800);
+  };
+
+  const confirmUpdateClose = () => {
+    if (!launchPrompt) return;
+    const extension = launchPrompt.extension;
+    setApps(previous => previous.map(item => item.id === extension.dccId ? { ...item, status: AppStatus.InstalledOffline } : item));
+    setLaunchPrompt(null);
+    startTask(extension, 'update');
+  };
+
+  const confirmUninstall = () => {
+    if (!uninstallExtension) return;
+    const extension = uninstallExtension;
+    setExtensions(previous => previous.map(item => item.id === extension.id ? {
+      ...item,
+      lifecycle: 'not_downloaded',
+      isActivated: false
+    } : item));
+    setUninstallExtension(null);
+    addLog(`已卸载「${extension.name}」，如 DCC 正在运行，重启后将完全移除。`, 'success');
+  };
+
+  const confirmDelete = () => {
+    if (!deleteExtension) return;
+    const extension = deleteExtension;
+    setExtensions(previous => previous.filter(item => item.id !== extension.id));
+    setSelectedExtensionId(previous => previous === extension.id ? null : previous);
+    setDeleteExtension(null);
+    addLog(`已删除「${extension.name}」，${extension.sharedWith.length} 位被授权用户的入口已同步移除，本地文件不受影响。`, 'success');
+  };
+
+  const submitShare = () => {
+    if (!shareExtension || !isOnline) return;
+    const email = shareEmail.trim().toLowerCase();
+    const user = PLATFORM_USERS.find(item => item.email.toLowerCase() === email);
+    if (!user) {
+      setShareError('用户不存在，请检查账号是否正确');
+      return;
+    }
+    if (email === CURRENT_USER_EMAIL) {
+      setShareError('作者已拥有完整权限，无需授权');
+      return;
+    }
+    if (shareExtension.sharedWith.some(grant => grant.email.toLowerCase() === email)) {
+      setShareError('该用户已有权限，无需重复授权');
+      return;
+    }
+    setExtensions(previous => previous.map(item => item.id === shareExtension.id ? {
+      ...item,
+      sharedWith: [...item.sharedWith, { email: user.email, name: user.name, sharedAt: new Date().toISOString() }]
+    } : item));
+    setShareExtension(previous => previous ? {
+      ...previous,
+      sharedWith: [...previous.sharedWith, { email: user.email, name: user.name, sharedAt: new Date().toISOString() }]
+    } : previous);
+    setShareEmail('');
+    setShareError('');
+    addLog(`已将「${shareExtension.name}」以使用者权限分享给 ${user.name}。`, 'success');
+  };
+
+  const removeShare = (extension: DccExtension, email: string) => {
+    setExtensions(previous => previous.map(item => item.id === extension.id ? {
+      ...item,
+      sharedWith: item.sharedWith.filter(grant => grant.email !== email)
+    } : item));
+    setShareExtension(previous => previous ? { ...previous, sharedWith: previous.sharedWith.filter(grant => grant.email !== email) } : previous);
+    addLog(`已移除 ${email} 对「${extension.name}」的使用权限。`, 'success');
+  };
+
+  const copyToolLink = async (extension: DccExtension) => {
+    const url = `${window.location.origin}${window.location.pathname}?tool=${extension.id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      addLog('工具链接已复制；访问者仍需已有授权。', 'success');
+    } catch {
+      addLog(`工具链接：${url}`, 'info');
+    }
+  };
+
+  const navigateDetail = (direction: number) => {
+    if (!selectedExtensionId || filteredExtensions.length < 2) return;
+    const currentIndex = filteredExtensions.findIndex(extension => extension.id === selectedExtensionId);
+    const nextIndex = (currentIndex + direction + filteredExtensions.length) % filteredExtensions.length;
+    setSelectedExtensionId(filteredExtensions[nextIndex].id);
+  };
+
+  const toggleValue = <T,>(value: T, values: T[], setter: React.Dispatch<React.SetStateAction<T[]>>) => {
+    setter(values.includes(value) ? values.filter(item => item !== value) : [...values, value]);
+  };
+
+  const clearFilters = () => {
+    setSelectedDccs([]);
+    setSelectedStages([]);
+    setSelectedLifecycles([]);
+    setKeyword('');
+  };
+
+  const getSpaceCount = (spaceId: SpaceId) => {
+    if (spaceId === SpaceId.Shared) {
+      return extensions.filter(item => item.ownerEmail !== CURRENT_USER_EMAIL && item.sharedWith.some(grant => grant.email === CURRENT_USER_EMAIL)).length;
+    }
+    if (spaceId === SpaceId.Personal) {
+      return extensions.filter(item => item.spaceId === SpaceId.Personal && item.ownerEmail === CURRENT_USER_EMAIL).length;
+    }
+    return extensions.filter(item => item.spaceId === spaceId).length;
+  };
+
+  const renderTask = (extension: DccExtension, compact = false) => {
+    const task = getTask(extension.id);
+    if (!task) return null;
+    const remainingSeconds = Math.max(1, Math.ceil(((100 - task.progress) / 100 * extension.fileSizeMB) / task.speedMBps));
+    const taskLabel = task.status === 'queued' ? '等待下载' : task.status === 'paused' ? '已暂停' : task.status === 'waiting_network' ? '等待网络恢复' : task.kind === 'update' ? '正在更新' : '正在下载';
+
+    if (compact) {
+      return (
+        <div className={`mt-3 flex h-[45px] items-center gap-2 border-t ${isLight ? 'border-slate-200' : 'border-zinc-800/70'}`}>
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 flex items-center justify-between gap-2 text-[9px] font-mono">
+              <span className={`truncate ${isLight ? 'text-sky-600' : 'text-sky-300'}`}>{taskLabel}</span>
+              <span className="shrink-0 text-zinc-500">{Math.round(task.progress)}% · {task.speedMBps.toFixed(1)} MB/s</span>
+            </div>
+            <div className={`h-1 overflow-hidden rounded-full ${isLight ? 'bg-slate-200' : 'bg-zinc-800'}`}>
+              <div className="h-full bg-sky-400 transition-all" style={{ width: `${task.progress}%` }} />
+            </div>
           </div>
-          <h3 className="text-sm font-bold text-zinc-300 font-display mt-4">当前空间无专有拓展</h3>
-          <p className="text-xs text-zinc-500 mt-2 max-w-sm leading-relaxed font-mono">
-            【{currentSpace.name}】暂未由网管后台（管理员）配置自定义美术插件源。
-            <br/>
-            请通过边栏空间下拉器切换至 <span className="text-[#00ff00] underline font-bold cursor-pointer hover:text-white" onClick={() => setSelectedDccFilter('all')}>项目空间 A (三国奇幻RPG)</span> 体验插件的下载与热加载！
-          </p>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {task.status === 'downloading' || task.status === 'queued' ? (
+              <button type="button" title="暂停" onClick={(event) => { event.stopPropagation(); pauseTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${isLight ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-900' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}><Pause size={11} /></button>
+            ) : (
+              <button type="button" title="继续" onClick={(event) => { event.stopPropagation(); resumeTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${isLight ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-900' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}><Play size={11} /></button>
+            )}
+            <button type="button" title="取消下载" onClick={(event) => { event.stopPropagation(); setCancelTaskId(task.id); }} className="inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 hover:bg-red-500/10 hover:text-red-500"><X size={11} /></button>
+          </div>
         </div>
-      ) : (
-        <>
-          {/* Filtering Tools Panel */}
-          <div className="bg-[#0c0c0e] border border-[#27272a] rounded p-4 mb-4 flex flex-col gap-4">
-            <div className="flex flex-col md:flex-row gap-3">
-              {/* Search Bar */}
-              <div className="relative flex-1">
-                <Search size={14} className="absolute left-3 top-2.5 text-zinc-500" />
-                <input 
-                  type="text" 
-                  value={keywordSearch}
-                  onChange={e => setKeywordSearch(e.target.value)}
-                  placeholder="搜索插件名称、描述或作者..."
-                  className="w-full bg-zinc-950 border border-zinc-900 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-2 pl-9 pr-4 text-zinc-200"
-                />
-              </div>
+      );
+    }
 
-              {/* DCC Sort Selector */}
-              <div className="flex items-center gap-1.5 font-mono relative" ref={dccDropdownRef}>
-                <span className="text-[10px] text-zinc-500 uppercase">DCC 类型:</span>
-                <button
-                  type="button"
-                  onClick={() => setDccFilterOpen(!dccFilterOpen)}
-                  className={`flex items-center justify-between text-xs py-1.5 px-3 rounded-md border min-w-[140px] text-left transition-all font-sans cursor-pointer ${
-                    theme === 'light'
-                      ? 'bg-white border-slate-200 text-slate-800 hover:border-[#00C800]'
-                      : 'bg-[#000000] border-zinc-900 text-zinc-300 hover:border-[#00ff00]'
-                  }`}
-                >
-                  <span>{
-                    selectedDccFilter === 'all' ? '显示全部 DCC' :
-                    selectedDccFilter === 'comfyui' ? 'ComfyUI' :
-                    selectedDccFilter === 'blender' ? 'Blender' :
-                    selectedDccFilter === 'maya' ? 'Autodesk Maya' :
-                    selectedDccFilter === 'photoshop' ? 'Adobe Photoshop' :
-                    selectedDccFilter === 'max3ds' ? 'Autodesk 3ds Max' : '显示全部 DCC'
-                  }</span>
-                  <ChevronDown size={11} className={`ml-2 text-zinc-500 transition-transform ${dccFilterOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {dccFilterOpen && (
-                  <div className={`absolute right-0 top-full mt-1 z-50 rounded-md shadow-xl border p-1 w-44 flex flex-col gap-[1px] ${
-                    theme === 'light'
-                      ? 'bg-white border-slate-200'
-                      : 'bg-[#121214] border-zinc-850'
-                  }`}>
-                    {[
-                      { value: 'all', label: '显示全部 DCC' },
-                      { value: 'comfyui', label: 'ComfyUI' },
-                      { value: 'blender', label: 'Blender' },
-                      { value: 'maya', label: 'Autodesk Maya' },
-                      { value: 'photoshop', label: 'Adobe Photoshop' },
-                      { value: 'max3ds', label: 'Autodesk 3ds Max' }
-                    ].map(opt => {
-                      const isActive = selectedDccFilter === opt.value;
-                      return (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => {
-                            setSelectedDccFilter(opt.value);
-                            setDccFilterOpen(false);
-                          }}
-                          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-sans text-left transition-colors ${
-                            isActive
-                              ? (theme === 'light' ? 'bg-emerald-50 text-[#00C800] font-semibold' : 'bg-[#1c1c1f] text-[#00ff00] font-semibold')
-                              : (theme === 'light' ? 'text-slate-700 hover:bg-slate-50' : 'text-zinc-400 hover:bg-zinc-900 hover:text-white')
-                          }`}
-                        >
-                          <span>{opt.label}</span>
-                          {isActive && <Check size={11} className={theme === 'light' ? 'text-[#00C800]' : 'text-[#00ff00]'} />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Install Status Selector */}
-              <div className="flex items-center gap-1.5 font-mono relative" ref={statusDropdownRef}>
-                <span className="text-[10px] text-zinc-500 uppercase">安装状态:</span>
-                <button
-                  type="button"
-                  onClick={() => setStatusFilterOpen(!statusFilterOpen)}
-                  className={`flex items-center justify-between text-xs py-1.5 px-3 rounded-md border min-w-[125px] text-left transition-all font-sans cursor-pointer ${
-                    theme === 'light'
-                      ? 'bg-white border-slate-200 text-slate-800 hover:border-[#00C800]'
-                      : 'bg-[#000000] border-zinc-900 text-zinc-300 hover:border-[#00ff00]'
-                  }`}
-                >
-                  <span>{
-                    selectedStatusFilter === 'all' ? '显示全部状态' :
-                    selectedStatusFilter === 'installed' ? '已安装' :
-                    selectedStatusFilter === 'not_installed' ? '未安装' : '显示全部状态'
-                  }</span>
-                  <ChevronDown size={11} className={`ml-2 text-zinc-500 transition-transform ${statusFilterOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {statusFilterOpen && (
-                  <div className={`absolute right-0 top-full mt-1 z-50 rounded-md shadow-xl border p-1 w-36 flex flex-col gap-[1px] ${
-                    theme === 'light'
-                      ? 'bg-white border-slate-200'
-                      : 'bg-[#121214] border-[#27272a]'
-                  }`}>
-                    {[
-                      { value: 'all', label: '显示全部状态' },
-                      { value: 'installed', label: '已安装' },
-                      { value: 'not_installed', label: '未安装' }
-                    ].map(opt => {
-                      const isActive = selectedStatusFilter === opt.value;
-                      return (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => {
-                            setSelectedStatusFilter(opt.value);
-                            setStatusFilterOpen(false);
-                          }}
-                          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-sans text-left transition-colors ${
-                            isActive
-                              ? (theme === 'light' ? 'bg-emerald-50 text-[#00C800] font-semibold' : 'bg-[#1c1c1f] text-[#00ff00] font-semibold')
-                              : (theme === 'light' ? 'text-slate-700 hover:bg-slate-50' : 'text-zinc-400 hover:bg-zinc-900 hover:text-white')
-                          }`}
-                        >
-                          <span>{opt.label}</span>
-                          {isActive && <Check size={11} className={theme === 'light' ? 'text-[#00C800]' : 'text-[#00ff00]'} />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Tags Ribbon */}
-            <div className="flex flex-wrap items-center gap-1.5 pt-3 border-t border-zinc-900">
-              <span className="text-[10px] uppercase font-mono text-zinc-500 mr-2">快速标签:</span>
-              {['all', 'comfyui', 'blender', 'maya', 'photoshop', 'max3ds'].map(dccKey => {
-                const isAct = selectedDccFilter === dccKey;
-                let label = dccKey === 'all' ? '全部' : dccKey.toUpperCase();
-                if (dccKey === 'max3ds') label = '3DS MAX';
-                return (
-                  <button
-                    key={dccKey}
-                    onClick={() => setSelectedDccFilter(dccKey)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-all border ${
-                      isAct 
-                        ? 'bg-[#00ff00]/10 border-[#00ff00] text-[#00ff00] font-bold' 
-                        : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
+    return (
+      <div className="mt-4 rounded border border-sky-500/25 bg-sky-500/5 p-2.5">
+        <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px] font-mono">
+          <span className="flex min-w-0 items-center gap-1.5 text-sky-300">
+            {task.status === 'waiting_network' ? <WifiOff size={11} /> : task.status === 'paused' ? <Pause size={11} /> : <Download size={11} />}
+            <span className="truncate">
+              {taskLabel}
+            </span>
+          </span>
+          <span className="shrink-0 text-zinc-400">{Math.round(task.progress)}%</span>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
+          <div className="h-full bg-sky-400 transition-all" style={{ width: `${task.progress}%` }} />
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="text-[9px] font-mono text-zinc-500">
+            {task.status === 'downloading' ? `${task.speedMBps.toFixed(1)} MB/s · 剩余约 ${remainingSeconds}s` : '断点数据已保留'}
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            {task.status === 'downloading' || task.status === 'queued' ? (
+              <button type="button" title="暂停" onClick={(event) => { event.stopPropagation(); pauseTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}>
+                <Pause size={12} />
+              </button>
+            ) : (
+              <button type="button" title="继续" onClick={(event) => { event.stopPropagation(); resumeTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}>
+                <Play size={12} />
+              </button>
+            )}
+            <button type="button" title="取消下载" onClick={(event) => { event.stopPropagation(); setCancelTaskId(task.id); }} className="inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 hover:bg-red-500/15 hover:text-red-400">
+              <X size={12} />
+            </button>
           </div>
+        </div>
+      </div>
+    );
+  };
 
-          {/* Core Extensions Grid */}
-          {filteredExtensions.length === 0 ? (
-            <div className="flex-1 border border-zinc-900 bg-[#0c0c0e]/10 rounded flex flex-col items-center justify-center p-8 text-center py-20 select-none">
-              <span className="text-zinc-600 font-mono text-xs">没有匹配的查询结果，请调整搜索条件或分类。</span>
+  const renderLifecycleActions = (extension: DccExtension, detail = false) => {
+    const task = getTask(extension.id);
+    const isShared = selectedSpaceId === SpaceId.Shared;
+    const canManagePersonal = selectedSpaceId === SpaceId.Personal && extension.ownerEmail === CURRENT_USER_EMAIL;
+    if (task) return renderTask(extension, !detail);
+    return (
+      <div className={`flex flex-wrap items-center gap-2 ${detail ? 'mt-5' : ''}`}>
+        {extension.lifecycle === 'not_downloaded' && (
+          <button type="button" onClick={(event) => { event.stopPropagation(); startTask(extension, 'download'); }} className={`inline-flex h-8 items-center gap-1.5 rounded px-3 text-[11px] font-semibold transition-colors ${isLight ? 'force-text-white bg-slate-950 hover:bg-slate-800' : 'bg-white text-black hover:bg-zinc-200'}`}>
+            <Download size={13} /> 下载
+          </button>
+        )}
+        {extension.lifecycle === 'installed_latest' && (
+          <button type="button" onClick={(event) => { event.stopPropagation(); launchExtension(extension); }} className="inline-flex h-8 items-center gap-1.5 rounded bg-[#00ff00] px-3 text-[11px] font-bold text-black hover:bg-[#35ff35]">
+            <Play size={13} /> 启动
+          </button>
+        )}
+        {extension.lifecycle === 'update_available' && (
+          <button type="button" onClick={(event) => { event.stopPropagation(); requestUpdate(extension); }} className="inline-flex h-8 items-center gap-1.5 rounded bg-amber-400 px-3 text-[11px] font-bold text-black hover:bg-amber-300">
+            <RefreshCw size={13} /> 更新至 {extension.latestVersion}
+          </button>
+        )}
+        {!isShared && extension.lifecycle !== 'not_downloaded' && (
+          <button type="button" title="卸载" onClick={(event) => { event.stopPropagation(); setUninstallExtension(extension); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600' : 'border-zinc-700 text-zinc-400 hover:border-red-500/50 hover:text-red-400'}`}>
+            <Trash2 size={13} />
+          </button>
+        )}
+        {canManagePersonal && (
+          <>
+            <button type="button" title="分享授权" onClick={(event) => { event.stopPropagation(); setShareExtension(extension); setShareEmail(''); setShareError(''); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600' : 'border-zinc-700 text-zinc-400 hover:border-sky-500/50 hover:text-sky-400'}`}>
+              <Share2 size={13} />
+            </button>
+            <button type="button" title="删除云端工具" onClick={(event) => { event.stopPropagation(); setDeleteExtension(extension); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600' : 'border-zinc-700 text-zinc-400 hover:border-red-500/50 hover:text-red-400'}`}>
+              <MoreHorizontal size={14} />
+            </button>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const activeFilterCount = selectedDccs.length + selectedStages.length + selectedLifecycles.length;
+
+  return (
+    <div className="flex min-h-0 flex-1 overflow-hidden font-sans">
+      <aside className="canvas-sidebar flex min-h-0 w-[216px] shrink-0 flex-col border-r border-[#27272a] bg-[#070708] max-lg:w-[188px] max-md:hidden">
+        <div className="border-b border-[#1c1c1f] p-3">
+          <div className="flex items-center gap-2">
+            <Puzzle size={15} className="text-[#00ff00]" />
+            <span className="truncate text-xs font-bold text-white">工具</span>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3">
+          {[SpaceId.Personal, SpaceId.Shared].map(spaceId => {
+            const visual = SPACE_META[spaceId];
+            const SpaceIcon = visual.icon;
+            const active = selectedSpaceId === spaceId;
+            return (
+              <button key={spaceId} type="button" onClick={() => setSelectedSpaceId(spaceId)} className={`canvas-tree-row mb-1 ${active ? 'is-active' : ''}`}>
+                <SpaceIcon size={14} className="shrink-0" style={{ color: visual.color }} />
+                <span className="min-w-0 flex-1 truncate text-left">{spaceLabel(spaceId)}</span>
+                <span className={`asset-folder-count ${active ? 'is-selected' : ''}`} style={active ? { '--folder-accent': visual.color } as React.CSSProperties : undefined}>{getSpaceCount(spaceId)}</span>
+              </button>
+            );
+          })}
+          {[SpaceId.ProjectA, SpaceId.ProjectB].map(spaceId => {
+            const visual = SPACE_META[spaceId];
+            const SpaceIcon = visual.icon;
+            const active = selectedSpaceId === spaceId;
+            return (
+              <button key={spaceId} type="button" onClick={() => setSelectedSpaceId(spaceId)} className={`canvas-tree-row mb-1 ${active ? 'is-active' : ''}`}>
+                <SpaceIcon size={14} className="shrink-0" style={{ color: visual.color }} />
+                <span className="min-w-0 flex-1 truncate text-left">{spaceLabel(spaceId)}</span>
+                <span className={`asset-folder-count ${active ? 'is-selected' : ''}`} style={active ? { '--folder-accent': visual.color } as React.CSSProperties : undefined}>{getSpaceCount(spaceId)}</span>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      <main className="min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[1600px] p-5 max-md:p-3">
+          <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h1 className={`flex items-center gap-2 text-lg font-bold ${isLight ? 'text-slate-950' : 'text-white'}`}>
+                工具拓展
+              </h1>
             </div>
+            <div className="flex items-center gap-2 md:hidden">
+              <select value={selectedSpaceId} onChange={event => setSelectedSpaceId(event.target.value as SpaceId)} className={`h-8 max-w-[190px] rounded border px-2 text-[11px] outline-none ${isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-zinc-800 bg-[#0c0c0e] text-zinc-300'}`}>
+                {[SpaceId.Personal, SpaceId.Shared, SpaceId.ProjectA, SpaceId.ProjectB].map(spaceId => <option key={spaceId} value={spaceId}>{spaceLabel(spaceId)} ({getSpaceCount(spaceId)})</option>)}
+              </select>
+            </div>
+          </header>
+
+          <section className={`mb-4 rounded border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="relative min-w-[230px] flex-1">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                <input value={keyword} disabled={extensionsForSpace.length === 0} onChange={event => setKeyword(event.target.value)} placeholder="搜索工具名称或功能描述" className={`h-9 w-full rounded border pl-9 pr-8 text-xs outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isLight ? 'border-slate-200 bg-slate-50 text-slate-900 focus:border-emerald-500' : 'border-zinc-800 bg-black text-zinc-200 focus:border-[#00ff00]'}`} />
+                {keyword && <button type="button" title="清空搜索" onClick={() => setKeyword('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200"><X size={13} /></button>}
+              </label>
+              <FilterMenu label="DCC 类型" activeCount={selectedDccs.length} isLight={isLight}>
+                {DCC_OPTIONS.map(dccId => <FilterCheck key={dccId} checked={selectedDccs.includes(dccId)} label={DCC_META[dccId].label} onChange={() => toggleValue(dccId, selectedDccs, setSelectedDccs)} />)}
+              </FilterMenu>
+              <FilterMenu label="美术环节" activeCount={selectedStages.length} isLight={isLight}>
+                {STAGE_OPTIONS.map(stage => <FilterCheck key={stage} checked={selectedStages.includes(stage)} label={STAGE_META[stage]} onChange={() => toggleValue(stage, selectedStages, setSelectedStages)} />)}
+              </FilterMenu>
+              <FilterMenu label="状态" activeCount={selectedLifecycles.length} isLight={isLight}>
+                {LIFECYCLE_OPTIONS.map(lifecycle => <FilterCheck key={lifecycle} checked={selectedLifecycles.includes(lifecycle)} label={LIFECYCLE_META[lifecycle].label} onChange={() => toggleValue(lifecycle, selectedLifecycles, setSelectedLifecycles)} />)}
+              </FilterMenu>
+            </div>
+            {(activeFilterCount > 0 || keyword) && (
+              <div className={`mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3 ${isLight ? 'border-slate-100' : 'border-zinc-900'}`}>
+                <SlidersHorizontal size={12} className="mr-1 text-zinc-500" />
+                {selectedDccs.map(value => <FilterTag key={value} label={DCC_META[value].label} onRemove={() => toggleValue(value, selectedDccs, setSelectedDccs)} />)}
+                {selectedStages.map(value => <FilterTag key={value} label={STAGE_META[value]} onRemove={() => toggleValue(value, selectedStages, setSelectedStages)} />)}
+                {selectedLifecycles.map(value => <FilterTag key={value} label={LIFECYCLE_META[value].label} onRemove={() => toggleValue(value, selectedLifecycles, setSelectedLifecycles)} />)}
+                <button type="button" onClick={clearFilters} className="ml-auto text-[10px] text-zinc-500 hover:text-red-400">清除全部</button>
+              </div>
+            )}
+          </section>
+
+          {extensionsForSpace.length === 0 ? (
+            <EmptyState icon={selectedSpaceId === SpaceId.Shared ? Users : Puzzle} title={selectedSpaceId === SpaceId.Shared ? '暂未收到共享工具' : selectedSpaceId === SpaceId.Personal ? '个人空间暂无工具' : '当前空间暂无内容'} description={selectedSpaceId === SpaceId.Personal ? 'V1 暂不开放上传入口；当前账号没有更多个人工具。' : '切换其他空间查看可用工具。'} isLight={isLight} />
+          ) : filteredExtensions.length === 0 ? (
+            <EmptyState icon={Search} title="未找到匹配拓展" description="调整关键词或移除部分筛选条件后重试。" isLight={isLight} action={<button type="button" onClick={clearFilters} className="mt-4 rounded border border-zinc-700 px-3 py-1.5 text-[11px] text-zinc-400 hover:text-white">清除筛选</button>} />
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredExtensions.map((ext) => {
-                const dccApp = getDccApp(ext.dccId);
-                const isDccConnected = dccApp?.status === AppStatus.Connected;
-                const isInstalling = installingExtId === ext.id;
-
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-3 lg:grid-cols-2">
+              {filteredExtensions.map(extension => {
+                const lifecycle = LIFECYCLE_META[extension.lifecycle];
+                const dcc = DCC_META[extension.dccId];
+                const failed = failedImages.has(extension.id);
                 return (
-                  <div
-                    key={ext.id}
-                    className="relative bg-[#0c0c0e] border border-[#27272a] rounded p-4 pl-5 flex flex-col justify-between hover:border-zinc-700 transition-colors overflow-hidden"
-                  >
-                    <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-violet-500/70" aria-hidden="true" />
-                    {/* Header Row */}
-                    <div>
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-violet-500/15 border border-violet-500/30 text-violet-300">
-                              <Puzzle size={11} />
-                            </span>
-                            <h3 className="text-xs font-bold text-white tracking-wide font-sans">{ext.name}</h3>
-                            <span className="text-[9.5px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-400 px-1 py-0.2 rounded">
-                              {ext.version}
-                            </span>
-                          </div>
-
-                          {/* DCC Associated info */}
-                          <div className="mt-1 flex items-center gap-1.5 text-[9.5px] font-mono text-violet-300/80 pl-[26px]">
-                            <span>宿主 DCC:</span>
-                            <span className="underline uppercase">{ext.dccId === AppId.Max3ds ? '3DS MAX' : ext.dccId}</span>
-                          </div>
-                        </div>
-
-                        {/* Status Label */}
-                        <div className="text-right">
-                          {!ext.installed ? (
-                            <span className="text-[9.5px] font-mono border border-dashed border-zinc-800 text-zinc-600 px-1.5 py-0.2 rounded">
-                              未安装
-                            </span>
-                          ) : ext.isActivated ? (
-                            <span className="text-[9px] font-mono bg-[#00ff00]/15 text-[#00ff00] px-1.5 py-0.2 rounded border border-[#00ff00]/30 font-bold">
-                              已激活
-                            </span>
-                          ) : (
-                            <span className="text-[9px] font-mono bg-amber-900/40 text-amber-300 px-1.5 py-0.2 rounded border border-amber-800/40 font-bold animate-pulse" title="已复制，需要重启相应 DCC 软件方能完全加载">
-                              待重启生效
-                            </span>
-                          )}
-                        </div>
+                  <article key={extension.id} tabIndex={0} onClick={() => setSelectedExtensionId(extension.id)} onKeyDown={event => { if (event.key === 'Enter') setSelectedExtensionId(extension.id); }} className={`group min-w-0 cursor-pointer overflow-hidden rounded border transition-colors focus:outline-none ${isLight ? 'border-slate-200 bg-white hover:border-slate-400 focus:border-emerald-500' : 'border-[#27272a] bg-[#0c0c0e] hover:border-zinc-600 focus:border-[#00ff00]'}`}>
+                    <div className="relative aspect-[16/8] overflow-hidden bg-zinc-900">
+                      {!failed ? <img src={extension.thumbnail} alt="" onError={() => setFailedImages(previous => new Set(previous).add(extension.id))} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" /> : <div className="flex h-full items-center justify-center bg-zinc-900"><div className="flex h-12 w-12 items-center justify-center rounded border text-lg font-bold" style={{ borderColor: `${dcc.color}66`, color: dcc.color }}>{dcc.short}</div></div>}
+                      <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/90 to-transparent" />
+                      <div className={`absolute left-3 top-3 flex items-center gap-1.5 rounded border px-2 py-1 text-[9px] font-mono backdrop-blur-sm ${isLight ? 'border-white/80 bg-white/90 text-slate-700 shadow-sm' : 'border-white/10 bg-black/75 text-white'}`}>
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: dcc.color }} /> {dcc.label}
                       </div>
-
-                      {/* Desc snippet */}
-                      <p className="text-xs text-zinc-400 mt-2 font-sans leading-relaxed line-clamp-2">
-                        {ext.desc}
-                      </p>
+                      <span className={`absolute bottom-2.5 left-3 rounded border px-2 py-1 text-[9px] backdrop-blur-sm ${isLight ? 'border-white/80 bg-white/90 text-slate-700 shadow-sm' : 'border-white/10 bg-black/75 text-zinc-300'}`}>{STAGE_META[extension.stage]}</span>
+                      {selectedSpaceId === SpaceId.Personal && extension.sharedWith.length > 0 && <span className={`absolute bottom-2.5 right-3 rounded border px-2 py-1 text-[9px] font-semibold backdrop-blur-sm ${isLight ? 'border-violet-200 bg-violet-50/95 text-violet-700' : 'border-violet-300/30 bg-violet-500/80 text-white'}`}>已共享 {extension.sharedWith.length} 人</span>}
                     </div>
-
-                    {/* Bottom Controls */}
-                    <div className="mt-4 pt-3 border-t border-zinc-900/60 flex items-center justify-between text-[10px] font-mono text-zinc-500">
-                      <div>
-                        <span>作者: {ext.author}</span>
+                    <div className="p-3.5">
+                      <div className="flex min-w-0 items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className={`truncate text-[13px] font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-100'}`}>{extension.name}</h3>
+                          <p className="mt-1 line-clamp-2 min-h-8 text-[10.5px] leading-4 text-zinc-500">{extension.desc}</p>
+                        </div>
+                        <span className="shrink-0 rounded border border-zinc-800 px-1.5 py-0.5 text-[9px] font-mono text-zinc-500">{extension.version}</span>
                       </div>
-
-                      <div>
-                        {isInstalling ? (
-                          <div className="flex items-center gap-1.5 text-[#00ff00]">
-                            <RefreshCw size={11} className="animate-spin" />
-                            <span>正在写入...</span>
-                          </div>
-                        ) : !ext.installed ? (
-                          <div className="flex items-center gap-2">
-                            {/* If DCC not connected, disable button according to PRD rule */}
-                            {!isDccConnected ? (
-                              <div className="relative group/tip flex items-center">
-                                <button
-                                  disabled
-                                  className={`px-2.5 py-1 text-[10.5px] rounded border transition-all flex items-center gap-1 cursor-not-allowed ${
-                                    theme === 'light'
-                                      ? 'bg-slate-50 border-slate-200 text-slate-400'
-                                      : 'bg-[#121214] border-zinc-800/80 text-zinc-500/80'
-                                  }`}
-                                >
-                                  <Download size={11} />
-                                  安装限制
-                                </button>
-                                
-                                {/* Float Tooltip */}
-                                <div className="absolute right-0 bottom-full mb-1.5 hidden group-hover/tip:block bg-black border border-red-500/50 p-2.5 rounded shadow-2xl z-50 w-52 text-zinc-300 leading-tight">
-                                  <div className="flex items-start gap-1 p-0.5">
-                                    <AlertCircle size={12} className="text-red-400 shrink-0 mt-0.5" />
-                                    <span>请先手动打开 【{ext.dccId.toUpperCase()}】主程序，并在应用管理中点击<b>检测状态</b>，确认端口通顺后方可下发插件安装包。</span>
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => handleInstallExt(ext)}
-                                className="bg-white hover:bg-zinc-200 text-black font-semibold px-3 py-1 text-[10.5px] rounded transition-colors flex items-center gap-1 cursor-pointer btn-primary"
-                              >
-                                <Download size={11} />
-                                安装插件
-                              </button>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5">
-                            {ext.needsRestart && !ext.isActivated && isDccConnected && (
-                              <button
-                                onClick={() => setRebootNeededExt(ext)}
-                                className="bg-amber-900/20 hover:bg-amber-900/40 border border-amber-600/60 text-amber-400 px-2 py-0.5 rounded text-[10px] cursor-pointer mr-1.5 flex items-center gap-0.5 transition-colors"
-                              >
-                                <RefreshCw size={10} />
-                                重启后确认
-                              </button>
-                            )}
-                            <button
-                              onClick={() => requestUninstallExt(ext)}
-                              className="text-red-500/65 hover:text-red-400 flex items-center gap-1 transition-colors cursor-pointer"
-                            >
-                              <Trash2 size={11} />
-                              卸载
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      {getTask(extension.id) ? renderTask(extension, true) : (
+                        <div className={`mt-3 flex h-[45px] items-center justify-between gap-2 border-t ${isLight ? 'border-slate-200' : 'border-zinc-800/70'}`}>
+                          <span className={`flex min-w-0 items-center gap-1.5 text-[10px] font-mono ${lifecycle.text}`}><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${lifecycle.dot}`} />{lifecycle.label}</span>
+                          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100">{renderLifecycleActions(extension)}</div>
+                        </div>
+                      )}
                     </div>
-
-                  </div>
+                  </article>
                 );
               })}
             </div>
           )}
-        </>
+        </div>
+      </main>
+
+      {selectedExtension && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setSelectedExtensionId(null); }}>
+          <button type="button" title="上一个工具" onClick={() => navigateDetail(-1)} className="absolute left-4 top-1/2 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-zinc-700 bg-black/70 text-zinc-300 hover:border-zinc-500 hover:text-white md:flex"><ChevronLeft size={20} /></button>
+          <div className={`relative max-h-[88vh] w-full max-w-4xl overflow-y-auto rounded border ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
+            <button type="button" title="关闭" onClick={() => setSelectedExtensionId(null)} className={`absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-200 bg-white/90 text-slate-500 hover:text-slate-900' : 'border-zinc-700 bg-black/70 text-zinc-400 hover:text-white'}`}><X size={16} /></button>
+            <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-5 p-5 pr-14 max-md:grid-cols-1 max-md:pr-5">
+              <div className={`aspect-video overflow-hidden rounded border ${isLight ? 'border-slate-200 bg-slate-100' : 'border-zinc-800 bg-black'}`}>
+                {!failedImages.has(selectedExtension.id) ? <img src={selectedExtension.previewUrl} alt="" onError={() => setFailedImages(previous => new Set(previous).add(selectedExtension.id))} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center bg-zinc-900 text-3xl font-bold" style={{ color: DCC_META[selectedExtension.dccId].color }}>{DCC_META[selectedExtension.dccId].short}</div>}
+              </div>
+              <div className="min-w-0 self-center">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center rounded border text-[11px] font-bold" style={{ color: DCC_META[selectedExtension.dccId].color, borderColor: `${DCC_META[selectedExtension.dccId].color}66` }}>{DCC_META[selectedExtension.dccId].short}</span>
+                  <div>
+                    <p className="text-[10px] font-mono text-zinc-500">{DCC_META[selectedExtension.dccId].label} · {STAGE_META[selectedExtension.stage]}</p>
+                    <div className={`mt-0.5 flex items-center gap-1.5 text-[10px] font-mono ${LIFECYCLE_META[selectedExtension.lifecycle].text}`}><span className={`h-1.5 w-1.5 rounded-full ${LIFECYCLE_META[selectedExtension.lifecycle].dot}`} />{LIFECYCLE_META[selectedExtension.lifecycle].label}</div>
+                  </div>
+                </div>
+                <h2 className={`mt-4 text-xl font-bold ${isLight ? 'text-slate-950' : 'text-white'}`}>{selectedExtension.name}</h2>
+                {renderLifecycleActions(selectedExtension, true)}
+              </div>
+            </div>
+            <div className={`border-t p-5 ${isLight ? 'border-slate-200 bg-slate-50/60' : 'border-zinc-800 bg-black/15'}`}>
+              <h3 className={`text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>工具详情</h3>
+              <p className="mt-2 max-w-3xl text-[12px] leading-6 text-zinc-500">{selectedExtension.desc}</p>
+              <dl className="mt-5 grid grid-cols-3 gap-x-8 gap-y-4 text-[10px] max-md:grid-cols-2 max-sm:grid-cols-1">
+                <div><dt className="text-zinc-500">当前版本</dt><dd className={`mt-1 font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.version}</dd></div>
+                <div><dt className="text-zinc-500">最新版本</dt><dd className={`mt-1 font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.latestVersion}</dd></div>
+                <div><dt className="text-zinc-500">作者</dt><dd className={`mt-1 ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.author}</dd></div>
+                <div><dt className="text-zinc-500">更新时间</dt><dd className={`mt-1 font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{formatDate(selectedExtension.updatedAt)}</dd></div>
+                <div><dt className="text-zinc-500">文件大小</dt><dd className={`mt-1 font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.fileSizeMB} MB</dd></div>
+                <div><dt className="text-zinc-500">加载方式</dt><dd className={`mt-1 ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.needsRestart ? '重启加载' : '支持热加载'}</dd></div>
+              </dl>
+            </div>
+          </div>
+          <button type="button" title="下一个工具" onClick={() => navigateDetail(1)} className="absolute right-4 top-1/2 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-zinc-700 bg-black/70 text-zinc-300 hover:border-zinc-500 hover:text-white md:flex"><ChevronRight size={20} /></button>
+        </div>
       )}
 
-      {/* DETAILED MODAL 1: REBOOT REQUIRED PROMPT (F5) */}
-      {rebootNeededExt && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-[#0c0c0e] border border-[#27272a] rounded p-6 max-w-md w-full font-sans">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="p-3 bg-amber-950/40 border border-amber-900 rounded text-amber-400">
-                <Clock size={22} className="animate-pulse" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-white font-display">已部署完成 · 手动重启生效</h3>
-                <p className="text-xs text-zinc-400 mt-1">
-                  插件 <span className="text-[#00ff00] font-bold">{rebootNeededExt.name}</span> 已经复制到系统对应目录。
-                </p>
-              </div>
-            </div>
+      {showResumePrompt && tasks.length > 0 && <ConfirmDialog title="检测到未完成的下载" description={`已恢复 ${tasks.length} 个工具下载断点，是否继续下载？`} confirmLabel="继续下载" icon={RotateCcw} onCancel={() => { setTasks([]); setShowResumePrompt(false); }} onConfirm={() => { setTasks(previous => previous.map(task => ({ ...task, status: isOnline ? 'queued' : 'waiting_network' }))); setShowResumePrompt(false); }} />}
+      {cancelTaskId && <ConfirmDialog title="取消下载任务？" description="取消后会删除当前临时文件，工具状态将恢复为未下载。" confirmLabel="取消下载" danger onCancel={() => setCancelTaskId(null)} onConfirm={confirmCancelTask} />}
+      {uninstallExtension && <ConfirmDialog title={`卸载「${uninstallExtension.name}」？`} description={`${apps.find(app => app.id === uninstallExtension.dccId)?.status === AppStatus.Connected ? `${DCC_META[uninstallExtension.dccId].label} 正在运行，卸载后需重启软件才能完全移除。` : ''} 卸载后需重新下载才能使用。`} confirmLabel="确认卸载" danger onCancel={() => setUninstallExtension(null)} onConfirm={confirmUninstall} />}
+      {deleteExtension && <ConfirmDialog title={`删除「${deleteExtension.name}」？`} description={`此操作不可恢复。${deleteExtension.sharedWith.length > 0 ? `该工具已分享给 ${deleteExtension.sharedWith.length} 位用户，删除后他们也将无法访问。` : ''} 已下载到本地的版本不受影响。`} confirmLabel="确认删除" danger onCancel={() => setDeleteExtension(null)} onConfirm={confirmDelete} />}
 
-            <div className="bg-zinc-950 border border-zinc-900 p-4 rounded text-xs font-mono space-y-2 mb-6 text-zinc-300 leading-relaxed">
-              根据 DCC 应用兼容手册，<b>{rebootNeededExt.dccId.toUpperCase()}</b> 不支持插件热插拔挂载（冷启动限制）。
-              <br/>
-              <br/>
-              请您在本机手动重启宿主软件。完成后点击下方确认按钮，PixGo 仅执行状态检测与插件激活标记，不会启动或重启外部 DCC 进程：
-            </div>
+      {launchPrompt && (
+        <ConfirmDialog
+          title={launchPrompt.type === 'missing' ? `未找到 ${DCC_META[launchPrompt.extension.dccId].label}` : launchPrompt.type === 'update_close' ? '更新前需退出依赖软件' : launchPrompt.type === 'hotload_failure' ? '热加载失败，需重启' : `重启 ${DCC_META[launchPrompt.extension.dccId].label} 后加载`}
+          description={launchPrompt.type === 'missing' ? `请先安装并设置 ${DCC_META[launchPrompt.extension.dccId].label} 安装目录。` : launchPrompt.type === 'update_close' ? `${DCC_META[launchPrompt.extension.dccId].label} 正在运行。确认保存当前工作并退出后再下载新版本。` : launchPrompt.type === 'hotload_failure' ? '直接加载接口未响应，已自动降级为重启加载路径。' : '平台将关闭并重新连接软件；当前运行中的任务可能中断。'}
+          confirmLabel={launchPrompt.type === 'missing' ? '设置路径' : launchPrompt.type === 'update_close' ? '退出并更新' : '立即重启'}
+          icon={launchPrompt.type === 'missing' ? FolderOpen : RefreshCw}
+          onCancel={() => setLaunchPrompt(null)}
+          onConfirm={() => {
+            if (launchPrompt.type === 'missing') { setLaunchPrompt(null); onOpenSettings(); }
+            else if (launchPrompt.type === 'update_close') confirmUpdateClose();
+            else confirmRestartLaunch();
+          }}
+        />
+      )}
 
-            <div className="flex gap-3 justify-end font-mono">
-              <button 
-                onClick={() => setRebootNeededExt(null)}
-                className="px-4 py-1.5 border border-[#27272a] hover:border-zinc-500 text-zinc-400 hover:text-white rounded text-xs transition-colors btn-secondary"
-              >
-                稍后确认
-              </button>
-              <button
-                onClick={() => confirmManualDccRestart(rebootNeededExt.dccId)}
-                className="px-5 py-1.5 bg-[#00ff00] text-black font-semibold rounded text-xs transition-all hover:shadow-[0_0_10px_rgba(0,255,0,0.3)] glow-btn flex items-center gap-1 font-bold cursor-pointer btn-special"
-              >
-                <RefreshCw size={12} className="animate-spin text-black" />
-                已手动重启，检测状态
-              </button>
+      {shareExtension && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setShareExtension(null); }}>
+          <div className={`w-full max-w-lg rounded border p-5 ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div><h3 className={`text-base font-bold ${isLight ? 'text-slate-950' : 'text-white'}`}>分享授权</h3><p className="mt-1 text-[11px] text-zinc-500">{shareExtension.name} · 权限固定为“使用者”</p></div>
+              <button type="button" title="关闭" onClick={() => setShareExtension(null)} className="text-zinc-500 hover:text-zinc-200"><X size={16} /></button>
+            </div>
+            <div className="mt-5">
+              <label className="mb-1.5 block text-[10px] text-zinc-500">被授权账号</label>
+              <div className="flex gap-2">
+                <input list="platform-user-emails" value={shareEmail} onChange={event => { setShareEmail(event.target.value); setShareError(''); }} placeholder="输入平台用户邮箱" className={`h-9 min-w-0 flex-1 rounded border px-3 text-xs outline-none ${isLight ? 'border-slate-200 bg-slate-50 text-slate-900 focus:border-emerald-500' : 'border-zinc-800 bg-black text-zinc-200 focus:border-[#00ff00]'}`} />
+                <datalist id="platform-user-emails">{PLATFORM_USERS.filter(user => !user.isFormer).map(user => <option key={user.email} value={user.email}>{user.name}</option>)}</datalist>
+                <button type="button" disabled={!shareEmail.trim() || !isOnline} onClick={submitShare} className="h-9 rounded bg-[#00ff00] px-4 text-[11px] font-bold text-black disabled:cursor-not-allowed disabled:opacity-40">授权</button>
+              </div>
+              {!isOnline && <p className="mt-2 flex items-center gap-1 text-[10px] text-red-400"><WifiOff size={11} /> 网络未连接，不可分享</p>}
+              {shareError && <p className="mt-2 text-[10px] text-red-400">{shareError}</p>}
+            </div>
+            <div className={`mt-5 border-t pt-4 ${isLight ? 'border-slate-200' : 'border-zinc-800'}`}>
+              <div className="mb-2 flex items-center justify-between"><span className="text-[10px] text-zinc-500">已授权 {shareExtension.sharedWith.length} 人</span><button type="button" onClick={() => copyToolLink(shareExtension)} className="flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300"><ExternalLink size={11} /> 复制工具链接</button></div>
+              <div className="max-h-44 space-y-1.5 overflow-y-auto">
+                {shareExtension.sharedWith.length === 0 ? <p className="rounded border border-dashed border-zinc-800 p-4 text-center text-[10px] text-zinc-600">尚未授权其他用户</p> : shareExtension.sharedWith.map(grant => (
+                  <div key={grant.email} className={`flex items-center justify-between rounded border px-3 py-2 ${isLight ? 'border-slate-200' : 'border-zinc-800 bg-black/20'}`}>
+                    <div className="min-w-0"><p className={`truncate text-[11px] font-medium ${isLight ? 'text-slate-800' : 'text-zinc-300'}`}>{grant.name}</p><p className="truncate text-[9px] font-mono text-zinc-500">{grant.email}</p></div>
+                    <button type="button" onClick={() => removeShare(shareExtension, grant.email)} className="shrink-0 text-[10px] text-zinc-500 hover:text-red-400">移除</button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* DETAILED MODAL 2: UNINSTALL CONFIRMATION WARNING DYNAMIC (F6) */}
-      {uninstallConfirmExt && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-[#0c0c0e] border border-[#27272a] rounded p-6 max-w-md w-full font-sans">
-            <h3 className="text-base font-bold text-white font-display flex items-center gap-2 mb-2">
-              <Trash2 size={18} className="text-red-500" />
-              确认卸载该项目拓展插件
-            </h3>
-            <p className="text-xs text-zinc-400 mb-4 font-mono leading-relaxed">
-              您确定要将拓展 <b>{uninstallConfirmExt.name}</b> 从软件主目录中完全删除吗？删除后将无法在此 DCC 的节点面板/主页面中调用它的指令。
-            </p>
+function FilterMenu({ label, activeCount, isLight, children }: { label: string; activeCount: number; isLight: boolean; children: React.ReactNode }) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
 
-            {/* If corresponding DCC is connected, show restart warning! */}
-            {getDccApp(uninstallConfirmExt.dccId)?.status === AppStatus.Connected && (
-              <div className="bg-red-950/20 border border-red-500/30 p-3 rounded text-zinc-300 text-xs font-mono mb-6 leading-relaxed flex items-start gap-2">
-                <AlertCircle size={15} className="text-red-400 shrink-0 mt-0.5" />
-                <span>
-                  <b>⚠️ 实时运行警告：</b><br/>
-                  对应软件 <b>{uninstallConfirmExt.dccId.toUpperCase()}</b> 目前正在运行中。文件物理层删除后，需手动完成一次主程序的【重启/重新连接】才能在宿主界面中完全移除此菜单。
-                </span>
-              </div>
-            )}
+  useEffect(() => {
+    const closeOtherMenus = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== label) {
+        detailsRef.current?.removeAttribute('open');
+      }
+    };
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (detailsRef.current && !detailsRef.current.contains(event.target as Node)) {
+        detailsRef.current.removeAttribute('open');
+      }
+    };
+    window.addEventListener('pixgo-extension-filter-open', closeOtherMenus);
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => {
+      window.removeEventListener('pixgo-extension-filter-open', closeOtherMenus);
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+    };
+  }, [label]);
 
-            <div className="flex gap-3 justify-end font-mono">
-              <button 
-                onClick={() => setUninstallConfirmExt(null)}
-                className="px-4 py-1.5 border border-[#27272a] hover:border-zinc-500 text-zinc-400 hover:text-white rounded text-xs transition-colors btn-secondary"
-              >
-                取消
-              </button>
-              <button
-                onClick={confirmUninstallExt}
-                className="px-5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded text-xs transition-colors"
-              >
-                授权卸载
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+  return (
+    <details
+      ref={detailsRef}
+      className="group relative"
+      onToggle={event => {
+        if (event.currentTarget.open) {
+          window.dispatchEvent(new CustomEvent('pixgo-extension-filter-open', { detail: label }));
+        }
+      }}
+    >
+      <summary className={`flex h-9 min-w-[116px] cursor-pointer list-none items-center justify-between gap-2 rounded border px-3 text-[11px] [&::-webkit-details-marker]:hidden ${activeCount > 0 ? (isLight ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-[#00ff00]/60 bg-[#00ff00]/5 text-[#00ff00]') : (isLight ? 'border-slate-200 bg-white text-slate-600' : 'border-zinc-800 bg-black text-zinc-400')}`}>
+        <span>{label}{activeCount > 0 ? ` (${activeCount})` : ''}</span><ChevronDown size={12} className="transition-transform group-open:rotate-180" />
+      </summary>
+      <div
+        onClick={event => {
+          if ((event.target as HTMLElement).closest('button')) {
+            detailsRef.current?.removeAttribute('open');
+          }
+        }}
+        className={`absolute right-0 top-full z-40 mt-1 w-44 rounded border p-1.5 shadow-2xl ${isLight ? 'border-slate-200 bg-white' : 'border-zinc-800 bg-[#121214]'}`}
+      >
+        {children}
+      </div>
+    </details>
+  );
+}
+
+function FilterCheck({ checked, label, onChange }: { checked: boolean; label: string; onChange: () => void }) {
+  return <button type="button" onClick={onChange} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[11px] text-zinc-400 hover:bg-zinc-500/10 hover:text-zinc-200"><span className={`flex h-3.5 w-3.5 items-center justify-center rounded-sm border ${checked ? 'border-[#00ff00] bg-[#00ff00] text-black' : 'border-zinc-700'}`}>{checked && <Check size={10} />}</span>{label}</button>;
+}
+
+function FilterTag({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return <button type="button" onClick={onRemove} className="inline-flex h-6 items-center gap-1 rounded border border-sky-500/30 bg-sky-500/5 px-2 text-[9px] text-sky-400 hover:border-red-500/40 hover:text-red-400">{label}<X size={9} /></button>;
+}
+
+function EmptyState({ icon: Icon, title, description, isLight, action }: { icon: typeof Puzzle; title: string; description: string; isLight: boolean; action?: React.ReactNode }) {
+  return <div className={`flex min-h-[340px] flex-col items-center justify-center rounded border border-dashed p-8 text-center ${isLight ? 'border-slate-300 bg-white' : 'border-zinc-800 bg-[#0c0c0e]/30'}`}><div className={`flex h-12 w-12 items-center justify-center rounded border ${isLight ? 'border-slate-200 bg-slate-50 text-slate-400' : 'border-zinc-800 bg-zinc-900 text-zinc-500'}`}><Icon size={22} /></div><h3 className={`mt-4 text-sm font-semibold ${isLight ? 'text-slate-800' : 'text-zinc-300'}`}>{title}</h3><p className="mt-2 max-w-sm text-[11px] leading-5 text-zinc-500">{description}</p>{action}</div>;
+}
+
+function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, danger = false, icon: Icon = AlertTriangle }: { title: string; description: string; confirmLabel: string; onCancel: () => void; onConfirm: () => void; danger?: boolean; icon?: typeof AlertTriangle }) {
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded border border-[#27272a] bg-[#0c0c0e] p-5">
+        <div className="flex items-start gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${danger ? 'border-red-500/30 bg-red-500/10 text-red-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-400'}`}><Icon size={17} /></div><div><h3 className="text-sm font-bold text-white">{title}</h3><p className="mt-2 text-[11px] leading-5 text-zinc-400">{description}</p></div></div>
+        <div className="mt-6 flex justify-end gap-2"><button type="button" onClick={onCancel} className="h-8 rounded border border-zinc-700 px-3 text-[11px] text-zinc-400 hover:text-white">取消</button><button type="button" onClick={onConfirm} className={`h-8 rounded px-4 text-[11px] font-semibold ${danger ? 'bg-red-600 text-white hover:bg-red-500' : 'bg-[#00ff00] text-black hover:bg-[#35ff35]'}`}>{confirmLabel}</button></div>
+      </div>
     </div>
   );
 }

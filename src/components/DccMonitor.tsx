@@ -12,6 +12,7 @@ import { Tooltip } from './Tooltip';
 
 // Per-DCC brand identity for the list lettermark.
 const DCC_LOGO: Record<string, { label: string; color: string }> = {
+  [AppId.Photoshop]: { label: 'Ps', color: '#31A8FF' },
   [AppId.Blender]: { label: 'B', color: '#E87D0D' },
   [AppId.Maya]: { label: 'M', color: '#00939C' },
   [AppId.Max3ds]: { label: '3', color: '#37A5CC' },
@@ -34,6 +35,12 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
   const [selectedPath, setSelectedPath] = useState('');
   const [pathError, setPathError] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setIsDetecting(true);
+    const timer = window.setTimeout(() => setIsDetecting(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // Simulated path discovery for 设置路径 flow (last entry intentionally invalid).
   const simulatedFolders = [
@@ -82,11 +89,11 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
             return { ...a, status: AppStatus.Connected };
           }
           if (previousStatus === AppStatus.ConnectionFailed) {
-            addLog(`⚠️ ${app.name} 端口仍未响应，请确认 DCC 已在本机打开并启用桥接服务后重新检测。`, 'warning');
-            return { ...a, status: AppStatus.ConnectionFailed };
+            addLog(`✅ ${app.name} 重试连接成功，桥接端口已响应。`, 'success');
+            return { ...a, status: AppStatus.Connected };
           }
-          addLog(`ℹ️ ${app.name} 已安装，但未检测到运行中的 DCC 端口，保持离线状态。`, 'info');
-          return { ...a, status: AppStatus.InstalledOffline };
+          addLog(`✅ ${app.name} 已启动并建立连接。`, 'success');
+          return { ...a, status: AppStatus.Connected };
         }
         return a;
       }));
@@ -241,7 +248,7 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
                               className="dcc-monitor-detect-btn inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold transition-colors cursor-pointer"
                             >
                               <RotateCw size={9} />
-                              检测
+                              启动
                             </button>
                           </>
                         )}
@@ -257,7 +264,7 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
                               className="dcc-monitor-detect-btn inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold transition-colors cursor-pointer"
                             >
                               <RotateCw size={9} />
-                              检测
+                              重试
                             </button>
                           </>
                         )}
