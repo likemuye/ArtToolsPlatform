@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  Layers,
+  Settings,
   HardDrive,
   User,
   FolderOpen,
+  Palette,
   Sun,
   Moon,
   Monitor,
@@ -14,6 +17,7 @@ import {
 } from 'lucide-react';
 import { SpaceId, ProjectSpace, AppConfig, AuthSession, AppNotification } from '../types';
 import DccMonitor from './DccMonitor';
+import NotificationCenter from './NotificationCenter';
 import { Tooltip } from './Tooltip';
 
 interface SidebarProps {
@@ -105,6 +109,8 @@ export default function Sidebar({
 
   const mainTabs = [
     { id: 'assets', name: '素材', icon: FolderOpen, badge: currentSpace.id === SpaceId.ProjectA ? '100+' : '0' },
+    { id: 'extensions', name: '工具', icon: Layers, badge: '22' },
+    { id: 'canvas', name: '画布', icon: Palette },
     { id: 'permissions', name: '权限管理', icon: ShieldCheck },
   ];
 
@@ -166,6 +172,34 @@ export default function Sidebar({
 
       {/* Bottom: DCC monitor + theme selector + profile */}
       <div className={`${isCollapsed ? 'p-2' : 'p-4'} border-t border-[#27272a] bg-[#0c0c0e] font-mono`}>
+        <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
+          <Tooltip content="设置" placement="right">
+            <button
+              type="button"
+              onClick={() => setCurrentTab('settings')}
+              className={`h-14 w-14 mx-auto rounded border transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                currentTab === 'settings'
+                  ? 'border-[#00ff00] text-[#00ff00] bg-[#00ff00]/5'
+                  : 'border-[#27272a] text-zinc-400 hover:border-[#00ff00]/60 hover:text-[#00ff00]'
+              }`}
+            >
+              <Settings size={15} />
+              <span className="text-[9px] font-sans">设置</span>
+            </button>
+          </Tooltip>
+        </div>
+
+        {/* Canvas collaboration notifications */}
+        <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
+          <NotificationCenter
+            notifications={notifications}
+            onMarkAllRead={onMarkAllNotificationsRead}
+            onOpen={onOpenNotification}
+            theme={theme}
+            isCollapsed={isCollapsed}
+          />
+        </div>
+
         {/* Persistent DCC connection-status monitor */}
         <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
           <DccMonitor
