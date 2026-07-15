@@ -1554,14 +1554,14 @@
 }
 
 .light .personal-upload-hierarchy-folder {
-  background-color: #e8edf3 !important;
-  border-color: #cbd5e1 !important;
-  color: #334155 !important;
+  background-color: transparent !important;
+  border-color: transparent !important;
+  color: #475569 !important;
 }
 
 .light .personal-upload-hierarchy-folder:hover {
-  background-color: #dbe4ee !important;
-  border-color: #94a3b8 !important;
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
 }
 
 .light .personal-upload-hierarchy-folder .text-zinc-500 {
@@ -2326,7 +2326,7 @@ input:focus {
 }
 
 .permission-sidebar-body {
-  background-color: #0c0c0e;
+  background-color: #070708;
 }
 
 .light .permission-sidebar-body {
@@ -2366,6 +2366,16 @@ input:focus {
 
 .light .permission-project-btn.is-active span:last-child {
   color: #64748b !important;
+}
+
+.light .permission-add-member-modal {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .permission-add-member-selected {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
 }
 
 .app-tooltip-bubble {

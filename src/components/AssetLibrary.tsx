@@ -172,6 +172,8 @@ const DEFAULT_ASSET_FOLDER_ID = `${SpaceId.ProjectA}${FOLDER_SCOPE_SEPARATOR}${D
 const CREATED_FOLDER_ID_PATTERN = /^folder-(\d{10,})$/;
 const PERSONAL_UPLOAD_MAX_COUNT = 500;
 const PERSONAL_UPLOAD_MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024;
+const PERSONAL_UPLOAD_INLINE_FOLDER_LEVELS = 6;
+const PERSONAL_UPLOAD_FOLDER_INDENT_PX = 16;
 const BYTES_IN_MB = 1024 * 1024;
 const DEFAULT_FOLDER_PANE_WIDTH = 304;
 const MIN_FOLDER_PANE_WIDTH = 240;
@@ -1973,7 +1975,6 @@ const readProjectMembers = (): Record<SpaceId, ProjectMember[]> => {
   }
 };
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SHARE_MAX_USERS = 20;
 
 export default function AssetLibrary({
@@ -4658,20 +4659,20 @@ export default function AssetLibrary({
     );
   }, [shareModalTarget]);
 
-  // Platform users matching the fuzzy query (name or email), excluding the current user.
+  // Platform users matching the fuzzy query. Existing grantees stay visible so
+  // users can distinguish "not found" from "already shared".
   const shareUserMatches = useMemo(() => {
     const query = shareUserQuery.trim().toLowerCase();
     const picked = new Set(shareSelectedUsers.map(u => u.email.toLowerCase()));
     const pool = PLATFORM_USERS.filter(u => (
       u.email.toLowerCase() !== CURRENT_USER_EMAIL.toLowerCase() &&
-      !picked.has(u.email.toLowerCase()) &&
-      !shareExistingEmailSet.has(u.email.toLowerCase())
+      !picked.has(u.email.toLowerCase())
     ));
     if (!query) return pool.slice(0, 8);
     return pool.filter(u => (
       u.name.toLowerCase().includes(query) || u.email.toLowerCase().includes(query)
     )).slice(0, 8);
-  }, [shareUserQuery, shareSelectedUsers, shareExistingEmailSet]);
+  }, [shareUserQuery, shareSelectedUsers]);
 
   // Users who already have access to the modal's target (shares + current project members).
   const shareExistingGrantees = useMemo(() => {
@@ -4695,39 +4696,14 @@ export default function AssetLibrary({
       : PROJECT_SPACES.filter(s => s.id === SpaceId.ProjectA || s.id === SpaceId.ProjectB)
   ), [shareModalTarget?.spaceId]);
 
-  const resolveShareUserQuery = (query: string) => {
-    const normalized = query.trim();
-    if (!normalized) return null;
-
-    const typed = PLATFORM_USERS.find(u => (
-      u.email.toLowerCase() === normalized.toLowerCase() || u.name === normalized
-    ));
-    if (!typed) {
-      return {
-        error: EMAIL_PATTERN.test(normalized)
-          ? `账号校验失败：「${normalized}」不是平台用户，无法分享。`
-          : '请从下拉中选择有效的平台用户（支持姓名/邮箱模糊匹配）。'
-      };
-    }
-    if (shareSelectedUsers.some(user => user.email.toLowerCase() === typed.email.toLowerCase()) || shareExistingEmailSet.has(typed.email.toLowerCase())) {
-      return { error: `协作者「${typed.name}」已获得权限，请勿重复添加。` };
-    }
+  const selectShareUser = (user: PlatformUser) => {
     if (shareSelectedUsers.length >= SHARE_MAX_USERS) {
-      return { error: `单次最多同时添加 ${SHARE_MAX_USERS} 人，当前已达上限。` };
-    }
-    return { user: typed };
-  };
-
-  const commitShareUserQuery = () => {
-    if (shareScope !== 'user') return;
-    const resolved = resolveShareUserQuery(shareUserQuery);
-    if (!resolved) return;
-    if ('error' in resolved) {
-      setShareError(resolved.error);
+      setShareError(`单次最多同时添加 ${SHARE_MAX_USERS} 人，当前已达上限。`);
       return;
     }
-
-    setShareSelectedUsers(prev => [...prev, resolved.user]);
+    setShareSelectedUsers(previous => (
+      previous.some(item => item.id === user.id) ? previous : [...previous, user]
+    ));
     setShareUserQuery('');
     setShareError('');
   };
@@ -4740,22 +4716,10 @@ export default function AssetLibrary({
 
     if (shareScope === 'user') {
       const targets: PlatformUser[] = [...shareSelectedUsers];
-      const resolved = resolveShareUserQuery(shareUserQuery);
-      if (resolved && 'error' in resolved) {
-        setShareError(resolved.error);
-        return;
-      }
-      if (resolved && 'user' in resolved) {
-        targets.push(resolved.user);
-        setShareSelectedUsers(prev => (
-          prev.some(user => user.email.toLowerCase() === resolved.user.email.toLowerCase())
-            ? prev
-            : [...prev, resolved.user]
-        ));
-        setShareUserQuery('');
-      }
       if (targets.length === 0) {
-        setShareError('请至少添加 1 位协作者（支持姓名/邮箱模糊匹配）。');
+        setShareError(shareUserQuery.trim()
+          ? '请从搜索结果中选择要分享的用户。'
+          : '请至少添加 1 位协作者（支持姓名/邮箱模糊匹配）。');
         return;
       }
       if (targets.length > SHARE_MAX_USERS) {
@@ -5381,6 +5345,14 @@ export default function AssetLibrary({
 
     return blocks;
   }, [personalUploadHierarchyEntries]);
+
+  const personalUploadVisibleFolderLevel = personalUploadHierarchyEntries.reduce((maxLevel, entry) => (
+    entry.kind === 'folder' ? Math.max(maxLevel, entry.depth + 1) : maxLevel
+  ), 0);
+  const personalUploadHorizontalOverflowPx = Math.max(
+    0,
+    personalUploadVisibleFolderLevel - PERSONAL_UPLOAD_INLINE_FOLDER_LEVELS
+  ) * PERSONAL_UPLOAD_FOLDER_INDENT_PX;
 
   // 卡片宽度调节：auto-fill + minmax 让卡片按设定宽度排布；宽度超过内容区时自动退化为单列填满。
   const assetGridStyle: React.CSSProperties = {
@@ -7338,69 +7310,79 @@ export default function AssetLibrary({
                   )}
                 </div>
                 {shareScope === 'user' ? (
-                  <div className="relative">
+                  <div>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={shareUserQuery}
+                        disabled={shareSelectedUsers.length >= SHARE_MAX_USERS}
+                        onChange={(event) => { setShareUserQuery(event.target.value); setShareError(''); }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && shareUserMatches[0]) {
+                            event.preventDefault();
+                            selectShareUser(shareUserMatches[0]);
+                          }
+                        }}
+                        placeholder={shareSelectedUsers.length >= SHARE_MAX_USERS ? `已达上限 ${SHARE_MAX_USERS} 人` : '输入姓名或邮箱，支持模糊匹配'}
+                        className="w-full rounded-lg border border-[#27272a] bg-[#121214] px-3 py-2.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00] disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                      {shareUserQuery.trim() && shareSelectedUsers.length < SHARE_MAX_USERS && shareUserMatches.length > 0 && (
+                        <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-52 overflow-y-auto rounded-lg border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl">
+                          {shareUserMatches.map(user => {
+                            const isAlreadyShared = shareExistingEmailSet.has(user.email.toLowerCase());
+                            return (
+                              <button
+                                key={user.id}
+                                type="button"
+                                disabled={isAlreadyShared}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => selectShareUser(user)}
+                                className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors ${isAlreadyShared ? 'cursor-default' : 'hover:bg-[#121214]'}`}
+                              >
+                                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${isAlreadyShared ? 'bg-zinc-800 text-zinc-500' : 'bg-[#00ff00]/15 text-[#00ff00]'}`}>
+                                  {user.name.slice(0, 2)}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className={`block truncate text-xs ${isAlreadyShared ? 'text-zinc-500' : 'text-zinc-200'}`}>{user.name}</span>
+                                  <span className="mt-0.5 block truncate font-mono text-[10px] text-zinc-500">{user.email}</span>
+                                </span>
+                                {isAlreadyShared && (
+                                  <span className="shrink-0 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[9px] text-zinc-400">
+                                    已分享
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {shareUserQuery.trim() && shareSelectedUsers.length < SHARE_MAX_USERS && shareUserMatches.length === 0 && (
+                        <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-[#27272a] bg-[#0c0c0e] px-3 py-2 text-[11px] text-zinc-500 shadow-xl">
+                          无匹配的平台用户
+                        </div>
+                      )}
+                    </div>
                     {shareSelectedUsers.length > 0 && (
-                      <div className="mb-1.5 flex flex-wrap gap-1.5">
+                      <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-lg border border-[#27272a] bg-[#121214]/40 p-1.5">
                         {shareSelectedUsers.map(user => (
-                          <span
-                            key={user.id}
-                            className="inline-flex items-center gap-1 rounded-full border border-[#00ff00]/40 bg-[#00ff00]/10 py-0.5 pl-2 pr-1 text-[10px] text-[#00ff00]"
-                          >
-                            <span className="max-w-[160px] truncate">{user.name}（{user.email}）</span>
-                            <button
-                              type="button"
-                              onClick={() => { setShareSelectedUsers(prev => prev.filter(u => u.id !== user.id)); setShareError(''); }}
-                              className="flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-[#00ff00]/20"
-                            >
-                              <X size={10} />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <input
-                      type="text"
-                      value={shareUserQuery}
-                      disabled={shareSelectedUsers.length >= SHARE_MAX_USERS}
-                      onChange={(event) => { setShareUserQuery(event.target.value); setShareError(''); }}
-                      onBlur={() => {
-                        // Let list item clicks complete before blur-driven validation runs.
-                        window.setTimeout(() => {
-                          if (shareUserQuery.trim()) commitShareUserQuery();
-                        }, 120);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          commitShareUserQuery();
-                        }
-                      }}
-                      placeholder={shareSelectedUsers.length >= SHARE_MAX_USERS ? `已达上限 ${SHARE_MAX_USERS} 人` : '输入姓名或邮箱，支持模糊匹配'}
-                      className="w-full rounded-lg border border-[#27272a] bg-[#121214] px-3 py-2.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00] disabled:cursor-not-allowed disabled:opacity-50"
-                    />
-                    {shareUserQuery.trim() && shareSelectedUsers.length < SHARE_MAX_USERS && shareUserMatches.length > 0 && (
-                      <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-52 overflow-y-auto rounded-lg border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl">
-                        {shareUserMatches.map(user => (
-                          <button
-                            key={user.id}
-                            type="button"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => { setShareSelectedUsers(prev => [...prev, user]); setShareUserQuery(''); setShareError(''); }}
-                            className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#121214]"
-                          >
-                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#00ff00]/15 text-[10px] font-bold text-[#00ff00]">
+                          <div key={`selected-${user.id}`} className="flex items-center gap-2 rounded px-2 py-1.5">
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#00ff00]/15 text-[10px] font-bold text-[#00ff00]">
                               {user.name.slice(0, 2)}
                             </span>
-                            <span className="min-w-0 flex-1 truncate text-xs text-zinc-200">
-                              {user.name} <span className="font-mono text-[10px] text-zinc-500">({user.email})</span>
-                            </span>
-                          </button>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium text-zinc-200">{user.name}</p>
+                              <p className="mt-0.5 truncate font-mono text-[10px] text-zinc-500">{user.email}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => { setShareSelectedUsers(previous => previous.filter(item => item.id !== user.id)); setShareError(''); }}
+                              title={`删除 ${user.name}`}
+                              className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 text-zinc-500 transition-colors hover:border-red-500/60 hover:text-red-400"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         ))}
-                      </div>
-                    )}
-                    {shareUserQuery.trim() && shareSelectedUsers.length < SHARE_MAX_USERS && shareUserMatches.length === 0 && (
-                      <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-[#27272a] bg-[#0c0c0e] px-3 py-2 text-[11px] text-zinc-500 shadow-xl">
-                        无匹配的平台用户
                       </div>
                     )}
                   </div>
@@ -7477,7 +7459,7 @@ export default function AssetLibrary({
                 onClick={confirmShare}
                 className="rounded-lg bg-[#00ff00] px-5 py-2 text-xs font-semibold text-black transition-colors hover:bg-[#00dd00]"
               >
-                确认
+                确认{shareScope === 'user' && shareSelectedUsers.length > 0 ? `（${shareSelectedUsers.length}）` : ''}
               </button>
             </div>
           </div>
@@ -7808,37 +7790,46 @@ export default function AssetLibrary({
               </div>
             </div>
 
-            <div className="personal-upload-modal-list min-h-0 flex-1 overflow-y-auto p-3 space-y-3">
-              {personalUploadDisplayBlocks.map((block) => (
+            <div className="personal-upload-modal-list min-h-0 flex-1 overflow-auto p-3">
+              <div
+                className="personal-upload-modal-list-content space-y-3"
+                data-horizontal-scroll={personalUploadHorizontalOverflowPx > 0 ? 'enabled' : 'disabled'}
+                style={{ minWidth: `calc(100% + ${personalUploadHorizontalOverflowPx}px)` }}
+              >
+                {personalUploadDisplayBlocks.map((block) => (
                 <div
                   key={block.key}
                   className={block.kind === 'folder-group'
-                    ? `personal-upload-folder-group space-y-2 overflow-hidden rounded bg-zinc-950/60 ${block.entries.length > 1 ? 'pb-3' : ''}`
+                    ? `personal-upload-folder-group overflow-hidden rounded bg-zinc-950/60 ${block.entries.length > 1 ? 'pb-3' : ''}`
                     : ''}
                 >
                   {block.entries.map((entry) => {
                   if (entry.kind === 'folder') {
                     const isCollapsed = collapsedPersonalUploadFolderPaths.has(entry.path);
-                    const indent = entry.depth > 0 ? 12 + (Math.min(entry.depth, 8) - 1) * 18 : 0;
-                    const rightInset = entry.depth > 0 ? 12 : 0;
+                    const hasChildren = entry.fileCount > 0;
                     return (
                       <button
                         type="button"
                         key={entry.key}
                         onClick={() => togglePersonalUploadFolder(entry.path)}
                         aria-expanded={!isCollapsed}
-                        className={`personal-upload-hierarchy-folder flex h-11 w-full min-w-0 items-center gap-2 bg-zinc-900/70 pr-3 text-left text-zinc-200 transition-colors hover:bg-zinc-800/80 ${isCollapsed ? '' : 'border-b border-zinc-700'}`}
-                        style={{ marginLeft: `${indent}px`, width: `calc(100% - ${indent + rightInset}px)`, paddingLeft: '12px' }}
+                        aria-label={`${isCollapsed ? '展开' : '收起'}文件夹 ${entry.path}`}
+                        className={`personal-upload-hierarchy-folder group/folder flex w-full min-w-0 items-center gap-1.5 rounded border-l-2 border-transparent px-2 text-left transition-colors ${entry.depth === 0 ? 'py-2 text-[13px] font-semibold text-zinc-300' : 'py-1.5 text-xs text-zinc-400'} hover:bg-zinc-900/70 hover:text-white`}
+                        style={{ paddingLeft: `${8 + entry.depth * PERSONAL_UPLOAD_FOLDER_INDENT_PX}px` }}
                         title={`${isCollapsed ? '展开' : '收起'}文件夹：${entry.path}`}
                       >
-                        {isCollapsed
-                          ? <ChevronRight size={13} className="shrink-0 text-zinc-500" />
-                          : <ChevronDown size={13} className="shrink-0 text-zinc-500" />}
-                        {isCollapsed
-                          ? <Folder size={15} className="shrink-0 text-zinc-400" />
-                          : <FolderOpen size={15} className="shrink-0 text-zinc-400" />}
-                        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{entry.name}</span>
-                        <span className="shrink-0 text-[9.5px] font-mono text-zinc-500">{entry.fileCount} 个文件</span>
+                        <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded ${hasChildren ? 'text-zinc-500 group-hover/folder:text-[#00ff00]' : 'text-zinc-700'}`}>
+                          {hasChildren
+                            ? (isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />)
+                            : <span className="h-1 w-1 rounded-full bg-current" />}
+                        </span>
+                        {!isCollapsed && hasChildren
+                          ? <FolderOpen size={14} className="shrink-0 text-zinc-500 group-hover/folder:text-zinc-300" />
+                          : <Folder size={14} className="shrink-0 text-zinc-500 group-hover/folder:text-zinc-300" />}
+                        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                        <span className="asset-folder-count">
+                          {entry.fileCount}
+                        </span>
                       </button>
                     );
                   }
@@ -7846,12 +7837,18 @@ export default function AssetLibrary({
                   const item = entry.item;
                   const tagSuggestions = getTagSuggestions(item.id);
                   const sourceFolderPath = getUploadFolderPath(item.sourceFileName) || null;
-                  const fileIndent = entry.depth > 0 ? 12 + (Math.min(entry.depth, 8) - 1) * 18 : 0;
+                  const fileIndent = entry.depth > 0
+                    ? 12 + (entry.depth - 1) * PERSONAL_UPLOAD_FOLDER_INDENT_PX
+                    : 0;
                   return (
                 <div
                   key={entry.key}
                   className={`personal-upload-modal-item personal-upload-hierarchy-file ${entry.depth > 0 ? 'is-nested' : ''} relative rounded border border-[#27272a] bg-black/35 p-3`}
-                  style={{ marginLeft: `${fileIndent}px`, marginRight: entry.depth > 0 ? '12px' : undefined }}
+                  style={{
+                    marginLeft: `${fileIndent}px`,
+                    marginRight: entry.depth > 0 ? '12px' : undefined,
+                    marginTop: block.kind === 'folder-group' ? '8px' : undefined
+                  }}
                 >
                   <div className="flex items-start gap-3">
                     <div className="w-28 sm:w-32 shrink-0">
@@ -8045,7 +8042,8 @@ export default function AssetLibrary({
                 );
                   })}
                 </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             <div className="shrink-0 px-5 py-4 border-t border-[#27272a] flex items-center justify-between gap-3">

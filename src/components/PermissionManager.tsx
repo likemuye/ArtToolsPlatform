@@ -10,7 +10,6 @@ import {
   Folder,
   FolderOpen,
   Eye,
-  Search,
   Check,
   X,
   Crown,
@@ -26,7 +25,7 @@ interface PermissionManagerProps {
 const PROJECT_MEMBERS_STORAGE_KEY = 'art-launcher-project-members-v1';
 const ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v2';
 const FOLDER_SCOPE_SEPARATOR = '::';
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ADD_MEMBER_MAX_USERS = 20;
 
 // Project-type spaces only (个人/共享 spaces are out of scope for project-group permissions).
 const PROJECT_GROUPS: ProjectSpace[] = PROJECT_SPACES.filter(
@@ -114,8 +113,7 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
   // Add-member modal state
   const [isAddMemberOpen, setIsAddMemberOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [nameDraft, setNameDraft] = useState<string>('');
-  const [emailDraft, setEmailDraft] = useState<string>('');
+  const [selectedPlatformUserIds, setSelectedPlatformUserIds] = useState<Set<string>>(new Set());
   const [roleDraft, setRoleDraft] = useState<ProjectRole>('member');
   const [isAddSubmitAttempted, setIsAddSubmitAttempted] = useState<boolean>(false);
 
@@ -161,33 +159,32 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
   const platformMatches = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     const existingEmails = new Set(currentMembers.map(member => member.email.toLowerCase()));
+    const selectedIds = selectedPlatformUserIds;
     return PLATFORM_USERS
+      .filter(user => !user.isFormer)
       .filter(user => !existingEmails.has(user.email.toLowerCase()))
+      .filter(user => !selectedIds.has(user.id))
       .filter(user => {
         if (!query) return true;
         return user.name.toLowerCase().includes(query) || user.email.toLowerCase().includes(query);
       })
       .slice(0, 6);
-  }, [searchQuery, currentMembers]);
+  }, [searchQuery, currentMembers, selectedPlatformUserIds]);
+
+  const selectedPlatformUsers = useMemo(() => (
+    PLATFORM_USERS.filter(user => selectedPlatformUserIds.has(user.id) && !user.isFormer)
+  ), [selectedPlatformUserIds]);
 
   const addMemberError = useMemo(() => {
-    const name = nameDraft.trim();
-    const email = emailDraft.trim();
-    if (!name) return '请输入成员姓名';
-    if (!email) return '请输入成员邮箱';
-    if (!EMAIL_REGEX.test(email)) return '邮箱格式不正确';
-    if (currentMembers.some(member => member.email.toLowerCase() === email.toLowerCase())) {
-      return '该成员已在项目组中';
-    }
+    if (selectedPlatformUsers.length === 0) return '请至少选择 1 位平台用户';
     return '';
-  }, [nameDraft, emailDraft, currentMembers]);
+  }, [selectedPlatformUsers]);
   const shouldShowAddError = isAddSubmitAttempted && !!addMemberError;
 
   const resetAddMemberModal = () => {
     setIsAddMemberOpen(false);
     setSearchQuery('');
-    setNameDraft('');
-    setEmailDraft('');
+    setSelectedPlatformUserIds(new Set());
     setRoleDraft('member');
     setIsAddSubmitAttempted(false);
   };
@@ -204,30 +201,37 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
     return '';
   };
 
-  const handleAddMember = () => {
+  const handleAddMembers = () => {
     setIsAddSubmitAttempted(true);
     if (addMemberError) {
       addLog(`❌ 添加成员被拦截：${addMemberError}`, 'error', { toast: false });
       return;
     }
-    const newMember: ProjectMember = {
-      id: `member-${selectedProjectId}-${Date.now()}`,
-      name: nameDraft.trim(),
-      email: emailDraft.trim(),
+    const joinedAt = new Date().toISOString();
+    const timestamp = Date.now();
+    const newMembers: ProjectMember[] = selectedPlatformUsers.map((user, index) => ({
+      id: `member-${selectedProjectId}-${timestamp}-${index}`,
+      name: user.name,
+      email: user.email,
       role: roleDraft,
-      joinedAt: new Date().toISOString()
-    };
+      joinedAt
+    }));
     setMembers(prev => ({
       ...prev,
-      [selectedProjectId]: [...(prev[selectedProjectId] ?? []), newMember]
+      [selectedProjectId]: [...(prev[selectedProjectId] ?? []), ...newMembers]
     }));
-    addLog(`👥 已将【${newMember.name}】添加到项目组「${selectedProject.name}」，角色：${ROLE_LABELS[newMember.role]}。`, 'success');
+    addLog(`👥 已将 ${newMembers.length} 位成员添加到项目组「${selectedProject.name}」，统一授权为：${ROLE_LABELS[roleDraft]}。`, 'success');
     resetAddMemberModal();
   };
 
-  const handleSelectPlatformUser = (userName: string, userEmail: string) => {
-    setNameDraft(userName);
-    setEmailDraft(userEmail);
+  const togglePlatformUser = (userId: string) => {
+    setSelectedPlatformUserIds(previous => {
+      const next = new Set(previous);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+    setIsAddSubmitAttempted(false);
   };
 
   const openRoleConfig = (target: ProjectMember) => {
@@ -400,7 +404,7 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
   return (
     <div className="flex h-full min-h-0 flex-1 overflow-hidden font-sans">
       {/* Left: project group selector */}
-      <aside className="permission-sidebar flex w-64 shrink-0 flex-col border-r border-[#27272a] bg-[#0c0c0e]/40">
+      <aside className="permission-sidebar flex w-64 shrink-0 flex-col border-r border-[#27272a] bg-[#070708]">
         <div className="permission-sidebar-header flex items-center gap-2 border-b border-[#27272a] px-4 py-3">
           <ShieldCheck size={16} className="text-[#00ff00]" />
           <span className="text-xs font-bold text-white">权限管理</span>
@@ -573,7 +577,7 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
       {isAddMemberOpen && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4" onClick={resetAddMemberModal}>
           <div
-            className="w-full max-w-md overflow-hidden rounded-lg border border-[#27272a] bg-[#0a0a0c] shadow-2xl"
+            className="permission-add-member-modal w-full max-w-lg overflow-hidden rounded-lg border border-[#27272a] bg-[#0a0a0c] shadow-2xl"
             onClick={event => event.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-[#27272a] px-4 py-3">
@@ -586,70 +590,91 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
               </button>
             </div>
             <div className="space-y-3 p-4">
-              {/* Platform user search */}
               <div>
-                <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-zinc-500">从平台用户选择</label>
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <label className="text-[11px] text-zinc-400">添加用户</label>
+                  <span className={`font-mono text-[10px] ${selectedPlatformUsers.length >= ADD_MEMBER_MAX_USERS ? 'text-amber-400' : 'text-zinc-600'}`}>
+                    {selectedPlatformUsers.length}/{ADD_MEMBER_MAX_USERS}
+                  </span>
+                </div>
                 <div className="relative">
-                  <Search size={13} className="absolute left-3 top-2.5 text-zinc-500" />
                   <input
                     type="text"
                     value={searchQuery}
-                    onChange={event => setSearchQuery(event.target.value)}
-                    placeholder="搜索姓名或邮箱进行匹配"
-                    className="w-full rounded border border-zinc-800 bg-black py-2 pl-9 pr-3 text-xs text-zinc-200 outline-none focus:border-[#00ff00]"
+                    disabled={selectedPlatformUsers.length >= ADD_MEMBER_MAX_USERS}
+                    onChange={event => { setSearchQuery(event.target.value); setIsAddSubmitAttempted(false); }}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' && platformMatches[0]) {
+                        event.preventDefault();
+                        togglePlatformUser(platformMatches[0].id);
+                        setSearchQuery('');
+                      }
+                    }}
+                    placeholder={selectedPlatformUsers.length >= ADD_MEMBER_MAX_USERS ? `已达上限 ${ADD_MEMBER_MAX_USERS} 人` : '输入姓名或邮箱，支持模糊匹配'}
+                    className="w-full rounded-lg border border-[#27272a] bg-[#121214] px-3 py-2.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00] disabled:cursor-not-allowed disabled:opacity-50"
                   />
-                </div>
-                {searchQuery.trim() && (
-                  <div className="mt-1.5 max-h-40 overflow-y-auto rounded border border-zinc-800 bg-black">
-                    {platformMatches.length === 0 ? (
-                      <div className="px-3 py-2 text-[11px] text-zinc-600">无匹配的平台用户</div>
-                    ) : (
-                      platformMatches.map(user => (
+                  {searchQuery.trim() && selectedPlatformUsers.length < ADD_MEMBER_MAX_USERS && platformMatches.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-52 overflow-y-auto rounded-lg border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl">
+                      {platformMatches.map(user => (
                         <button
                           key={user.id}
                           type="button"
-                          onClick={() => handleSelectPlatformUser(user.name, user.email)}
-                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition-colors hover:bg-[#121214]"
+                          onMouseDown={event => event.preventDefault()}
+                          onClick={() => {
+                            togglePlatformUser(user.id);
+                            setSearchQuery('');
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#121214]"
                         >
-                          <span className="text-xs text-zinc-200">{user.name}</span>
-                          <span className="font-mono text-[10px] text-zinc-500">{user.email}</span>
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#00ff00]/15 text-[10px] font-bold text-[#00ff00]">
+                            {user.name.slice(0, 2)}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-xs text-zinc-200">
+                            {user.name} <span className="font-mono text-[10px] text-zinc-500">（{user.email}）</span>
+                          </span>
                         </button>
-                      ))
-                    )}
+                      ))}
+                    </div>
+                  )}
+                  {searchQuery.trim() && selectedPlatformUsers.length < ADD_MEMBER_MAX_USERS && platformMatches.length === 0 && (
+                    <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-[#27272a] bg-[#0c0c0e] px-3 py-2 text-[11px] text-zinc-500 shadow-xl">
+                      无匹配的平台用户
+                    </div>
+                  )}
+                </div>
+                {selectedPlatformUsers.length > 0 && (
+                  <div className="permission-add-member-selected mt-2 max-h-40 space-y-1 overflow-y-auto rounded-lg border border-[#27272a] bg-[#121214]/40 p-1.5">
+                    {selectedPlatformUsers.map(user => (
+                      <div key={`selected-${user.id}`} className="flex items-center gap-2 rounded px-2 py-1.5">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#00ff00]/15 text-[10px] font-bold text-[#00ff00]">
+                          {user.name.slice(0, 2)}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium text-zinc-200">{user.name}</p>
+                          <p className="mt-0.5 truncate font-mono text-[10px] text-zinc-500">{user.email}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => togglePlatformUser(user.id)}
+                          title={`删除 ${user.name}`}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 text-zinc-500 transition-colors hover:border-red-500/60 hover:text-red-400"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-zinc-500">姓名</label>
-                  <input
-                    type="text"
-                    value={nameDraft}
-                    onChange={event => setNameDraft(event.target.value)}
-                    placeholder="成员姓名"
-                    className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-200 outline-none focus:border-[#00ff00]"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-zinc-500">邮箱</label>
-                  <input
-                    type="text"
-                    value={emailDraft}
-                    onChange={event => setEmailDraft(event.target.value)}
-                    placeholder="name@studio.com"
-                    className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-200 outline-none focus:border-[#00ff00]"
-                  />
-                </div>
-              </div>
-
               <div>
-                <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-zinc-500">角色</label>
+                <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-zinc-500">统一角色</label>
                 <div className="flex gap-2">
                   {(['member', 'admin'] as ProjectRole[]).map(role => (
                     <button
                       key={role}
                       type="button"
+                      aria-pressed={roleDraft === role}
                       onClick={() => setRoleDraft(role)}
                       className={`flex-1 rounded border px-3 py-2 text-xs transition-colors ${
                         roleDraft === role
@@ -677,11 +702,11 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
               </button>
               <button
                 type="button"
-                onClick={handleAddMember}
+                onClick={handleAddMembers}
                 className="inline-flex items-center gap-1.5 rounded bg-[#00ff00] px-3 py-1.5 text-xs font-semibold text-black hover:bg-[#00ff00]/90"
               >
                 <Check size={13} />
-                确认添加
+                确认添加{selectedPlatformUsers.length > 0 ? `（${selectedPlatformUsers.length}）` : ''}
               </button>
             </div>
           </div>

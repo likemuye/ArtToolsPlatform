@@ -646,7 +646,7 @@ export default function ExtensionManager({
 
           <section className={`mb-4 rounded border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="relative min-w-[230px] flex-1">
+              <label className="relative w-[320px] min-w-[240px] flex-none max-xl:flex-1">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
                 <input value={keyword} disabled={extensionsForSpace.length === 0} onChange={event => setKeyword(event.target.value)} placeholder="搜索工具名称或功能描述" className={`h-9 w-full rounded border pl-9 pr-8 text-xs outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isLight ? 'border-slate-200 bg-slate-50 text-slate-900 focus:border-emerald-500' : 'border-zinc-800 bg-black text-zinc-200 focus:border-[#00ff00]'}`} />
                 {keyword && <button type="button" title="清空搜索" onClick={() => setKeyword('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200"><X size={13} /></button>}
@@ -654,9 +654,30 @@ export default function ExtensionManager({
               <FilterMenu label="DCC 类型" activeCount={selectedDccs.length} isLight={isLight}>
                 {DCC_OPTIONS.map(dccId => <FilterCheck key={dccId} checked={selectedDccs.includes(dccId)} label={DCC_META[dccId].label} onChange={() => toggleValue(dccId, selectedDccs, setSelectedDccs)} />)}
               </FilterMenu>
-              <FilterMenu label="美术环节" activeCount={selectedStages.length} isLight={isLight}>
-                {STAGE_OPTIONS.map(stage => <FilterCheck key={stage} checked={selectedStages.includes(stage)} label={STAGE_META[stage]} onChange={() => toggleValue(stage, selectedStages, setSelectedStages)} />)}
-              </FilterMenu>
+              <div
+                role="group"
+                aria-label="美术环节"
+                className={`flex h-9 items-center gap-1 rounded border p-1 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-zinc-800 bg-black'}`}
+              >
+                <span className={`shrink-0 px-2 text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>美术环节</span>
+                {STAGE_OPTIONS.map(stage => {
+                  const active = selectedStages.includes(stage);
+                  return (
+                    <button
+                      key={stage}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => toggleValue(stage, selectedStages, setSelectedStages)}
+                      className={`h-7 shrink-0 rounded px-2.5 text-[10px] font-medium transition-colors ${active
+                        ? (isLight ? 'bg-slate-950 text-white' : 'bg-[#00ff00] text-black')
+                        : (isLight ? 'text-slate-600 hover:bg-white hover:text-slate-950' : 'text-zinc-400 hover:bg-zinc-900 hover:text-white')
+                      }`}
+                    >
+                      {STAGE_META[stage]}
+                    </button>
+                  );
+                })}
+              </div>
               <FilterMenu label="状态" activeCount={selectedLifecycles.length} isLight={isLight}>
                 {LIFECYCLE_OPTIONS.map(lifecycle => <FilterCheck key={lifecycle} checked={selectedLifecycles.includes(lifecycle)} label={LIFECYCLE_META[lifecycle].label} onChange={() => toggleValue(lifecycle, selectedLifecycles, setSelectedLifecycles)} />)}
               </FilterMenu>
@@ -740,13 +761,13 @@ export default function ExtensionManager({
             <div className={`border-t p-5 ${isLight ? 'border-slate-200 bg-slate-50/60' : 'border-zinc-800 bg-black/15'}`}>
               <h3 className={`text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>工具详情</h3>
               <p className="mt-2 max-w-3xl text-[12px] leading-6 text-zinc-500">{selectedExtension.desc}</p>
-              <dl className="mt-5 grid grid-cols-3 gap-x-8 gap-y-4 text-[10px] max-md:grid-cols-2 max-sm:grid-cols-1">
-                <div><dt className="text-zinc-500">当前版本</dt><dd className={`mt-1 font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.version}</dd></div>
-                <div><dt className="text-zinc-500">最新版本</dt><dd className={`mt-1 font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.latestVersion}</dd></div>
-                <div><dt className="text-zinc-500">作者</dt><dd className={`mt-1 ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.author}</dd></div>
-                <div><dt className="text-zinc-500">更新时间</dt><dd className={`mt-1 font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{formatDate(selectedExtension.updatedAt)}</dd></div>
-                <div><dt className="text-zinc-500">文件大小</dt><dd className={`mt-1 font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.fileSizeMB} MB</dd></div>
-                <div><dt className="text-zinc-500">加载方式</dt><dd className={`mt-1 ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.needsRestart ? '重启加载' : '支持热加载'}</dd></div>
+              <dl className="mt-5 grid grid-cols-3 gap-x-8 gap-y-4 text-[11px] leading-5 max-md:grid-cols-2 max-sm:grid-cols-1">
+                <div><dt className="text-zinc-500">当前版本</dt><dd className={`mt-1 text-[14px] font-medium font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.version}</dd></div>
+                <div><dt className="text-zinc-500">最新版本</dt><dd className={`mt-1 text-[14px] font-medium font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.latestVersion}</dd></div>
+                <div><dt className="text-zinc-500">作者</dt><dd className={`mt-1 text-[14px] font-medium ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.author}</dd></div>
+                <div><dt className="text-zinc-500">更新时间</dt><dd className={`mt-1 text-[14px] font-medium font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{formatDate(selectedExtension.updatedAt)}</dd></div>
+                <div><dt className="text-zinc-500">文件大小</dt><dd className={`mt-1 text-[14px] font-medium font-mono ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.fileSizeMB} MB</dd></div>
+                <div><dt className="text-zinc-500">加载方式</dt><dd className={`mt-1 text-[14px] font-medium ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{selectedExtension.needsRestart ? '重启加载' : '支持热加载'}</dd></div>
               </dl>
             </div>
           </div>

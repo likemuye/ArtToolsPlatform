@@ -168,6 +168,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog, a
   const [keyword, setKeyword] = useState('');
   const [contextMenuCanvasId, setContextMenuCanvasId] = useState<string | null>(null);
   const [contextMenuFolderId, setContextMenuFolderId] = useState<string | null>(null);
+  const [contextMenuFolderSource, setContextMenuFolderSource] = useState<'tree' | 'card' | null>(null);
   const [dialog, setDialog] = useState<CanvasDialogState | null>(null);
   const [folderEditor, setFolderEditor] = useState<CanvasFolderEditorState | null>(null);
   const [isFolderEditorSubmitAttempted, setIsFolderEditorSubmitAttempted] = useState(false);
@@ -224,6 +225,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog, a
   const closeContextMenus = () => {
     setContextMenuCanvasId(null);
     setContextMenuFolderId(null);
+    setContextMenuFolderSource(null);
   };
 
   useEffect(() => {
@@ -758,14 +760,16 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog, a
     gap: '0.5rem'
   };
 
-  const openFolderActions = (folderId: string) => {
-    setContextMenuFolderId(prev => (prev === folderId ? null : folderId));
+  const openFolderActions = (folderId: string, source: 'tree' | 'card') => {
+    const shouldClose = contextMenuFolderId === folderId && contextMenuFolderSource === source;
+    setContextMenuFolderId(shouldClose ? null : folderId);
+    setContextMenuFolderSource(shouldClose ? null : source);
     setContextMenuCanvasId(null);
   };
 
-  const renderFolderActionMenu = (folder: CanvasFolder) => {
+  const renderFolderActionMenu = (folder: CanvasFolder, source: 'tree' | 'card') => {
     const canMutateCurrentFolder = canMutateFolder(folder);
-    if (!canMutateCurrentFolder || contextMenuFolderId !== folder.id) return null;
+    if (!canMutateCurrentFolder || contextMenuFolderId !== folder.id || contextMenuFolderSource !== source) return null;
     const folderSpace = PROJECT_SPACES.find(space => space.id === folder.spaceId) ?? currentSpace;
 
     return (
@@ -902,7 +906,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog, a
               onClick={() => selectFolder(space, folder.id)}
               onContextMenu={(event) => {
                 event.preventDefault();
-                openFolderActions(folder.id);
+                openFolderActions(folder.id, 'tree');
               }}
               className={`canvas-tree-row ${isSelected ? 'is-active' : ''}`}
               style={{ paddingLeft: `${CANVAS_TREE_CHILD_BASE_INDENT + depth * CANVAS_TREE_CHILD_STEP_INDENT}px` }}
@@ -935,7 +939,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog, a
               <span className={`asset-folder-count ${isSelected ? 'is-selected' : ''}`}>{getFolderCanvasCount(folder.id)}</span>
             </button>
           )}
-          {renderFolderActionMenu(folder)}
+          {renderFolderActionMenu(folder, 'tree')}
           {shouldRenderSubtree && renderFolderRows(space, folder.id, depth + 1)}
         </div>
       );
@@ -1203,7 +1207,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog, a
                       }}
                       onContextMenu={(event) => {
                         event.preventDefault();
-                        openFolderActions(folder.id);
+                        openFolderActions(folder.id, 'card');
                       }}
                       className="group/folderCard relative rounded border border-[#27272a] bg-[#0c0c0e] p-2 text-center transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
                     >
@@ -1260,7 +1264,7 @@ export default function CanvasLibrary({ currentSpace, setCurrentSpace, addLog, a
                           {childFolderCount} 个子目录
                         </p>
                       </div>
-                      {renderFolderActionMenu(folder)}
+                      {renderFolderActionMenu(folder, 'card')}
                     </button>
                   );
                 })}
