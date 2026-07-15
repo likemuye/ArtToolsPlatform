@@ -79,11 +79,13 @@ const DCC_META: Record<AppId, { label: string; short: string; color: string }> =
 const DCC_OPTIONS = [AppId.Photoshop, AppId.Maya, AppId.Max3ds, AppId.Blender, AppId.Houdini];
 
 const STAGE_META: Record<ExtensionArtStage, string> = {
-  concept: '原画',
-  model: '模型',
+  character_concept: '角色原画',
+  scene_concept: '场景原画',
+  character_model: '角色模型',
+  scene_model: '场景模型',
   animation: '动画',
   vfx: '动效',
-  gui: 'GUI'
+  ued: 'UED'
 };
 
 const SPACE_META: Record<SpaceId, { icon: typeof User; color: string }> = {
@@ -100,7 +102,19 @@ const LIFECYCLE_META: Record<ExtensionLifecycle, { label: string; dot: string; t
 };
 
 const LIFECYCLE_OPTIONS: ExtensionLifecycle[] = ['not_downloaded', 'installed_latest', 'update_available'];
-const STAGE_OPTIONS: ExtensionArtStage[] = ['concept', 'model', 'animation', 'vfx', 'gui'];
+const STAGE_OPTIONS: ExtensionArtStage[] = [
+  'character_concept',
+  'scene_concept',
+  'character_model',
+  'scene_model',
+  'animation',
+  'vfx',
+  'ued'
+];
+const STAGE_TABS: Array<{ value: ExtensionArtStage | null; label: string }> = [
+  { value: null, label: '全部' },
+  ...STAGE_OPTIONS.map(stage => ({ value: stage, label: STAGE_META[stage] }))
+];
 
 const readDownloadTasks = (): ExtensionDownloadTask[] => {
   try {
@@ -150,7 +164,7 @@ export default function ExtensionManager({
   const [selectedSpaceId, setSelectedSpaceId] = useState<SpaceId>(SpaceId.ProjectA);
   const [keyword, setKeyword] = useState('');
   const [selectedDccs, setSelectedDccs] = useState<AppId[]>([]);
-  const [selectedStages, setSelectedStages] = useState<ExtensionArtStage[]>([]);
+  const [selectedStage, setSelectedStage] = useState<ExtensionArtStage | null>(null);
   const [selectedLifecycles, setSelectedLifecycles] = useState<ExtensionLifecycle[]>([]);
   const [selectedExtensionId, setSelectedExtensionId] = useState<string | null>(null);
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
@@ -183,12 +197,12 @@ export default function ExtensionManager({
     const query = keyword.trim().toLowerCase();
     return extensionsForSpace.filter(extension => {
       if (selectedDccs.length > 0 && !selectedDccs.includes(extension.dccId)) return false;
-      if (selectedStages.length > 0 && !selectedStages.includes(extension.stage)) return false;
+      if (selectedStage && extension.stage !== selectedStage) return false;
       if (selectedLifecycles.length > 0 && !selectedLifecycles.includes(extension.lifecycle)) return false;
       if (query && !`${extension.name} ${extension.desc}`.toLowerCase().includes(query)) return false;
       return true;
     });
-  }, [extensionsForSpace, keyword, selectedDccs, selectedStages, selectedLifecycles]);
+  }, [extensionsForSpace, keyword, selectedDccs, selectedStage, selectedLifecycles]);
 
   const selectedExtension = selectedExtensionId
     ? extensions.find(extension => extension.id === selectedExtensionId) ?? null
@@ -467,7 +481,7 @@ export default function ExtensionManager({
 
   const clearFilters = () => {
     setSelectedDccs([]);
-    setSelectedStages([]);
+    setSelectedStage(null);
     setSelectedLifecycles([]);
     setKeyword('');
   };
@@ -590,7 +604,7 @@ export default function ExtensionManager({
     );
   };
 
-  const activeFilterCount = selectedDccs.length + selectedStages.length + selectedLifecycles.length;
+  const activeFilterCount = selectedDccs.length + (selectedStage ? 1 : 0) + selectedLifecycles.length;
 
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden font-sans">
@@ -630,7 +644,7 @@ export default function ExtensionManager({
       </aside>
 
       <main className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[1600px] p-5 max-md:p-3">
+        <div className="w-full p-5 max-md:p-3">
           <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h1 className={`flex items-center gap-2 text-lg font-bold ${isLight ? 'text-slate-950' : 'text-white'}`}>
@@ -645,48 +659,50 @@ export default function ExtensionManager({
           </header>
 
           <section className={`mb-4 rounded border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="relative w-[320px] min-w-[240px] flex-none max-xl:flex-1">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-                <input value={keyword} disabled={extensionsForSpace.length === 0} onChange={event => setKeyword(event.target.value)} placeholder="搜索工具名称或功能描述" className={`h-9 w-full rounded border pl-9 pr-8 text-xs outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isLight ? 'border-slate-200 bg-slate-50 text-slate-900 focus:border-emerald-500' : 'border-zinc-800 bg-black text-zinc-200 focus:border-[#00ff00]'}`} />
-                {keyword && <button type="button" title="清空搜索" onClick={() => setKeyword('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200"><X size={13} /></button>}
-              </label>
-              <FilterMenu label="DCC 类型" activeCount={selectedDccs.length} isLight={isLight}>
-                {DCC_OPTIONS.map(dccId => <FilterCheck key={dccId} checked={selectedDccs.includes(dccId)} label={DCC_META[dccId].label} onChange={() => toggleValue(dccId, selectedDccs, setSelectedDccs)} />)}
-              </FilterMenu>
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
               <div
-                role="group"
+                role="tablist"
                 aria-label="美术环节"
-                className={`flex h-9 items-center gap-1 rounded border p-1 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-zinc-800 bg-black'}`}
+                className={`flex h-9 max-w-full shrink-0 items-center gap-1 overflow-x-auto rounded border p-1 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-zinc-800 bg-black'}`}
               >
-                <span className={`shrink-0 px-2 text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>美术环节</span>
-                {STAGE_OPTIONS.map(stage => {
-                  const active = selectedStages.includes(stage);
+                {STAGE_TABS.map(tab => {
+                  const active = selectedStage === tab.value;
                   return (
                     <button
-                      key={stage}
+                      key={tab.value ?? 'all'}
                       type="button"
-                      aria-pressed={active}
-                      onClick={() => toggleValue(stage, selectedStages, setSelectedStages)}
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => setSelectedStage(tab.value)}
                       className={`h-7 shrink-0 rounded px-2.5 text-[10px] font-medium transition-colors ${active
                         ? (isLight ? 'bg-slate-950 text-white' : 'bg-[#00ff00] text-black')
                         : (isLight ? 'text-slate-600 hover:bg-white hover:text-slate-950' : 'text-zinc-400 hover:bg-zinc-900 hover:text-white')
                       }`}
                     >
-                      {STAGE_META[stage]}
+                      {tab.label}
                     </button>
                   );
                 })}
               </div>
-              <FilterMenu label="状态" activeCount={selectedLifecycles.length} isLight={isLight}>
-                {LIFECYCLE_OPTIONS.map(lifecycle => <FilterCheck key={lifecycle} checked={selectedLifecycles.includes(lifecycle)} label={LIFECYCLE_META[lifecycle].label} onChange={() => toggleValue(lifecycle, selectedLifecycles, setSelectedLifecycles)} />)}
-              </FilterMenu>
+              <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-2 xl:w-auto">
+                <FilterMenu label="DCC 类型" activeCount={selectedDccs.length} isLight={isLight}>
+                  {DCC_OPTIONS.map(dccId => <FilterCheck key={dccId} checked={selectedDccs.includes(dccId)} label={DCC_META[dccId].label} onChange={() => toggleValue(dccId, selectedDccs, setSelectedDccs)} />)}
+                </FilterMenu>
+                <FilterMenu label="状态" activeCount={selectedLifecycles.length} isLight={isLight}>
+                  {LIFECYCLE_OPTIONS.map(lifecycle => <FilterCheck key={lifecycle} checked={selectedLifecycles.includes(lifecycle)} label={LIFECYCLE_META[lifecycle].label} onChange={() => toggleValue(lifecycle, selectedLifecycles, setSelectedLifecycles)} />)}
+                </FilterMenu>
+                <label className="relative w-[320px] min-w-[240px] flex-none max-xl:flex-1">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                  <input value={keyword} disabled={extensionsForSpace.length === 0} onChange={event => setKeyword(event.target.value)} placeholder="搜索工具名称或功能描述" className={`h-9 w-full rounded border pl-9 pr-8 text-xs outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isLight ? 'border-slate-200 bg-slate-50 text-slate-900 focus:border-emerald-500' : 'border-zinc-800 bg-black text-zinc-200 focus:border-[#00ff00]'}`} />
+                  {keyword && <button type="button" title="清空搜索" onClick={() => setKeyword('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200"><X size={13} /></button>}
+                </label>
+              </div>
             </div>
             {(activeFilterCount > 0 || keyword) && (
               <div className={`mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3 ${isLight ? 'border-slate-100' : 'border-zinc-900'}`}>
                 <SlidersHorizontal size={12} className="mr-1 text-zinc-500" />
                 {selectedDccs.map(value => <FilterTag key={value} label={DCC_META[value].label} onRemove={() => toggleValue(value, selectedDccs, setSelectedDccs)} />)}
-                {selectedStages.map(value => <FilterTag key={value} label={STAGE_META[value]} onRemove={() => toggleValue(value, selectedStages, setSelectedStages)} />)}
+                {selectedStage && <FilterTag label={STAGE_META[selectedStage]} onRemove={() => setSelectedStage(null)} />}
                 {selectedLifecycles.map(value => <FilterTag key={value} label={LIFECYCLE_META[value].label} onRemove={() => toggleValue(value, selectedLifecycles, setSelectedLifecycles)} />)}
                 <button type="button" onClick={clearFilters} className="ml-auto text-[10px] text-zinc-500 hover:text-red-400">清除全部</button>
               </div>
@@ -698,7 +714,7 @@ export default function ExtensionManager({
           ) : filteredExtensions.length === 0 ? (
             <EmptyState icon={Search} title="未找到匹配拓展" description="调整关键词或移除部分筛选条件后重试。" isLight={isLight} action={<button type="button" onClick={clearFilters} className="mt-4 rounded border border-zinc-700 px-3 py-1.5 text-[11px] text-zinc-400 hover:text-white">清除筛选</button>} />
           ) : (
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-3 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {filteredExtensions.map(extension => {
                 const lifecycle = LIFECYCLE_META[extension.lifecycle];
                 const dcc = DCC_META[extension.dccId];

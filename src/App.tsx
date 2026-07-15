@@ -177,7 +177,11 @@ export default function App() {
   const [extensions, setExtensions] = useState<DccExtension[]>(() => {
     try {
       const stored = JSON.parse(localStorage.getItem(EXTENSION_STATE_STORAGE_KEY) ?? '[]') as DccExtension[];
-      return Array.isArray(stored) && stored.length > 0 ? stored : EXTENSIONS_PROJECT_A;
+      if (!Array.isArray(stored) || stored.length === 0) return EXTENSIONS_PROJECT_A;
+      return stored.map(item => {
+        const canonical = EXTENSIONS_PROJECT_A.find(extension => extension.id === item.id);
+        return canonical ? { ...item, stage: canonical.stage } : item;
+      });
     } catch {
       return EXTENSIONS_PROJECT_A;
     }

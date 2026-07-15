@@ -1876,10 +1876,6 @@ const getInitialItemsPerPage = () => {
 };
 
 const clampCardWidth = (width: number) => Math.max(CARD_WIDTH_MIN, Math.min(CARD_WIDTH_MAX, width));
-const getCardWidthPercent = (width: number) => {
-  const ratio = (clampCardWidth(width) - CARD_WIDTH_MIN) / (CARD_WIDTH_MAX - CARD_WIDTH_MIN);
-  return Math.round(ratio * 100);
-};
 const getInitialCardWidth = () => {
   try {
     const stored = localStorage.getItem(CARD_WIDTH_STORAGE_KEY);
@@ -6629,9 +6625,9 @@ export default function AssetLibrary({
                     <span className="font-mono text-xs text-zinc-500">({totalItems})</span>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
                     {/* 卡片宽度调节滑动条 */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <span className="font-mono text-[10.5px] text-zinc-500">预览</span>
                       <input
                         type="range"
@@ -6641,9 +6637,8 @@ export default function AssetLibrary({
                         value={cardWidth}
                         onChange={(event) => setCardWidth(clampCardWidth(Number(event.target.value)))}
                         className="asset-card-width-slider h-1 w-28 cursor-pointer appearance-none rounded-full bg-zinc-700 accent-[#00ff00]"
-                        title={`封面宽度 ${cardWidth}px（${getCardWidthPercent(cardWidth)}%）`}
+                        title={`封面宽度 ${cardWidth}px`}
                       />
-                      <span className="w-12 shrink-0 font-mono text-[10.5px] text-zinc-400">{getCardWidthPercent(cardWidth)}%</span>
                     </div>
 
                     {!isExternalRootSelected && (

@@ -44,7 +44,14 @@ export interface AppConfig {
 }
 
 export type ExtensionLifecycle = 'not_downloaded' | 'installed_latest' | 'update_available';
-export type ExtensionArtStage = 'concept' | 'model' | 'animation' | 'vfx' | 'gui';
+export type ExtensionArtStage =
+  | 'character_concept'
+  | 'scene_concept'
+  | 'character_model'
+  | 'scene_model'
+  | 'animation'
+  | 'vfx'
+  | 'ued';
 
 export interface ExtensionShareGrant {
   email: string;
