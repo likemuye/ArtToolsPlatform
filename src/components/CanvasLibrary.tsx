@@ -30,7 +30,7 @@ import {
   CanvasHistoryEntry,
   CanvasRole,
   CanvasShareGrant,
-  AppNotification,
+  NotificationInput,
   PlatformUser,
   ProjectMember,
   ProjectSpace,
@@ -60,7 +60,7 @@ interface CanvasLibraryProps {
   currentSpace: ProjectSpace;
   setCurrentSpace: (space: ProjectSpace) => void;
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
-  addNotification: (notification: Omit<AppNotification, 'id' | 'createdAt' | 'unread'> & { createdAt?: string; unread?: boolean }) => void;
+  addNotification: (notification: NotificationInput) => void;
   theme: 'dark' | 'light';
 }
 

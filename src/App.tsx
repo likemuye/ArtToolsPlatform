@@ -6,6 +6,7 @@ import {
   X, 
   HelpCircle,
   Database,
+  ExternalLink,
   Info,
   Bell,
   CheckCheck,
@@ -15,7 +16,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { PROJECT_SPACES, INITIAL_APPS, EXTENSIONS_PROJECT_A, ART_ASSETS_PROJECT_A } from './data';
-import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession, AppNotification, NotificationDomain } from './types';
+import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession, AppNotification, NotificationAction, NotificationDomain, NotificationInput } from './types';
 import {
   loadSession,
   saveSession,
@@ -43,6 +44,24 @@ interface LogLine {
 
 const EXTENSION_STATE_STORAGE_KEY = 'pixgo-extensions-v03';
 const DCC_STATE_STORAGE_KEY = 'pixgo-dcc-state-v03';
+const NOTIFICATION_STORAGE_KEY = 'pixgo-notifications-v1';
+
+const readToolNavigationFromLocation = (): NotificationAction | null => {
+  const params = new URLSearchParams(window.location.search);
+  const extensionId = params.get('tool') ?? undefined;
+  if (params.get('tab') !== 'extensions' && !extensionId) return null;
+  const requestedSpace = params.get('space');
+  const spaceId = Object.values(SpaceId).includes(requestedSpace as SpaceId)
+    ? requestedSpace as SpaceId
+    : extensionId ? SpaceId.Shared : SpaceId.ProjectA;
+  return {
+    label: extensionId ? '查看工具' : '进入项目空间',
+    tab: 'extensions',
+    spaceId,
+    extensionId,
+    href: window.location.href
+  };
+};
 
 const NOTIFICATION_DOMAIN_META: Record<NotificationDomain, { label: string; icon: typeof Bell; accent: string }> = {
   canvas: { label: '画布', icon: Palette, accent: '#38bdf8' },
@@ -52,7 +71,7 @@ const NOTIFICATION_DOMAIN_META: Record<NotificationDomain, { label: string; icon
 
 const buildInitialNotifications = (): AppNotification[] => {
   const now = Date.now();
-  return [
+  const notifications: Array<Omit<AppNotification, 'delivery'>> = [
     {
       id: 'notification-canvas-share-demo',
       domain: 'canvas',
@@ -106,6 +125,26 @@ const buildInitialNotifications = (): AppNotification[] => {
       unread: false
     }
   ];
+  return notifications.map(notification => ({
+    ...notification,
+    delivery: { inApp: 'delivered', dingtalk: 'delivered' }
+  }));
+};
+
+const readInitialNotifications = (): AppNotification[] => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(NOTIFICATION_STORAGE_KEY) ?? '[]') as AppNotification[];
+    if (!Array.isArray(stored) || stored.length === 0) return buildInitialNotifications();
+    return stored.map(notification => ({
+      ...notification,
+      delivery: {
+        inApp: 'delivered',
+        dingtalk: notification.delivery?.dingtalk === 'failed' ? 'failed' : 'delivered'
+      }
+    }));
+  } catch {
+    return buildInitialNotifications();
+  }
 };
 
 export default function App() {
@@ -155,14 +194,21 @@ export default function App() {
   });
 
   // Sidebar and space states - F7
-  const [currentTab, setCurrentTab] = useState<string>('assets');
+  const [currentTab, setCurrentTab] = useState<string>(() => readToolNavigationFromLocation() ? 'extensions' : 'assets');
   const [currentSpace, setCurrentSpace] = useState<ProjectSpace>(
-    PROJECT_SPACES.find((space) => space.id === SpaceId.ProjectA) ?? PROJECT_SPACES[0]
+    PROJECT_SPACES.find((space) => space.id === readToolNavigationFromLocation()?.spaceId)
+      ?? PROJECT_SPACES.find((space) => space.id === SpaceId.ProjectA)
+      ?? PROJECT_SPACES[0]
   );
   const [isInitial, setIsInitial] = useState<boolean>(true);
   const [toast, setToast] = useState<{ id: number; message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
-  const [notifications, setNotifications] = useState<AppNotification[]>(buildInitialNotifications);
+  const [notifications, setNotifications] = useState<AppNotification[]>(readInitialNotifications);
   const [notificationDetailId, setNotificationDetailId] = useState<string | null>(null);
+  const [toolNavigationTarget, setToolNavigationTarget] = useState<NotificationAction | null>(readToolNavigationFromLocation);
+
+  useEffect(() => {
+    localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(notifications));
+  }, [notifications]);
 
   // Global Sync Status Containers
   const [apps, setApps] = useState<AppConfig[]>(() => {
@@ -239,12 +285,16 @@ export default function App() {
     }
   };
 
-  const addNotification = (notification: Omit<AppNotification, 'id' | 'createdAt' | 'unread'> & { createdAt?: string; unread?: boolean }) => {
+  const addNotification = (notification: NotificationInput) => {
     const nextNotification: AppNotification = {
       ...notification,
-      id: `notification-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `notification-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       createdAt: notification.createdAt ?? new Date().toISOString(),
-      unread: notification.unread ?? true
+      unread: notification.unread ?? true,
+      delivery: {
+        inApp: 'delivered',
+        dingtalk: notification.delivery?.dingtalk ?? (navigator.onLine ? 'delivered' : 'failed')
+      }
     };
     setNotifications(prev => [nextNotification, ...prev]);
   };
@@ -261,6 +311,20 @@ export default function App() {
   const notificationDetail = notificationDetailId
     ? notifications.find(item => item.id === notificationDetailId) ?? null
     : null;
+
+  const followNotificationAction = (action: NotificationAction) => {
+    setCurrentTab('extensions');
+    const targetSpace = PROJECT_SPACES.find(space => space.id === action.spaceId);
+    if (targetSpace) setCurrentSpace(targetSpace);
+    setToolNavigationTarget({ ...action });
+    setNotificationDetailId(null);
+    try {
+      const targetUrl = new URL(action.href);
+      window.history.replaceState({}, '', `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`);
+    } catch {
+      // The structured target still handles navigation when an external URL is malformed.
+    }
+  };
 
   // Switch Space side effect logging
   useEffect(() => {
@@ -357,6 +421,7 @@ export default function App() {
             setDownloadedAssetIds={setDownloadedAssetIds}
             simulatedDiskGB={simulatedDiskGB}
             setSimulatedDiskGB={setSimulatedDiskGB}
+            theme={theme}
             addLog={addLog}
           />
         );
@@ -366,6 +431,7 @@ export default function App() {
             apps={apps}
             setApps={setApps}
             extensions={extensions}
+            setExtensions={setExtensions}
             assets={assets}
             downloadedAssetIds={downloadedAssetIds}
             simulatedDiskGB={simulatedDiskGB}
@@ -388,7 +454,7 @@ export default function App() {
           />
         );
       case 'permissions':
-        return <PermissionManager addLog={addLog} />;
+        return <PermissionManager addLog={addLog} addNotification={addNotification} />;
       default:
         return (
           <div className="flex-1 p-8 text-zinc-500 font-mono">
@@ -484,6 +550,8 @@ export default function App() {
               onOpenSettings={() => setCurrentTab('settings')}
               onDownloadActivityChange={setActiveExtensionDownloadCount}
               addLog={addLog}
+              addNotification={addNotification}
+              navigationTarget={toolNavigationTarget}
               theme={theme}
             />
           </div>
@@ -603,11 +671,21 @@ export default function App() {
                     <span>{notificationDetail.trigger}</span>
                     <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>通知对象</span>
                     <span>{notificationDetail.recipient}</span>
-                    <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>画布</span>
-                    <span>{notificationDetail.canvasName}</span>
+                    <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>{notificationDetail.resourceLabel ?? '画布'}</span>
+                    <span>{notificationDetail.resourceName ?? notificationDetail.canvasName}</span>
                     <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>发起人</span>
                     <span>{notificationDetail.actorName}</span>
+                    <span className={theme === 'light' ? 'text-slate-400' : 'text-zinc-500'}>触达通道</span>
+                    <span className="flex flex-wrap gap-1.5">
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] ${theme === 'light' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'}`}>站内已送达</span>
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] ${notificationDetail.delivery.dingtalk === 'delivered' ? (theme === 'light' ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-sky-400/30 bg-sky-400/10 text-sky-300') : (theme === 'light' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-amber-400/30 bg-amber-400/10 text-amber-300')}`}>
+                        {notificationDetail.delivery.dingtalk === 'delivered' ? '钉钉已推送' : '钉钉推送失败'}
+                      </span>
+                    </span>
                   </div>
+                  {notificationDetail.delivery.dingtalk === 'failed' && (
+                    <p className={`text-[11px] ${theme === 'light' ? 'text-amber-700' : 'text-amber-300'}`}>钉钉通道失败不影响站内通知，本条记录已保留。</p>
+                  )}
                 </div>
 
                 <div className={`flex justify-end gap-2 border-t px-5 py-4 ${theme === 'light' ? 'border-slate-100' : 'border-[#1c1c1f]'}`}>
@@ -621,13 +699,24 @@ export default function App() {
                     <CheckCheck size={12} />
                     全部已读
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setNotificationDetailId(null)}
-                    className="rounded bg-[#00ff00] px-4 py-1.5 text-xs font-semibold text-black"
-                  >
-                    知道了
-                  </button>
+                  {notificationDetail.action ? (
+                    <button
+                      type="button"
+                      onClick={() => followNotificationAction(notificationDetail.action!)}
+                      className="inline-flex items-center gap-1.5 rounded bg-[#00ff00] px-4 py-1.5 text-xs font-semibold text-black"
+                    >
+                      {notificationDetail.action.label}
+                      <ExternalLink size={12} />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setNotificationDetailId(null)}
+                      className="rounded bg-[#00ff00] px-4 py-1.5 text-xs font-semibold text-black"
+                    >
+                      知道了
+                    </button>
+                  )}
                 </div>
               </>
             );

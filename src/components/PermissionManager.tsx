@@ -15,17 +15,26 @@ import {
   Crown,
   User as UserIcon
 } from 'lucide-react';
-import { SpaceId, ProjectSpace, ProjectRole, ProjectMember, AssetFolder } from '../types';
-import { PROJECT_SPACES, PLATFORM_USERS, INITIAL_PROJECT_MEMBERS, CURRENT_USER_EMAIL } from '../data';
+import { SpaceId, ProjectSpace, ProjectRole, ProjectMember, AssetFolder, NotificationInput } from '../types';
+import { PROJECT_SPACES, PLATFORM_USERS, INITIAL_PROJECT_MEMBERS, CURRENT_USER_EMAIL, CURRENT_USER_NAME } from '../data';
 
 interface PermissionManagerProps {
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
+  addNotification: (notification: NotificationInput) => void;
 }
 
 const PROJECT_MEMBERS_STORAGE_KEY = 'art-launcher-project-members-v1';
 const ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v2';
 const FOLDER_SCOPE_SEPARATOR = '::';
 const ADD_MEMBER_MAX_USERS = 20;
+
+const buildProjectToolHref = (spaceId: SpaceId) => {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('tab', 'extensions');
+  url.searchParams.set('space', spaceId);
+  return url.toString();
+};
 
 // Project-type spaces only (个人/共享 spaces are out of scope for project-group permissions).
 const PROJECT_GROUPS: ProjectSpace[] = PROJECT_SPACES.filter(
@@ -105,7 +114,7 @@ const readScopedFolders = (spaceId: SpaceId): AssetFolder[] => {
   }
 };
 
-export default function PermissionManager({ addLog }: PermissionManagerProps) {
+export default function PermissionManager({ addLog, addNotification }: PermissionManagerProps) {
   const [members, setMembers] = useState<Record<SpaceId, ProjectMember[]>>(getInitialMembers);
   const [selectedProjectId, setSelectedProjectId] = useState<SpaceId>(SpaceId.ProjectA);
   const [activeTab, setActiveTab] = useState<'members' | 'assets'>('members');
@@ -220,7 +229,27 @@ export default function PermissionManager({ addLog }: PermissionManagerProps) {
       ...prev,
       [selectedProjectId]: [...(prev[selectedProjectId] ?? []), ...newMembers]
     }));
-    addLog(`👥 已将 ${newMembers.length} 位成员添加到项目组「${selectedProject.name}」，统一授权为：${ROLE_LABELS[roleDraft]}。`, 'success');
+    newMembers.forEach(member => {
+      addNotification({
+        domain: 'tool',
+        node: 'tool-project-grant',
+        trigger: '加入项目空间并获得工具权限',
+        recipient: `${member.name}（${member.email}）`,
+        title: '已开通项目空间工具权限',
+        content: `您已加入「${selectedProject.name}」，该项目空间的全部工具权限现已开通。`,
+        resourceLabel: '项目空间',
+        resourceName: selectedProject.name,
+        actorName: CURRENT_USER_NAME,
+        action: {
+          label: '进入项目空间',
+          tab: 'extensions',
+          spaceId: selectedProjectId,
+          href: buildProjectToolHref(selectedProjectId)
+        }
+      });
+    });
+    const dingTalkResult = navigator.onLine ? '钉钉机器人已逐人推送' : '钉钉推送失败，站内记录已保留';
+    addLog(`👥 已将 ${newMembers.length} 位成员添加到项目组「${selectedProject.name}」，统一授权为：${ROLE_LABELS[roleDraft]}；站内通知已逐人生成，${dingTalkResult}。`, 'success');
     resetAddMemberModal();
   };
 

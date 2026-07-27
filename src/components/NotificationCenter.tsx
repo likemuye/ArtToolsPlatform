@@ -71,7 +71,7 @@ export default function NotificationCenter({
               <span className="relative">
                 <Bell size={15} className={open ? (isLight ? 'text-[#00C800]' : 'text-[#00ff00]') : (isLight ? 'text-slate-500' : 'text-zinc-400')} />
                 {unreadCount > 0 && (
-                  <span className="absolute -right-2 -top-2 min-w-[14px] rounded-full bg-red-500 px-1 text-[8px] font-bold leading-[14px] text-white">
+                  <span className={`absolute -right-2 -top-2 min-w-[14px] rounded-full px-1 text-[8px] font-bold leading-[14px] ring-1 ring-inset ${isLight ? 'bg-rose-100 text-rose-700 ring-rose-200' : 'bg-rose-400/20 text-rose-200 ring-rose-400/30'}`}>
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
@@ -189,6 +189,11 @@ export default function NotificationCenter({
                         <span className={`shrink-0 font-mono text-[9px] ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>{formatTime(item.createdAt)}</span>
                       </span>
                       <span className={`mt-1 block text-[11px] leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>{item.content}</span>
+                      {item.domain === 'tool' && (
+                        <span className={`mt-1.5 block text-[9px] ${item.delivery.dingtalk === 'delivered' ? (isLight ? 'text-sky-600' : 'text-sky-400') : (isLight ? 'text-amber-700' : 'text-amber-300')}`}>
+                          站内已送达 · {item.delivery.dingtalk === 'delivered' ? '钉钉已推送' : '钉钉推送失败'}
+                        </span>
+                      )}
                     </span>
                   </button>
                 );

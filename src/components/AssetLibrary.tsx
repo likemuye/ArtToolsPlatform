@@ -42,6 +42,7 @@ import {
 import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType, AssetTaskStatus, PlatformUser, ProjectMember } from '../types';
 import { INITIAL_ASSET_FOLDERS_PROJECT_A, INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A, PROJECT_SPACES, ASSET_ORG_OPTIONS, ASSET_TASK_STATUS_LABELS, PLATFORM_USERS, INITIAL_PROJECT_MEMBERS, CURRENT_USER_EMAIL } from '../data';
 import { Tooltip, TooltipText } from './Tooltip';
+import { PlatformUserPicker, PLATFORM_USER_PICKER_MAX_USERS } from './PlatformUserPicker';
 
 interface AssetLibraryProps {
   currentSpace: ProjectSpace;
@@ -54,6 +55,7 @@ interface AssetLibraryProps {
   setDownloadedAssetIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   simulatedDiskGB: number;
   setSimulatedDiskGB: React.Dispatch<React.SetStateAction<number>>;
+  theme: 'dark' | 'light';
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
 }
 
@@ -1971,7 +1973,7 @@ const readProjectMembers = (): Record<SpaceId, ProjectMember[]> => {
   }
 };
 
-const SHARE_MAX_USERS = 20;
+const SHARE_MAX_USERS = PLATFORM_USER_PICKER_MAX_USERS;
 
 export default function AssetLibrary({
   currentSpace,
@@ -1984,6 +1986,7 @@ export default function AssetLibrary({
   setDownloadedAssetIds,
   simulatedDiskGB,
   setSimulatedDiskGB,
+  theme,
   addLog
 }: AssetLibraryProps) {
   // Navigation & filter states
@@ -4655,21 +4658,6 @@ export default function AssetLibrary({
     );
   }, [shareModalTarget]);
 
-  // Platform users matching the fuzzy query. Existing grantees stay visible so
-  // users can distinguish "not found" from "already shared".
-  const shareUserMatches = useMemo(() => {
-    const query = shareUserQuery.trim().toLowerCase();
-    const picked = new Set(shareSelectedUsers.map(u => u.email.toLowerCase()));
-    const pool = PLATFORM_USERS.filter(u => (
-      u.email.toLowerCase() !== CURRENT_USER_EMAIL.toLowerCase() &&
-      !picked.has(u.email.toLowerCase())
-    ));
-    if (!query) return pool.slice(0, 8);
-    return pool.filter(u => (
-      u.name.toLowerCase().includes(query) || u.email.toLowerCase().includes(query)
-    )).slice(0, 8);
-  }, [shareUserQuery, shareSelectedUsers]);
-
   // Users who already have access to the modal's target (shares + current project members).
   const shareExistingGrantees = useMemo(() => {
     if (!shareModalTarget) return [] as Array<{ name: string; email: string; source: string; removable: boolean }>;
@@ -7295,93 +7283,20 @@ export default function AssetLibrary({
               </div>
 
               {/* Invite collaborator */}
-              <div>
-                <div className="mb-1.5 flex items-center justify-between">
-                  <label className="text-[11px] text-zinc-400">邀请协作者</label>
-                  {shareScope === 'user' && (
-                    <span className={`font-mono text-[10px] ${shareSelectedUsers.length >= SHARE_MAX_USERS ? 'text-amber-400' : 'text-zinc-600'}`}>
-                      {shareSelectedUsers.length}/{SHARE_MAX_USERS}
-                    </span>
-                  )}
-                </div>
-                {shareScope === 'user' ? (
-                  <div>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={shareUserQuery}
-                        disabled={shareSelectedUsers.length >= SHARE_MAX_USERS}
-                        onChange={(event) => { setShareUserQuery(event.target.value); setShareError(''); }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' && shareUserMatches[0]) {
-                            event.preventDefault();
-                            selectShareUser(shareUserMatches[0]);
-                          }
-                        }}
-                        placeholder={shareSelectedUsers.length >= SHARE_MAX_USERS ? `已达上限 ${SHARE_MAX_USERS} 人` : '输入姓名或邮箱，支持模糊匹配'}
-                        className="w-full rounded-lg border border-[#27272a] bg-[#121214] px-3 py-2.5 text-xs text-zinc-200 outline-none transition-colors focus:border-[#00ff00] disabled:cursor-not-allowed disabled:opacity-50"
-                      />
-                      {shareUserQuery.trim() && shareSelectedUsers.length < SHARE_MAX_USERS && shareUserMatches.length > 0 && (
-                        <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-52 overflow-y-auto rounded-lg border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl">
-                          {shareUserMatches.map(user => {
-                            const isAlreadyShared = shareExistingEmailSet.has(user.email.toLowerCase());
-                            return (
-                              <button
-                                key={user.id}
-                                type="button"
-                                disabled={isAlreadyShared}
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={() => selectShareUser(user)}
-                                className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors ${isAlreadyShared ? 'cursor-default' : 'hover:bg-[#121214]'}`}
-                              >
-                                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${isAlreadyShared ? 'bg-zinc-800 text-zinc-500' : 'bg-[#00ff00]/15 text-[#00ff00]'}`}>
-                                  {user.name.slice(0, 2)}
-                                </span>
-                                <span className="min-w-0 flex-1">
-                                  <span className={`block truncate text-xs ${isAlreadyShared ? 'text-zinc-500' : 'text-zinc-200'}`}>{user.name}</span>
-                                  <span className="mt-0.5 block truncate font-mono text-[10px] text-zinc-500">{user.email}</span>
-                                </span>
-                                {isAlreadyShared && (
-                                  <span className="shrink-0 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[9px] text-zinc-400">
-                                    已分享
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                      {shareUserQuery.trim() && shareSelectedUsers.length < SHARE_MAX_USERS && shareUserMatches.length === 0 && (
-                        <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-[#27272a] bg-[#0c0c0e] px-3 py-2 text-[11px] text-zinc-500 shadow-xl">
-                          无匹配的平台用户
-                        </div>
-                      )}
-                    </div>
-                    {shareSelectedUsers.length > 0 && (
-                      <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-lg border border-[#27272a] bg-[#121214]/40 p-1.5">
-                        {shareSelectedUsers.map(user => (
-                          <div key={`selected-${user.id}`} className="flex items-center gap-2 rounded px-2 py-1.5">
-                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#00ff00]/15 text-[10px] font-bold text-[#00ff00]">
-                              {user.name.slice(0, 2)}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-xs font-medium text-zinc-200">{user.name}</p>
-                              <p className="mt-0.5 truncate font-mono text-[10px] text-zinc-500">{user.email}</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => { setShareSelectedUsers(previous => previous.filter(item => item.id !== user.id)); setShareError(''); }}
-                              title={`删除 ${user.name}`}
-                              className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 text-zinc-500 transition-colors hover:border-red-500/60 hover:text-red-400"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : (
+              {shareScope === 'user' ? (
+                <PlatformUserPicker
+                  query={shareUserQuery}
+                  selectedUsers={shareSelectedUsers}
+                  existingEmails={shareExistingEmailSet}
+                  onQueryChange={value => { setShareUserQuery(value); setShareError(''); }}
+                  onSelect={selectShareUser}
+                  onRemove={user => { setShareSelectedUsers(previous => previous.filter(item => item.id !== user.id)); setShareError(''); }}
+                  isLight={theme === 'light'}
+                  maxUsers={SHARE_MAX_USERS}
+                />
+              ) : (
+                <div>
+                  <label className="mb-1.5 block text-[11px] text-zinc-400">邀请协作者</label>
                   <select
                     value={shareSelectedGroup}
                     onChange={(event) => { setShareSelectedGroup(event.target.value as SpaceId); setShareError(''); }}
@@ -7391,8 +7306,8 @@ export default function AssetLibrary({
                       <option key={g.id} value={g.id}>{g.name}</option>
                     ))}
                   </select>
-                )}
-              </div>
+                </div>
+              )}
 
               <div>
                 <label className="mb-1.5 block text-[11px] text-zinc-400">授权类型</label>

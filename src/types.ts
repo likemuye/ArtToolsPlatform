@@ -21,6 +21,18 @@ export enum AppId {
   Houdini = 'houdini'
 }
 
+export type ExtensionHostId =
+  | AppId
+  | 'comfyui'
+  | 'substance-painter'
+  | 'motionbuilder'
+  | 'unreal-engine'
+  | 'unity'
+  | 'exe'
+  | 'web';
+
+export type ComfyUISubtype = 'node' | 'workflow';
+
 export enum AppStatus {
   NotReady = 'NOT_READY', // 未就绪
   InstalledOffline = 'INSTALLED_OFFLINE', // 已安装·离线
@@ -62,7 +74,7 @@ export interface ExtensionShareGrant {
 export interface DccExtension {
   id: string;
   name: string;
-  dccId: AppId;
+  dccId: ExtensionHostId;
   version: string;
   latestVersion: string;
   desc: string;
@@ -78,6 +90,12 @@ export interface DccExtension {
   needsRestart: boolean;
   isActivated: boolean;
   sharedWith: ExtensionShareGrant[];
+  minimumHostVersion?: string;
+  packagePath?: string;
+  command?: string;
+  webUrl?: string;
+  comfySubtype?: ComfyUISubtype;
+  thumbnailFileName?: string;
   simulateHotLoadFailure?: boolean;
 }
 
@@ -208,8 +226,27 @@ export interface CanvasElement {
   createdAt: string;
 }
 
-export type NotificationNode = 'canvas-share' | 'discussion-invite' | 'discussion-summary' | 'comment-mention';
+export type NotificationNode =
+  | 'canvas-share'
+  | 'discussion-invite'
+  | 'discussion-summary'
+  | 'comment-mention'
+  | 'tool-personal-grant'
+  | 'tool-project-grant';
 export type NotificationDomain = 'canvas' | 'asset' | 'tool';
+
+export interface NotificationDelivery {
+  inApp: 'delivered';
+  dingtalk: 'delivered' | 'failed';
+}
+
+export interface NotificationAction {
+  label: string;
+  tab: 'extensions';
+  spaceId: SpaceId;
+  extensionId?: string;
+  href: string;
+}
 
 export interface AppNotification {
   id: string;
@@ -219,11 +256,21 @@ export interface AppNotification {
   recipient: string;
   title: string;
   content: string;
-  canvasName: string;
+  canvasName?: string;
+  resourceLabel?: string;
+  resourceName?: string;
   actorName: string;
+  delivery: NotificationDelivery;
+  action?: NotificationAction;
   createdAt: string;
   unread: boolean;
 }
+
+export type NotificationInput = Omit<AppNotification, 'id' | 'createdAt' | 'unread' | 'delivery'> & {
+  createdAt?: string;
+  unread?: boolean;
+  delivery?: Partial<NotificationDelivery>;
+};
 
 export interface DownloadTask {
   assetId: string;

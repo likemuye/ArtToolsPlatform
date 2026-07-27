@@ -110,7 +110,8 @@ export default function Sidebar({
   const mainTabs = [
     { id: 'assets', name: '素材', icon: FolderOpen, badge: currentSpace.id === SpaceId.ProjectA ? '100+' : '0' },
     { id: 'extensions', name: '工具', icon: Layers, badge: '22' },
-    { id: 'canvas', name: '画布', icon: Palette },
+    // Canvas is temporarily hidden. Restore this item when the feature is reopened.
+    // { id: 'canvas', name: '画布', icon: Palette },
     { id: 'permissions', name: '权限管理', icon: ShieldCheck },
   ];
 

@@ -11,6 +11,7 @@ import {
   FolderOpen,
   MoreHorizontal,
   Pause,
+  Pencil,
   Play,
   Puzzle,
   RefreshCw,
@@ -18,22 +19,41 @@ import {
   Search,
   Share2,
   SlidersHorizontal,
-  Trash2,
   User,
   Users,
+  UploadCloud,
   WifiOff,
   X
 } from 'lucide-react';
-import { CURRENT_USER_EMAIL, PLATFORM_USERS, PROJECT_SPACES } from '../data';
+import { CURRENT_USER_EMAIL, CURRENT_USER_NAME, INITIAL_PROJECT_MEMBERS, PROJECT_SPACES } from '../data';
 import {
   AppConfig,
   AppId,
   AppStatus,
   DccExtension,
   ExtensionArtStage,
+  ExtensionHostId,
   ExtensionLifecycle,
+  NotificationAction,
+  NotificationInput,
+  PlatformUser,
+  ProjectMember,
   SpaceId
 } from '../types';
+import {
+  applyDraftToExtension,
+  createEmptyExtensionDraft,
+  createExtensionDraft,
+  EXTENSION_STAGE_META,
+  EXTENSION_STAGE_OPTIONS,
+  EXTENSION_TYPE_META,
+  EXTENSION_TYPE_OPTIONS,
+  ExtensionDraft,
+  ExtensionEditor,
+  hasDraftChanges,
+  hasVersionedDraftChanges
+} from './ExtensionEditor';
+import { PlatformUserPicker, PLATFORM_USER_PICKER_MAX_USERS } from './PlatformUserPicker';
 
 interface ExtensionManagerProps {
   apps: AppConfig[];
@@ -44,6 +64,8 @@ interface ExtensionManagerProps {
   onOpenSettings: () => void;
   onDownloadActivityChange: (count: number) => void;
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
+  addNotification: (notification: NotificationInput) => void;
+  navigationTarget: NotificationAction | null;
   theme: 'light' | 'dark';
 }
 
@@ -66,27 +88,12 @@ interface LaunchPrompt {
 }
 
 const DOWNLOAD_STORAGE_KEY = 'pixgo-extension-download-tasks-v03';
+const PROJECT_MEMBERS_STORAGE_KEY = 'art-launcher-project-members-v1';
 const MAX_CONCURRENT_DOWNLOADS = 3;
 
-const DCC_META: Record<AppId, { label: string; short: string; color: string }> = {
-  [AppId.Photoshop]: { label: 'Photoshop', short: 'Ps', color: '#31a8ff' },
-  [AppId.Maya]: { label: 'Maya', short: 'M', color: '#00a6a6' },
-  [AppId.Max3ds]: { label: '3ds Max', short: '3D', color: '#37a5cc' },
-  [AppId.Blender]: { label: 'Blender', short: 'B', color: '#f5792a' },
-  [AppId.Houdini]: { label: 'Houdini', short: 'H', color: '#ff4713' }
-};
-
-const DCC_OPTIONS = [AppId.Photoshop, AppId.Maya, AppId.Max3ds, AppId.Blender, AppId.Houdini];
-
-const STAGE_META: Record<ExtensionArtStage, string> = {
-  character_concept: '角色原画',
-  scene_concept: '场景原画',
-  character_model: '角色模型',
-  scene_model: '场景模型',
-  animation: '动画',
-  vfx: '动效',
-  ued: 'UED'
-};
+const DCC_META = EXTENSION_TYPE_META;
+const DCC_OPTIONS = EXTENSION_TYPE_OPTIONS;
+const STAGE_META = EXTENSION_STAGE_META;
 
 const SPACE_META: Record<SpaceId, { icon: typeof User; color: string }> = {
   [SpaceId.Personal]: { icon: User, color: '#38bdf8' },
@@ -102,15 +109,7 @@ const LIFECYCLE_META: Record<ExtensionLifecycle, { label: string; dot: string; t
 };
 
 const LIFECYCLE_OPTIONS: ExtensionLifecycle[] = ['not_downloaded', 'installed_latest', 'update_available'];
-const STAGE_OPTIONS: ExtensionArtStage[] = [
-  'character_concept',
-  'scene_concept',
-  'character_model',
-  'scene_model',
-  'animation',
-  'vfx',
-  'ued'
-];
+const STAGE_OPTIONS = EXTENSION_STAGE_OPTIONS;
 const STAGE_TABS: Array<{ value: ExtensionArtStage | null; label: string }> = [
   { value: null, label: '全部' },
   ...STAGE_OPTIONS.map(stage => ({ value: stage, label: STAGE_META[stage] }))
@@ -150,6 +149,39 @@ const spaceLabel = (spaceId: SpaceId) => {
   return PROJECT_SPACES.find(space => space.id === spaceId)?.name ?? '项目空间';
 };
 
+const buildExtensionHref = (spaceId: SpaceId, extensionId?: string) => {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('tab', 'extensions');
+  url.searchParams.set('space', spaceId);
+  if (extensionId) url.searchParams.set('tool', extensionId);
+  return url.toString();
+};
+
+const readProjectMembers = (): Record<SpaceId, ProjectMember[]> => {
+  try {
+    const stored = localStorage.getItem(PROJECT_MEMBERS_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as Partial<Record<SpaceId, ProjectMember[]>>;
+      return {
+        [SpaceId.Personal]: [],
+        [SpaceId.Shared]: [],
+        [SpaceId.ProjectA]: Array.isArray(parsed[SpaceId.ProjectA]) ? parsed[SpaceId.ProjectA] : INITIAL_PROJECT_MEMBERS[SpaceId.ProjectA],
+        [SpaceId.ProjectB]: Array.isArray(parsed[SpaceId.ProjectB]) ? parsed[SpaceId.ProjectB] : INITIAL_PROJECT_MEMBERS[SpaceId.ProjectB]
+      };
+    }
+  } catch {
+    // Fall back to the seeded project roles when local permission data is unavailable.
+  }
+  return INITIAL_PROJECT_MEMBERS;
+};
+
+const nextVersion = (version: string) => {
+  const match = version.match(/^(.*?)(\d+)([^\d]*)$/);
+  if (!match) return 'V2';
+  return `${match[1]}${Number(match[2]) + 1}${match[3]}`;
+};
+
 export default function ExtensionManager({
   apps,
   setApps,
@@ -159,11 +191,13 @@ export default function ExtensionManager({
   onOpenSettings,
   onDownloadActivityChange,
   addLog,
+  addNotification,
+  navigationTarget,
   theme
 }: ExtensionManagerProps) {
   const [selectedSpaceId, setSelectedSpaceId] = useState<SpaceId>(SpaceId.ProjectA);
   const [keyword, setKeyword] = useState('');
-  const [selectedDccs, setSelectedDccs] = useState<AppId[]>([]);
+  const [selectedDccs, setSelectedDccs] = useState<ExtensionHostId[]>([]);
   const [selectedStage, setSelectedStage] = useState<ExtensionArtStage | null>(null);
   const [selectedLifecycles, setSelectedLifecycles] = useState<ExtensionLifecycle[]>([]);
   const [selectedExtensionId, setSelectedExtensionId] = useState<string | null>(null);
@@ -173,11 +207,18 @@ export default function ExtensionManager({
   const [showResumePrompt, setShowResumePrompt] = useState(() => readDownloadTasks().length > 0);
   const [cancelTaskId, setCancelTaskId] = useState<string | null>(null);
   const [launchPrompt, setLaunchPrompt] = useState<LaunchPrompt | null>(null);
-  const [uninstallExtension, setUninstallExtension] = useState<DccExtension | null>(null);
   const [deleteExtension, setDeleteExtension] = useState<DccExtension | null>(null);
   const [shareExtension, setShareExtension] = useState<DccExtension | null>(null);
-  const [shareEmail, setShareEmail] = useState('');
+  const [shareUserQuery, setShareUserQuery] = useState('');
+  const [shareSelectedUsers, setShareSelectedUsers] = useState<PlatformUser[]>([]);
   const [shareError, setShareError] = useState('');
+  const [projectMembers] = useState(readProjectMembers);
+  const [editorMode, setEditorMode] = useState<'create' | 'edit' | null>(null);
+  const [editorExtensionId, setEditorExtensionId] = useState<string | null>(null);
+  const [editorDraft, setEditorDraft] = useState<ExtensionDraft>(createEmptyExtensionDraft);
+  const [editorOriginalDraft, setEditorOriginalDraft] = useState<ExtensionDraft | null>(null);
+  const [editorMessage, setEditorMessage] = useState('');
+  const [pendingVersionPublish, setPendingVersionPublish] = useState<{ extensionId: string; draft: ExtensionDraft; currentVersion: string; nextVersion: string } | null>(null);
   const completedTaskIds = useRef<Set<string>>(new Set());
   const previousSpaceId = useRef<SpaceId>(SpaceId.ProjectA);
   const isLight = theme === 'light';
@@ -207,6 +248,10 @@ export default function ExtensionManager({
   const selectedExtension = selectedExtensionId
     ? extensions.find(extension => extension.id === selectedExtensionId) ?? null
     : null;
+  const shareExistingEmails = useMemo(
+    () => new Set(shareExtension?.sharedWith.map(grant => grant.email.toLowerCase()) ?? []),
+    [shareExtension]
+  );
 
   useEffect(() => {
     const handleOnline = () => {
@@ -290,6 +335,16 @@ export default function ExtensionManager({
   }, [selectedSpaceId, addLog]);
 
   useEffect(() => {
+    if (!navigationTarget) return;
+    setSelectedSpaceId(navigationTarget.spaceId);
+    setKeyword('');
+    setSelectedDccs([]);
+    setSelectedStage(null);
+    setSelectedLifecycles([]);
+    setSelectedExtensionId(navigationTarget.extensionId ?? null);
+  }, [navigationTarget]);
+
+  useEffect(() => {
     if (!selectedExtension) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setSelectedExtensionId(null);
@@ -351,6 +406,20 @@ export default function ExtensionManager({
   };
 
   const launchExtension = (extension: DccExtension) => {
+    if (extension.dccId === 'web') {
+      if (!extension.webUrl) {
+        addLog(`「${extension.name}」未配置 Web 访问地址。`, 'error');
+        return;
+      }
+      window.open(extension.webUrl, '_blank', 'noopener,noreferrer');
+      addLog(`已使用系统默认浏览器打开「${extension.name}」。`, 'success');
+      return;
+    }
+    if (extension.dccId === 'exe') {
+      setExtensions(previous => previous.map(item => item.id === extension.id ? { ...item, isActivated: true } : item));
+      addLog(`已按指令启动「${extension.name}」${extension.command ? `：${extension.command}` : '。'}`, 'success');
+      return;
+    }
     const app = apps.find(item => item.id === extension.dccId);
     if (!app || app.status === AppStatus.NotReady || !app.installPath) {
       setLaunchPrompt({ extension, type: 'missing' });
@@ -399,18 +468,6 @@ export default function ExtensionManager({
     startTask(extension, 'update');
   };
 
-  const confirmUninstall = () => {
-    if (!uninstallExtension) return;
-    const extension = uninstallExtension;
-    setExtensions(previous => previous.map(item => item.id === extension.id ? {
-      ...item,
-      lifecycle: 'not_downloaded',
-      isActivated: false
-    } : item));
-    setUninstallExtension(null);
-    addLog(`已卸载「${extension.name}」，如 DCC 正在运行，重启后将完全移除。`, 'success');
-  };
-
   const confirmDelete = () => {
     if (!deleteExtension) return;
     const extension = deleteExtension;
@@ -422,31 +479,51 @@ export default function ExtensionManager({
 
   const submitShare = () => {
     if (!shareExtension || !isOnline) return;
-    const email = shareEmail.trim().toLowerCase();
-    const user = PLATFORM_USERS.find(item => item.email.toLowerCase() === email);
-    if (!user) {
-      setShareError('用户不存在，请检查账号是否正确');
+    if (shareSelectedUsers.length === 0) {
+      setShareError(shareUserQuery.trim() ? '请从搜索结果中选择要授权的用户。' : '请至少添加 1 位协作者（支持姓名/邮箱模糊匹配）。');
       return;
     }
-    if (email === CURRENT_USER_EMAIL) {
-      setShareError('作者已拥有完整权限，无需授权');
+    if (shareSelectedUsers.length > PLATFORM_USER_PICKER_MAX_USERS) {
+      setShareError(`单次最多同时添加 ${PLATFORM_USER_PICKER_MAX_USERS} 人。`);
       return;
     }
-    if (shareExtension.sharedWith.some(grant => grant.email.toLowerCase() === email)) {
-      setShareError('该用户已有权限，无需重复授权');
+    const freshUsers = shareSelectedUsers.filter(user => !shareExistingEmails.has(user.email.toLowerCase()));
+    if (freshUsers.length === 0) {
+      setShareError('所选协作者均已拥有该工具权限，请勿重复授权。');
       return;
     }
+    const sharedAt = new Date().toISOString();
+    const grants = freshUsers.map(user => ({ email: user.email, name: user.name, sharedAt }));
     setExtensions(previous => previous.map(item => item.id === shareExtension.id ? {
       ...item,
-      sharedWith: [...item.sharedWith, { email: user.email, name: user.name, sharedAt: new Date().toISOString() }]
+      sharedWith: [...item.sharedWith, ...grants]
     } : item));
-    setShareExtension(previous => previous ? {
-      ...previous,
-      sharedWith: [...previous.sharedWith, { email: user.email, name: user.name, sharedAt: new Date().toISOString() }]
-    } : previous);
-    setShareEmail('');
+    setShareUserQuery('');
+    setShareSelectedUsers([]);
     setShareError('');
-    addLog(`已将「${shareExtension.name}」以使用者权限分享给 ${user.name}。`, 'success');
+    freshUsers.forEach(user => {
+      addNotification({
+        domain: 'tool',
+        node: 'tool-personal-grant',
+        trigger: '个人空间工具授权完成',
+        recipient: `${user.name}（${user.email}）`,
+        title: '获得新工具使用权限',
+        content: `${CURRENT_USER_NAME} 已将工具「${shareExtension.name}」授权给您，点击可前往“与我共享”查看。`,
+        resourceLabel: '工具',
+        resourceName: shareExtension.name,
+        actorName: CURRENT_USER_NAME,
+        action: {
+          label: '查看工具',
+          tab: 'extensions',
+          spaceId: SpaceId.Shared,
+          extensionId: shareExtension.id,
+          href: buildExtensionHref(SpaceId.Shared, shareExtension.id)
+        }
+      });
+    });
+    addLog(`已将「${shareExtension.name}」授权给 ${freshUsers.length} 位用户；站内通知已逐人生成，钉钉机器人已逐人推送。`, 'success', { toast: false });
+    setShareExtension(null);
+    addLog('分享成功！', 'success');
   };
 
   const removeShare = (extension: DccExtension, email: string) => {
@@ -459,7 +536,7 @@ export default function ExtensionManager({
   };
 
   const copyToolLink = async (extension: DccExtension) => {
-    const url = `${window.location.origin}${window.location.pathname}?tool=${extension.id}`;
+    const url = buildExtensionHref(SpaceId.Shared, extension.id);
     try {
       await navigator.clipboard.writeText(url);
       addLog('工具链接已复制；访问者仍需已有授权。', 'success');
@@ -494,6 +571,115 @@ export default function ExtensionManager({
       return extensions.filter(item => item.spaceId === SpaceId.Personal && item.ownerEmail === CURRENT_USER_EMAIL).length;
     }
     return extensions.filter(item => item.spaceId === spaceId).length;
+  };
+
+  const isProjectAdmin = (spaceId: SpaceId) => (
+    (spaceId === SpaceId.ProjectA || spaceId === SpaceId.ProjectB)
+    && projectMembers[spaceId].some(member => member.email === CURRENT_USER_EMAIL && member.role === 'admin')
+  );
+
+  const canCreateExtension = selectedSpaceId === SpaceId.Personal || isProjectAdmin(selectedSpaceId);
+
+  const canModifyExtension = (extension: DccExtension) => {
+    if (selectedSpaceId === SpaceId.Shared) return false;
+    if (selectedSpaceId === SpaceId.Personal) return extension.ownerEmail === CURRENT_USER_EMAIL;
+    return extension.ownerEmail === CURRENT_USER_EMAIL || isProjectAdmin(selectedSpaceId);
+  };
+
+  const closeEditor = () => {
+    setEditorMode(null);
+    setEditorExtensionId(null);
+    setEditorOriginalDraft(null);
+    setEditorMessage('');
+  };
+
+  const openCreateEditor = () => {
+    if (!canCreateExtension) return;
+    setEditorDraft(createEmptyExtensionDraft());
+    setEditorOriginalDraft(null);
+    setEditorExtensionId(null);
+    setEditorMessage('');
+    setEditorMode('create');
+  };
+
+  const openEditEditor = (extension: DccExtension) => {
+    if (!canModifyExtension(extension)) return;
+    const draft = createExtensionDraft(extension);
+    setEditorDraft(draft);
+    setEditorOriginalDraft(draft);
+    setEditorExtensionId(extension.id);
+    setEditorMessage('');
+    setEditorMode('edit');
+  };
+
+  const submitEditor = () => {
+    if (editorMode === 'create') {
+      if (!canCreateExtension || selectedSpaceId === SpaceId.Shared) return;
+      const createdAt = new Date().toISOString();
+      const base: DccExtension = {
+        id: `ext-created-${Date.now()}`,
+        name: editorDraft.name.trim(),
+        dccId: editorDraft.type,
+        version: 'V1',
+        latestVersion: 'V1',
+        desc: editorDraft.desc.trim(),
+        author: CURRENT_USER_NAME,
+        ownerEmail: CURRENT_USER_EMAIL,
+        spaceId: selectedSpaceId,
+        stage: editorDraft.stage,
+        lifecycle: 'not_downloaded',
+        fileSizeMB: editorDraft.type === 'web' ? 0 : 64,
+        thumbnail: editorDraft.thumbnail,
+        previewUrl: editorDraft.thumbnail,
+        updatedAt: createdAt,
+        needsRestart: editorDraft.type !== 'exe' && editorDraft.type !== 'web',
+        isActivated: false,
+        sharedWith: []
+      };
+      const created = applyDraftToExtension(base, editorDraft);
+      setExtensions(previous => [created, ...previous]);
+      clearFilters();
+      closeEditor();
+      addLog(`已创建工具拓展「${created.name}」，当前版本 V1，状态为未下载。`, 'success');
+      return;
+    }
+
+    if (editorMode !== 'edit' || !editorExtensionId || !editorOriginalDraft) return;
+    const extension = extensions.find(item => item.id === editorExtensionId);
+    if (!extension || !canModifyExtension(extension)) return;
+    if (!hasDraftChanges(editorOriginalDraft, editorDraft)) {
+      setEditorMessage('未检测到修改');
+      return;
+    }
+    if (hasVersionedDraftChanges(editorOriginalDraft, editorDraft)) {
+      const currentVersion = extension.latestVersion || extension.version;
+      setPendingVersionPublish({
+        extensionId: extension.id,
+        draft: editorDraft,
+        currentVersion,
+        nextVersion: nextVersion(currentVersion)
+      });
+      return;
+    }
+    setExtensions(previous => previous.map(item => item.id === extension.id ? applyDraftToExtension(item, editorDraft) : item));
+    closeEditor();
+    addLog(`已保存「${editorDraft.name.trim()}」的展示信息，版本号保持 ${extension.latestVersion}。`, 'success');
+  };
+
+  const confirmVersionPublish = () => {
+    if (!pendingVersionPublish) return;
+    const publish = pendingVersionPublish;
+    setExtensions(previous => previous.map(item => {
+      if (item.id !== publish.extensionId) return item;
+      const updated = applyDraftToExtension(item, publish.draft);
+      if (item.lifecycle === 'not_downloaded') {
+        return { ...updated, version: publish.nextVersion, latestVersion: publish.nextVersion };
+      }
+      return { ...updated, latestVersion: publish.nextVersion, lifecycle: 'update_available', isActivated: false };
+    }));
+    setPendingVersionPublish(null);
+    closeEditor();
+    addLog(`「${publish.draft.name.trim()}」已发布 ${publish.nextVersion}，旧版本使用者将看到更新提示。`, 'success');
   };
 
   const renderTask = (extension: DccExtension, compact = false) => {
@@ -565,7 +751,6 @@ export default function ExtensionManager({
 
   const renderLifecycleActions = (extension: DccExtension, detail = false) => {
     const task = getTask(extension.id);
-    const isShared = selectedSpaceId === SpaceId.Shared;
     const canManagePersonal = selectedSpaceId === SpaceId.Personal && extension.ownerEmail === CURRENT_USER_EMAIL;
     if (task) return renderTask(extension, !detail);
     return (
@@ -585,14 +770,14 @@ export default function ExtensionManager({
             <RefreshCw size={13} /> 更新至 {extension.latestVersion}
           </button>
         )}
-        {!isShared && extension.lifecycle !== 'not_downloaded' && (
-          <button type="button" title="卸载" onClick={(event) => { event.stopPropagation(); setUninstallExtension(extension); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600' : 'border-zinc-700 text-zinc-400 hover:border-red-500/50 hover:text-red-400'}`}>
-            <Trash2 size={13} />
+        {canModifyExtension(extension) && (
+          <button type="button" title="修改工具" onClick={(event) => { event.stopPropagation(); openEditEditor(extension); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700' : 'border-zinc-700 text-zinc-400 hover:border-[#00ff00]/50 hover:text-[#00ff00]'}`}>
+            <Pencil size={13} />
           </button>
         )}
         {canManagePersonal && (
           <>
-            <button type="button" title="分享授权" onClick={(event) => { event.stopPropagation(); setShareExtension(extension); setShareEmail(''); setShareError(''); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600' : 'border-zinc-700 text-zinc-400 hover:border-sky-500/50 hover:text-sky-400'}`}>
+            <button type="button" title="分享授权" onClick={(event) => { event.stopPropagation(); setShareExtension(extension); setShareUserQuery(''); setShareSelectedUsers([]); setShareError(''); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600' : 'border-zinc-700 text-zinc-400 hover:border-sky-500/50 hover:text-sky-400'}`}>
               <Share2 size={13} />
             </button>
             <button type="button" title="删除云端工具" onClick={(event) => { event.stopPropagation(); setDeleteExtension(extension); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600' : 'border-zinc-700 text-zinc-400 hover:border-red-500/50 hover:text-red-400'}`}>
@@ -651,8 +836,9 @@ export default function ExtensionManager({
                 工具拓展
               </h1>
             </div>
-            <div className="flex items-center gap-2 md:hidden">
-              <select value={selectedSpaceId} onChange={event => setSelectedSpaceId(event.target.value as SpaceId)} className={`h-8 max-w-[190px] rounded border px-2 text-[11px] outline-none ${isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-zinc-800 bg-[#0c0c0e] text-zinc-300'}`}>
+            <div className="flex items-center gap-2">
+              {canCreateExtension && <button type="button" onClick={openCreateEditor} className="inline-flex h-8 items-center gap-1.5 rounded border border-[#0d121e] bg-[#0d121e] px-3 text-[11px] font-bold text-[#ffffff] transition-colors hover:border-[#1e293b] hover:bg-[#1e293b]"><UploadCloud size={13} />上传工具</button>}
+              <select value={selectedSpaceId} onChange={event => setSelectedSpaceId(event.target.value as SpaceId)} className={`hidden h-8 max-w-[190px] rounded border px-2 text-[11px] outline-none max-md:block ${isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-zinc-800 bg-[#0c0c0e] text-zinc-300'}`}>
                 {[SpaceId.Personal, SpaceId.Shared, SpaceId.ProjectA, SpaceId.ProjectB].map(spaceId => <option key={spaceId} value={spaceId}>{spaceLabel(spaceId)} ({getSpaceCount(spaceId)})</option>)}
               </select>
             </div>
@@ -663,7 +849,7 @@ export default function ExtensionManager({
               <div
                 role="tablist"
                 aria-label="美术环节"
-                className={`flex h-9 max-w-full shrink-0 items-center gap-1 overflow-x-auto rounded border p-1 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-zinc-800 bg-black'}`}
+                className={`flex h-9 max-w-full shrink-0 items-center gap-1 overflow-x-auto rounded border px-1 py-0.5 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-zinc-800 bg-black'}`}
               >
                 {STAGE_TABS.map(tab => {
                   const active = selectedStage === tab.value;
@@ -675,7 +861,7 @@ export default function ExtensionManager({
                       aria-selected={active}
                       onClick={() => setSelectedStage(tab.value)}
                       className={`h-7 shrink-0 rounded px-2.5 text-[10px] font-medium transition-colors ${active
-                        ? (isLight ? 'bg-slate-950 text-white' : 'bg-[#00ff00] text-black')
+                        ? (isLight ? 'force-text-white bg-slate-950' : 'bg-white text-black')
                         : (isLight ? 'text-slate-600 hover:bg-white hover:text-slate-950' : 'text-zinc-400 hover:bg-zinc-900 hover:text-white')
                       }`}
                     >
@@ -685,7 +871,7 @@ export default function ExtensionManager({
                 })}
               </div>
               <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-2 xl:w-auto">
-                <FilterMenu label="DCC 类型" activeCount={selectedDccs.length} isLight={isLight}>
+                <FilterMenu label="拓展类型" activeCount={selectedDccs.length} isLight={isLight}>
                   {DCC_OPTIONS.map(dccId => <FilterCheck key={dccId} checked={selectedDccs.includes(dccId)} label={DCC_META[dccId].label} onChange={() => toggleValue(dccId, selectedDccs, setSelectedDccs)} />)}
                 </FilterMenu>
                 <FilterMenu label="状态" activeCount={selectedLifecycles.length} isLight={isLight}>
@@ -710,7 +896,7 @@ export default function ExtensionManager({
           </section>
 
           {extensionsForSpace.length === 0 ? (
-            <EmptyState icon={selectedSpaceId === SpaceId.Shared ? Users : Puzzle} title={selectedSpaceId === SpaceId.Shared ? '暂未收到共享工具' : selectedSpaceId === SpaceId.Personal ? '个人空间暂无工具' : '当前空间暂无内容'} description={selectedSpaceId === SpaceId.Personal ? 'V1 暂不开放上传入口；当前账号没有更多个人工具。' : '切换其他空间查看可用工具。'} isLight={isLight} />
+            <EmptyState icon={selectedSpaceId === SpaceId.Shared ? Users : Puzzle} title={selectedSpaceId === SpaceId.Shared ? '暂未收到共享工具' : selectedSpaceId === SpaceId.Personal ? '个人空间暂无工具' : '当前空间暂无内容'} description={selectedSpaceId === SpaceId.Shared ? '该空间仅承载他人分享的拓展，不支持创建。' : canCreateExtension ? '点击“新建”创建当前空间的第一个工具拓展。' : '当前账号没有该项目空间的创建权限。'} isLight={isLight} />
           ) : filteredExtensions.length === 0 ? (
             <EmptyState icon={Search} title="未找到匹配拓展" description="调整关键词或移除部分筛选条件后重试。" isLight={isLight} action={<button type="button" onClick={clearFilters} className="mt-4 rounded border border-zinc-700 px-3 py-1.5 text-[11px] text-zinc-400 hover:text-white">清除筛选</button>} />
           ) : (
@@ -718,33 +904,60 @@ export default function ExtensionManager({
               {filteredExtensions.map(extension => {
                 const lifecycle = LIFECYCLE_META[extension.lifecycle];
                 const dcc = DCC_META[extension.dccId];
-                const failed = failedImages.has(extension.id);
                 return (
-                  <article key={extension.id} tabIndex={0} onClick={() => setSelectedExtensionId(extension.id)} onKeyDown={event => { if (event.key === 'Enter') setSelectedExtensionId(extension.id); }} className={`group min-w-0 cursor-pointer overflow-hidden rounded border transition-colors focus:outline-none ${isLight ? 'border-slate-200 bg-white hover:border-slate-400 focus:border-emerald-500' : 'border-[#27272a] bg-[#0c0c0e] hover:border-zinc-600 focus:border-[#00ff00]'}`}>
-                    <div className="relative aspect-[16/8] overflow-hidden bg-zinc-900">
-                      {!failed ? <img src={extension.thumbnail} alt="" onError={() => setFailedImages(previous => new Set(previous).add(extension.id))} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" /> : <div className="flex h-full items-center justify-center bg-zinc-900"><div className="flex h-12 w-12 items-center justify-center rounded border text-lg font-bold" style={{ borderColor: `${dcc.color}66`, color: dcc.color }}>{dcc.short}</div></div>}
-                      <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/90 to-transparent" />
-                      <div className={`absolute left-3 top-3 flex items-center gap-1.5 rounded border px-2 py-1 text-[9px] font-mono backdrop-blur-sm ${isLight ? 'border-white/80 bg-white/90 text-slate-700 shadow-sm' : 'border-white/10 bg-black/75 text-white'}`}>
-                        <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: dcc.color }} /> {dcc.label}
+                  <article key={extension.id} tabIndex={0} onClick={() => setSelectedExtensionId(extension.id)} onKeyDown={event => { if (event.key === 'Enter') setSelectedExtensionId(extension.id); }} className={`group min-w-0 cursor-pointer overflow-hidden rounded border transition-colors focus:outline-none ${isLight ? 'border-slate-200 bg-white hover:border-emerald-300 focus:border-emerald-500' : 'border-[#27272a] bg-[#0c0c0e] hover:border-zinc-600 focus:border-[#00ff00]'}`}>
+                    <div className="flex min-h-[112px] items-start gap-3.5 p-3.5">
+                      <div
+                        className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded border"
+                        style={{ backgroundColor: `${dcc.color}12`, borderColor: `${dcc.color}4d` }}
+                      >
+                        <span className="font-display text-xl font-bold leading-none" style={{ color: dcc.color }}>{dcc.short}</span>
+                        {dcc.logoSrc && (
+                          <img
+                            src={dcc.logoSrc}
+                            alt={`${dcc.label} logo`}
+                            className="absolute inset-0 h-full w-full object-contain p-3.5"
+                            onError={event => { event.currentTarget.style.display = 'none'; }}
+                          />
+                        )}
                       </div>
-                      <span className={`absolute bottom-2.5 left-3 rounded border px-2 py-1 text-[9px] backdrop-blur-sm ${isLight ? 'border-white/80 bg-white/90 text-slate-700 shadow-sm' : 'border-white/10 bg-black/75 text-zinc-300'}`}>{STAGE_META[extension.stage]}</span>
-                      {selectedSpaceId === SpaceId.Personal && extension.sharedWith.length > 0 && <span className={`absolute bottom-2.5 right-3 rounded border px-2 py-1 text-[9px] font-semibold backdrop-blur-sm ${isLight ? 'border-violet-200 bg-violet-50/95 text-violet-700' : 'border-violet-300/30 bg-violet-500/80 text-white'}`}>已共享 {extension.sharedWith.length} 人</span>}
-                    </div>
-                    <div className="p-3.5">
-                      <div className="flex min-w-0 items-start justify-between gap-3">
-                        <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-start justify-between gap-2">
                           <h3 className={`truncate text-[13px] font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-100'}`}>{extension.name}</h3>
-                          <p className="mt-1 line-clamp-2 min-h-8 text-[10.5px] leading-4 text-zinc-500">{extension.desc}</p>
+                          {selectedSpaceId === SpaceId.Personal && extension.sharedWith.length > 0 && (
+                            <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[8.5px] font-semibold ${isLight ? 'border-violet-200 bg-violet-50 text-violet-700' : 'border-violet-400/30 bg-violet-500/10 text-violet-300'}`}>共享 {extension.sharedWith.length}</span>
+                          )}
                         </div>
-                        <span className="shrink-0 rounded border border-zinc-800 px-1.5 py-0.5 text-[9px] font-mono text-zinc-500">{extension.version}</span>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[9px]">
+                          <span className={`inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono ${isLight ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-zinc-800 bg-black/30 text-zinc-300'}`}>
+                            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: dcc.color }} />
+                            {dcc.label}
+                          </span>
+                          <span className={`rounded border px-1.5 py-0.5 ${isLight ? 'border-slate-200 text-slate-500' : 'border-zinc-800 text-zinc-500'}`}>{STAGE_META[extension.stage]}</span>
+                        </div>
+                        <p className="mt-2 line-clamp-2 min-h-8 text-[10.5px] leading-4 text-zinc-500">{extension.desc}</p>
                       </div>
-                      {getTask(extension.id) ? renderTask(extension, true) : (
-                        <div className={`mt-3 flex h-[45px] items-center justify-between gap-2 border-t ${isLight ? 'border-slate-200' : 'border-zinc-800/70'}`}>
-                          <span className={`flex min-w-0 items-center gap-1.5 text-[10px] font-mono ${lifecycle.text}`}><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${lifecycle.dot}`} />{lifecycle.label}</span>
-                          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100">{renderLifecycleActions(extension)}</div>
-                        </div>
-                      )}
                     </div>
+                    {getTask(extension.id) ? <div className="px-3.5">{renderTask(extension, true)}</div> : (
+                      <div className={`flex min-h-[58px] items-center justify-between gap-3 border-t px-3.5 py-2.5 ${isLight ? 'border-slate-200 bg-slate-50/60' : 'border-zinc-800/70 bg-black/10'}`}>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1 text-[9px] font-mono">
+                            <span className={isLight ? 'text-slate-500' : 'text-zinc-500'}>{extension.version}</span>
+                            {extension.lifecycle === 'update_available' && (
+                              <>
+                                <ChevronRight size={10} className="text-amber-500" />
+                                <span className={isLight ? 'font-semibold text-amber-700' : 'font-semibold text-amber-400'}>{extension.latestVersion}</span>
+                              </>
+                            )}
+                          </div>
+                          <span className={`mt-1 flex min-w-0 items-center gap-1.5 text-[9.5px] ${lifecycle.text}`}>
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${lifecycle.dot}`} />
+                            {lifecycle.label}
+                          </span>
+                        </div>
+                        <div className="flex shrink-0 items-center">{renderLifecycleActions(extension)}</div>
+                      </div>
+                    )}
                   </article>
                 );
               })}
@@ -757,6 +970,9 @@ export default function ExtensionManager({
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setSelectedExtensionId(null); }}>
           <button type="button" title="上一个工具" onClick={() => navigateDetail(-1)} className="absolute left-4 top-1/2 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-zinc-700 bg-black/70 text-zinc-300 hover:border-zinc-500 hover:text-white md:flex"><ChevronLeft size={20} /></button>
           <div className={`relative max-h-[88vh] w-full max-w-4xl overflow-y-auto rounded border ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
+            <span title={selectedExtension.id} className={`absolute right-14 top-3 z-10 flex h-8 max-w-[240px] items-center truncate rounded border px-2.5 font-mono text-[9px] ${isLight ? 'border-slate-200 bg-white/90 text-slate-500' : 'border-zinc-700 bg-black/70 text-zinc-500'}`}>
+              工具 ID: {selectedExtension.id}
+            </span>
             <button type="button" title="关闭" onClick={() => setSelectedExtensionId(null)} className={`absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-200 bg-white/90 text-slate-500 hover:text-slate-900' : 'border-zinc-700 bg-black/70 text-zinc-400 hover:text-white'}`}><X size={16} /></button>
             <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-5 p-5 pr-14 max-md:grid-cols-1 max-md:pr-5">
               <div className={`aspect-video overflow-hidden rounded border ${isLight ? 'border-slate-200 bg-slate-100' : 'border-zinc-800 bg-black'}`}>
@@ -791,9 +1007,32 @@ export default function ExtensionManager({
         </div>
       )}
 
+      {editorMode && (
+        <ExtensionEditor
+          mode={editorMode}
+          draft={editorDraft}
+          onChange={draft => { setEditorDraft(draft); setEditorMessage(''); }}
+          onCancel={closeEditor}
+          onSubmit={submitEditor}
+          isLight={isLight}
+          currentVersion={editorExtensionId ? extensions.find(item => item.id === editorExtensionId)?.latestVersion : undefined}
+          message={editorMessage}
+        />
+      )}
+
+      {pendingVersionPublish && (
+        <ConfirmDialog
+          title="确认发布新版本？"
+          description={`版本号将从 ${pendingVersionPublish.currentVersion} 修改为 ${pendingVersionPublish.nextVersion}。发布后，已下载旧版本的使用者会看到“有新版本”状态。`}
+          confirmLabel={`发布 ${pendingVersionPublish.nextVersion}`}
+          icon={RefreshCw}
+          onCancel={() => setPendingVersionPublish(null)}
+          onConfirm={confirmVersionPublish}
+        />
+      )}
+
       {showResumePrompt && tasks.length > 0 && <ConfirmDialog title="检测到未完成的下载" description={`已恢复 ${tasks.length} 个工具下载断点，是否继续下载？`} confirmLabel="继续下载" icon={RotateCcw} onCancel={() => { setTasks([]); setShowResumePrompt(false); }} onConfirm={() => { setTasks(previous => previous.map(task => ({ ...task, status: isOnline ? 'queued' : 'waiting_network' }))); setShowResumePrompt(false); }} />}
       {cancelTaskId && <ConfirmDialog title="取消下载任务？" description="取消后会删除当前临时文件，工具状态将恢复为未下载。" confirmLabel="取消下载" danger onCancel={() => setCancelTaskId(null)} onConfirm={confirmCancelTask} />}
-      {uninstallExtension && <ConfirmDialog title={`卸载「${uninstallExtension.name}」？`} description={`${apps.find(app => app.id === uninstallExtension.dccId)?.status === AppStatus.Connected ? `${DCC_META[uninstallExtension.dccId].label} 正在运行，卸载后需重启软件才能完全移除。` : ''} 卸载后需重新下载才能使用。`} confirmLabel="确认卸载" danger onCancel={() => setUninstallExtension(null)} onConfirm={confirmUninstall} />}
       {deleteExtension && <ConfirmDialog title={`删除「${deleteExtension.name}」？`} description={`此操作不可恢复。${deleteExtension.sharedWith.length > 0 ? `该工具已分享给 ${deleteExtension.sharedWith.length} 位用户，删除后他们也将无法访问。` : ''} 已下载到本地的版本不受影响。`} confirmLabel="确认删除" danger onCancel={() => setDeleteExtension(null)} onConfirm={confirmDelete} />}
 
       {launchPrompt && (
@@ -813,31 +1052,55 @@ export default function ExtensionManager({
 
       {shareExtension && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setShareExtension(null); }}>
-          <div className={`w-full max-w-lg rounded border p-5 ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
-            <div className="flex items-start justify-between gap-3">
-              <div><h3 className={`text-base font-bold ${isLight ? 'text-slate-950' : 'text-white'}`}>分享授权</h3><p className="mt-1 text-[11px] text-zinc-500">{shareExtension.name} · 权限固定为“使用者”</p></div>
-              <button type="button" title="关闭" onClick={() => setShareExtension(null)} className="text-zinc-500 hover:text-zinc-200"><X size={16} /></button>
+          <div role="dialog" aria-modal="true" aria-label="分享授权" className={`w-full max-w-lg overflow-hidden rounded-lg border shadow-2xl ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
+            <div className={`flex items-start justify-between gap-3 border-b px-5 py-4 ${isLight ? 'border-slate-100' : 'border-[#1c1c1f]'}`}>
+              <div><h3 className={`text-base font-bold ${isLight ? 'text-slate-950' : 'text-white'}`}>分享授权</h3><p className="mt-1 text-[11px] text-zinc-500">{shareExtension.name}</p></div>
+              <button type="button" title="关闭" onClick={() => setShareExtension(null)} className={isLight ? 'text-slate-400 hover:text-slate-700' : 'text-zinc-500 hover:text-white'}><X size={16} /></button>
             </div>
-            <div className="mt-5">
-              <label className="mb-1.5 block text-[10px] text-zinc-500">被授权账号</label>
-              <div className="flex gap-2">
-                <input list="platform-user-emails" value={shareEmail} onChange={event => { setShareEmail(event.target.value); setShareError(''); }} placeholder="输入平台用户邮箱" className={`h-9 min-w-0 flex-1 rounded border px-3 text-xs outline-none ${isLight ? 'border-slate-200 bg-slate-50 text-slate-900 focus:border-emerald-500' : 'border-zinc-800 bg-black text-zinc-200 focus:border-[#00ff00]'}`} />
-                <datalist id="platform-user-emails">{PLATFORM_USERS.filter(user => !user.isFormer).map(user => <option key={user.email} value={user.email}>{user.name}</option>)}</datalist>
-                <button type="button" disabled={!shareEmail.trim() || !isOnline} onClick={submitShare} className="h-9 rounded bg-[#00ff00] px-4 text-[11px] font-bold text-black disabled:cursor-not-allowed disabled:opacity-40">授权</button>
+            <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-4">
+              <PlatformUserPicker
+                query={shareUserQuery}
+                selectedUsers={shareSelectedUsers}
+                existingEmails={shareExistingEmails}
+                onQueryChange={value => { setShareUserQuery(value); setShareError(''); }}
+                onSelect={user => {
+                  if (shareSelectedUsers.length >= PLATFORM_USER_PICKER_MAX_USERS) {
+                    setShareError(`单次最多同时添加 ${PLATFORM_USER_PICKER_MAX_USERS} 人，当前已达上限。`);
+                    return;
+                  }
+                  setShareSelectedUsers(previous => previous.some(item => item.id === user.id) ? previous : [...previous, user]);
+                  setShareUserQuery('');
+                  setShareError('');
+                }}
+                onRemove={user => { setShareSelectedUsers(previous => previous.filter(item => item.id !== user.id)); setShareError(''); }}
+                isLight={isLight}
+              />
+              <div>
+                <label className={`mb-1.5 block text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>授权类型</label>
+                <div className={`rounded-lg border px-3 py-2.5 text-xs ${isLight ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-[#27272a] bg-[#121214] text-zinc-200'}`}>使用者</div>
               </div>
               {!isOnline && <p className="mt-2 flex items-center gap-1 text-[10px] text-red-400"><WifiOff size={11} /> 网络未连接，不可分享</p>}
-              {shareError && <p className="mt-2 text-[10px] text-red-400">{shareError}</p>}
-            </div>
-            <div className={`mt-5 border-t pt-4 ${isLight ? 'border-slate-200' : 'border-zinc-800'}`}>
-              <div className="mb-2 flex items-center justify-between"><span className="text-[10px] text-zinc-500">已授权 {shareExtension.sharedWith.length} 人</span><button type="button" onClick={() => copyToolLink(shareExtension)} className="flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300"><ExternalLink size={11} /> 复制工具链接</button></div>
-              <div className="max-h-44 space-y-1.5 overflow-y-auto">
-                {shareExtension.sharedWith.length === 0 ? <p className="rounded border border-dashed border-zinc-800 p-4 text-center text-[10px] text-zinc-600">尚未授权其他用户</p> : shareExtension.sharedWith.map(grant => (
-                  <div key={grant.email} className={`flex items-center justify-between rounded border px-3 py-2 ${isLight ? 'border-slate-200' : 'border-zinc-800 bg-black/20'}`}>
-                    <div className="min-w-0"><p className={`truncate text-[11px] font-medium ${isLight ? 'text-slate-800' : 'text-zinc-300'}`}>{grant.name}</p><p className="truncate text-[9px] font-mono text-zinc-500">{grant.email}</p></div>
-                    <button type="button" onClick={() => removeShare(shareExtension, grant.email)} className="shrink-0 text-[10px] text-zinc-500 hover:text-red-400">移除</button>
-                  </div>
-                ))}
+              {shareError && <div className={`rounded-lg border px-3 py-2 text-[11px] ${isLight ? 'border-red-200 bg-red-50 text-red-700' : 'border-red-500/50 bg-red-950/40 text-red-300'}`}>{shareError}</div>}
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label className={`text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>已拥有权限</label>
+                  <button type="button" onClick={() => copyToolLink(shareExtension)} className={`flex items-center gap-1 text-[10px] ${isLight ? 'text-sky-600 hover:text-sky-700' : 'text-sky-400 hover:text-sky-300'}`}><ExternalLink size={11} /> 复制工具链接</button>
+                </div>
+                <div className={`space-y-1 rounded-lg border p-1.5 ${isLight ? 'border-slate-200 bg-slate-50/70' : 'border-[#1c1c1f] bg-[#121214]/40'}`}>
+                  {shareExtension.sharedWith.length === 0 ? <p className={`px-2 py-3 text-center text-[11px] ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>暂无其他权限用户</p> : shareExtension.sharedWith.map(grant => (
+                    <div key={grant.email} className="flex items-center gap-2 rounded px-2 py-1.5">
+                      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${isLight ? 'bg-violet-50 text-violet-700' : 'bg-violet-500/20 text-violet-200'}`}>{grant.name.slice(0, 2)}</span>
+                      <span className="min-w-0 flex-1"><span className={`block truncate text-xs ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>{grant.name}</span><span className={`block truncate font-mono text-[10px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>{grant.email}</span></span>
+                      <span className={`rounded border px-2 py-0.5 text-[10px] ${isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-zinc-700 bg-black text-zinc-400'}`}>使用者</span>
+                      <button type="button" onClick={() => removeShare(shareExtension, grant.email)} className={`rounded border px-2 py-0.5 text-[10px] transition-colors ${isLight ? 'border-slate-200 text-slate-500 hover:border-red-200 hover:text-red-600' : 'border-zinc-800 text-zinc-400 hover:border-red-500/60 hover:text-red-400'}`}>移除</button>
+                    </div>
+                  ))}
+                </div>
               </div>
+            </div>
+            <div className={`flex items-center justify-end gap-2 border-t px-5 py-4 ${isLight ? 'border-slate-100' : 'border-[#1c1c1f]'}`}>
+              <button type="button" onClick={() => setShareExtension(null)} className={`rounded-lg border px-4 py-2 text-xs transition-colors ${isLight ? 'border-slate-200 bg-white text-slate-600 hover:text-slate-900' : 'border-zinc-800 bg-black text-zinc-300 hover:border-zinc-700 hover:text-white'}`}>取消</button>
+              <button type="button" disabled={!isOnline} onClick={submitShare} className="rounded-lg bg-[#00ff00] px-5 py-2 text-xs font-semibold text-black transition-colors hover:bg-[#00dd00] disabled:cursor-not-allowed disabled:opacity-40">确认{shareSelectedUsers.length > 0 ? `（${shareSelectedUsers.length}）` : ''}</button>
             </div>
           </div>
         </div>
@@ -909,7 +1172,7 @@ function EmptyState({ icon: Icon, title, description, isLight, action }: { icon:
 
 function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, danger = false, icon: Icon = AlertTriangle }: { title: string; description: string; confirmLabel: string; onCancel: () => void; onConfirm: () => void; danger?: boolean; icon?: typeof AlertTriangle }) {
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
       <div className="w-full max-w-md rounded border border-[#27272a] bg-[#0c0c0e] p-5">
         <div className="flex items-start gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${danger ? 'border-red-500/30 bg-red-500/10 text-red-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-400'}`}><Icon size={17} /></div><div><h3 className="text-sm font-bold text-white">{title}</h3><p className="mt-2 text-[11px] leading-5 text-zinc-400">{description}</p></div></div>
         <div className="mt-6 flex justify-end gap-2"><button type="button" onClick={onCancel} className="h-8 rounded border border-zinc-700 px-3 text-[11px] text-zinc-400 hover:text-white">取消</button><button type="button" onClick={onConfirm} className={`h-8 rounded px-4 text-[11px] font-semibold ${danger ? 'bg-red-600 text-white hover:bg-red-500' : 'bg-[#00ff00] text-black hover:bg-[#35ff35]'}`}>{confirmLabel}</button></div>
