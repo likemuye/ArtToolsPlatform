@@ -19,6 +19,7 @@ import {
   Search,
   Share2,
   SlidersHorizontal,
+  Trash2,
   User,
   Users,
   UploadCloud,
@@ -208,6 +209,7 @@ export default function ExtensionManager({
   const [cancelTaskId, setCancelTaskId] = useState<string | null>(null);
   const [launchPrompt, setLaunchPrompt] = useState<LaunchPrompt | null>(null);
   const [deleteExtension, setDeleteExtension] = useState<DccExtension | null>(null);
+  const [actionMenuKey, setActionMenuKey] = useState<string | null>(null);
   const [shareExtension, setShareExtension] = useState<DccExtension | null>(null);
   const [shareUserQuery, setShareUserQuery] = useState('');
   const [shareSelectedUsers, setShareSelectedUsers] = useState<PlatformUser[]>([]);
@@ -221,6 +223,7 @@ export default function ExtensionManager({
   const [pendingVersionPublish, setPendingVersionPublish] = useState<{ extensionId: string; draft: ExtensionDraft; currentVersion: string; nextVersion: string } | null>(null);
   const completedTaskIds = useRef<Set<string>>(new Set());
   const previousSpaceId = useRef<SpaceId>(SpaceId.ProjectA);
+  const actionMenuRef = useRef<HTMLDivElement>(null);
   const isLight = theme === 'light';
 
   const extensionsForSpace = useMemo(() => extensions.filter(extension => {
@@ -252,6 +255,24 @@ export default function ExtensionManager({
     () => new Set(shareExtension?.sharedWith.map(grant => grant.email.toLowerCase()) ?? []),
     [shareExtension]
   );
+
+  useEffect(() => {
+    if (!actionMenuKey) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (actionMenuRef.current && !actionMenuRef.current.contains(event.target as Node)) {
+        setActionMenuKey(null);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setActionMenuKey(null);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [actionMenuKey]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -752,9 +773,12 @@ export default function ExtensionManager({
   const renderLifecycleActions = (extension: DccExtension, detail = false) => {
     const task = getTask(extension.id);
     const canManagePersonal = selectedSpaceId === SpaceId.Personal && extension.ownerEmail === CURRENT_USER_EMAIL;
+    const canModify = canModifyExtension(extension);
+    const menuKey = `${detail ? 'detail' : 'card'}:${extension.id}`;
+    const isActionMenuOpen = actionMenuKey === menuKey;
     if (task) return renderTask(extension, !detail);
     return (
-      <div className={`flex flex-wrap items-center gap-2 ${detail ? 'mt-5' : ''}`}>
+      <div className={`relative flex flex-wrap items-center gap-2 ${detail ? 'mt-5' : ''}`}>
         {extension.lifecycle === 'not_downloaded' && (
           <button type="button" onClick={(event) => { event.stopPropagation(); startTask(extension, 'download'); }} className={`inline-flex h-8 items-center gap-1.5 rounded px-3 text-[11px] font-semibold transition-colors ${isLight ? 'force-text-white bg-slate-950 hover:bg-slate-800' : 'bg-white text-black hover:bg-zinc-200'}`}>
             <Download size={13} /> 下载
@@ -770,20 +794,41 @@ export default function ExtensionManager({
             <RefreshCw size={13} /> 更新至 {extension.latestVersion}
           </button>
         )}
-        {canModifyExtension(extension) && (
-          <button type="button" title="修改工具" onClick={(event) => { event.stopPropagation(); openEditEditor(extension); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700' : 'border-zinc-700 text-zinc-400 hover:border-[#00ff00]/50 hover:text-[#00ff00]'}`}>
-            <Pencil size={13} />
+        {canManagePersonal && (
+          <button type="button" title="分享授权" onClick={(event) => { event.stopPropagation(); setActionMenuKey(null); setShareExtension(extension); setShareUserQuery(''); setShareSelectedUsers([]); setShareError(''); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-200 bg-white text-slate-500 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600' : 'border-zinc-700 text-zinc-400 hover:border-sky-500/50 hover:text-sky-400'}`}>
+            <Share2 size={13} />
           </button>
         )}
-        {canManagePersonal && (
-          <>
-            <button type="button" title="分享授权" onClick={(event) => { event.stopPropagation(); setShareExtension(extension); setShareUserQuery(''); setShareSelectedUsers([]); setShareError(''); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600' : 'border-zinc-700 text-zinc-400 hover:border-sky-500/50 hover:text-sky-400'}`}>
-              <Share2 size={13} />
-            </button>
-            <button type="button" title="删除云端工具" onClick={(event) => { event.stopPropagation(); setDeleteExtension(extension); }} className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600' : 'border-zinc-700 text-zinc-400 hover:border-red-500/50 hover:text-red-400'}`}>
+        {(canModify || canManagePersonal) && (
+          <div ref={isActionMenuOpen ? actionMenuRef : undefined} className="relative">
+            <button
+              type="button"
+              title="更多操作"
+              aria-haspopup="menu"
+              aria-expanded={isActionMenuOpen}
+              onClick={(event) => {
+                event.stopPropagation();
+                setActionMenuKey(previous => previous === menuKey ? null : menuKey);
+              }}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded border transition-colors ${isLight ? 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800' : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:bg-zinc-900 hover:text-white'}`}
+            >
               <MoreHorizontal size={14} />
             </button>
-          </>
+            {isActionMenuOpen && (
+              <div role="menu" className={`absolute right-0 top-full z-50 mt-1.5 w-28 overflow-hidden rounded border py-1 shadow-xl ${isLight ? 'border-slate-200 bg-white' : 'border-zinc-700 bg-[#121214]'}`}>
+                {canModify && (
+                  <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); setActionMenuKey(null); openEditEditor(extension); }} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] transition-colors ${isLight ? 'text-slate-700 hover:bg-slate-50 hover:text-slate-950' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'}`}>
+                    <Pencil size={12} /> 编辑
+                  </button>
+                )}
+                {canManagePersonal && (
+                  <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); setActionMenuKey(null); setDeleteExtension(extension); }} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] transition-colors ${isLight ? 'text-rose-700 hover:bg-rose-50' : 'text-red-300 hover:bg-red-950/40'}`}>
+                    <Trash2 size={12} /> 删除
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
     );
@@ -905,7 +950,7 @@ export default function ExtensionManager({
                 const lifecycle = LIFECYCLE_META[extension.lifecycle];
                 const dcc = DCC_META[extension.dccId];
                 return (
-                  <article key={extension.id} tabIndex={0} onClick={() => setSelectedExtensionId(extension.id)} onKeyDown={event => { if (event.key === 'Enter') setSelectedExtensionId(extension.id); }} className={`group min-w-0 cursor-pointer overflow-hidden rounded border transition-colors focus:outline-none ${isLight ? 'border-slate-200 bg-white hover:border-emerald-300 focus:border-emerald-500' : 'border-[#27272a] bg-[#0c0c0e] hover:border-zinc-600 focus:border-[#00ff00]'}`}>
+                  <article key={extension.id} tabIndex={0} onClick={() => setSelectedExtensionId(extension.id)} onKeyDown={event => { if (event.key === 'Enter') setSelectedExtensionId(extension.id); }} className={`group relative min-w-0 cursor-pointer overflow-visible rounded border transition-colors focus:outline-none ${isLight ? 'border-slate-200 bg-white hover:border-emerald-300 focus:border-emerald-500' : 'border-[#27272a] bg-[#0c0c0e] hover:border-zinc-600 focus:border-[#00ff00]'}`}>
                     <div className="flex min-h-[112px] items-start gap-3.5 p-3.5">
                       <div
                         className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded border"
@@ -1026,14 +1071,15 @@ export default function ExtensionManager({
           description={`版本号将从 ${pendingVersionPublish.currentVersion} 修改为 ${pendingVersionPublish.nextVersion}。发布后，已下载旧版本的使用者会看到“有新版本”状态。`}
           confirmLabel={`发布 ${pendingVersionPublish.nextVersion}`}
           icon={RefreshCw}
+          isLight={isLight}
           onCancel={() => setPendingVersionPublish(null)}
           onConfirm={confirmVersionPublish}
         />
       )}
 
-      {showResumePrompt && tasks.length > 0 && <ConfirmDialog title="检测到未完成的下载" description={`已恢复 ${tasks.length} 个工具下载断点，是否继续下载？`} confirmLabel="继续下载" icon={RotateCcw} onCancel={() => { setTasks([]); setShowResumePrompt(false); }} onConfirm={() => { setTasks(previous => previous.map(task => ({ ...task, status: isOnline ? 'queued' : 'waiting_network' }))); setShowResumePrompt(false); }} />}
-      {cancelTaskId && <ConfirmDialog title="取消下载任务？" description="取消后会删除当前临时文件，工具状态将恢复为未下载。" confirmLabel="取消下载" danger onCancel={() => setCancelTaskId(null)} onConfirm={confirmCancelTask} />}
-      {deleteExtension && <ConfirmDialog title={`删除「${deleteExtension.name}」？`} description={`此操作不可恢复。${deleteExtension.sharedWith.length > 0 ? `该工具已分享给 ${deleteExtension.sharedWith.length} 位用户，删除后他们也将无法访问。` : ''} 已下载到本地的版本不受影响。`} confirmLabel="确认删除" danger onCancel={() => setDeleteExtension(null)} onConfirm={confirmDelete} />}
+      {showResumePrompt && tasks.length > 0 && <ConfirmDialog title="检测到未完成的下载" description={`已恢复 ${tasks.length} 个工具下载断点，是否继续下载？`} confirmLabel="继续下载" icon={RotateCcw} isLight={isLight} onCancel={() => { setTasks([]); setShowResumePrompt(false); }} onConfirm={() => { setTasks(previous => previous.map(task => ({ ...task, status: isOnline ? 'queued' : 'waiting_network' }))); setShowResumePrompt(false); }} />}
+      {cancelTaskId && <ConfirmDialog title="取消下载任务？" description="取消后会删除当前临时文件，工具状态将恢复为未下载。" confirmLabel="取消下载" danger isLight={isLight} onCancel={() => setCancelTaskId(null)} onConfirm={confirmCancelTask} />}
+      {deleteExtension && <ConfirmDialog title={`删除「${deleteExtension.name}」？`} description={`此操作不可恢复。${deleteExtension.sharedWith.length > 0 ? `该工具已分享给 ${deleteExtension.sharedWith.length} 位用户，删除后他们也将无法访问。` : ''} 已下载到本地的版本不受影响。`} confirmLabel="确认删除" danger isLight={isLight} onCancel={() => setDeleteExtension(null)} onConfirm={confirmDelete} />}
 
       {launchPrompt && (
         <ConfirmDialog
@@ -1041,6 +1087,7 @@ export default function ExtensionManager({
           description={launchPrompt.type === 'missing' ? `请先安装并设置 ${DCC_META[launchPrompt.extension.dccId].label} 安装目录。` : launchPrompt.type === 'update_close' ? `${DCC_META[launchPrompt.extension.dccId].label} 正在运行。确认保存当前工作并退出后再下载新版本。` : launchPrompt.type === 'hotload_failure' ? '直接加载接口未响应，已自动降级为重启加载路径。' : '平台将关闭并重新连接软件；当前运行中的任务可能中断。'}
           confirmLabel={launchPrompt.type === 'missing' ? '设置路径' : launchPrompt.type === 'update_close' ? '退出并更新' : '立即重启'}
           icon={launchPrompt.type === 'missing' ? FolderOpen : RefreshCw}
+          isLight={isLight}
           onCancel={() => setLaunchPrompt(null)}
           onConfirm={() => {
             if (launchPrompt.type === 'missing') { setLaunchPrompt(null); onOpenSettings(); }
@@ -1170,12 +1217,15 @@ function EmptyState({ icon: Icon, title, description, isLight, action }: { icon:
   return <div className={`flex min-h-[340px] flex-col items-center justify-center rounded border border-dashed p-8 text-center ${isLight ? 'border-slate-300 bg-white' : 'border-zinc-800 bg-[#0c0c0e]/30'}`}><div className={`flex h-12 w-12 items-center justify-center rounded border ${isLight ? 'border-slate-200 bg-slate-50 text-slate-400' : 'border-zinc-800 bg-zinc-900 text-zinc-500'}`}><Icon size={22} /></div><h3 className={`mt-4 text-sm font-semibold ${isLight ? 'text-slate-800' : 'text-zinc-300'}`}>{title}</h3><p className="mt-2 max-w-sm text-[11px] leading-5 text-zinc-500">{description}</p>{action}</div>;
 }
 
-function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, danger = false, icon: Icon = AlertTriangle }: { title: string; description: string; confirmLabel: string; onCancel: () => void; onConfirm: () => void; danger?: boolean; icon?: typeof AlertTriangle }) {
+function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, isLight, danger = false, icon: Icon = AlertTriangle }: { title: string; description: string; confirmLabel: string; onCancel: () => void; onConfirm: () => void; isLight: boolean; danger?: boolean; icon?: typeof AlertTriangle }) {
   return (
     <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded border border-[#27272a] bg-[#0c0c0e] p-5">
-        <div className="flex items-start gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${danger ? 'border-red-500/30 bg-red-500/10 text-red-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-400'}`}><Icon size={17} /></div><div><h3 className="text-sm font-bold text-white">{title}</h3><p className="mt-2 text-[11px] leading-5 text-zinc-400">{description}</p></div></div>
-        <div className="mt-6 flex justify-end gap-2"><button type="button" onClick={onCancel} className="h-8 rounded border border-zinc-700 px-3 text-[11px] text-zinc-400 hover:text-white">取消</button><button type="button" onClick={onConfirm} className={`h-8 rounded px-4 text-[11px] font-semibold ${danger ? 'bg-red-600 text-white hover:bg-red-500' : 'bg-[#00ff00] text-black hover:bg-[#35ff35]'}`}>{confirmLabel}</button></div>
+      <div className={`w-full max-w-md rounded border p-5 ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#0c0c0e]'}`}>
+        <div className="flex items-start gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${danger ? (isLight ? 'border-rose-200 bg-rose-50 text-rose-600' : 'border-red-500/30 bg-red-500/10 text-red-400') : (isLight ? 'border-amber-200 bg-amber-50 text-amber-600' : 'border-amber-500/30 bg-amber-500/10 text-amber-400')}`}><Icon size={17} /></div><div><h3 className={`text-sm font-bold ${isLight ? 'text-slate-950' : 'text-white'}`}>{title}</h3><p className={`mt-2 text-[11px] leading-5 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>{description}</p></div></div>
+        <div className="mt-6 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className={`h-8 rounded border px-3 text-[11px] transition-colors ${isLight ? 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900' : 'border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-white'}`}>取消</button>
+          <button type="button" onClick={onConfirm} className={`h-8 rounded border px-4 text-[11px] font-semibold transition-colors ${danger ? (isLight ? 'border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100 hover:text-rose-800' : 'border-red-500/40 bg-red-950/40 text-red-300 hover:border-red-400/60 hover:bg-red-950/60 hover:text-red-200') : (isLight ? 'force-text-white border-slate-950 bg-slate-950 text-white hover:bg-slate-800' : 'border-[#00ff00] bg-[#00ff00] text-black hover:bg-[#35ff35]')}`}>{confirmLabel}</button>
+        </div>
       </div>
     </div>
   );
