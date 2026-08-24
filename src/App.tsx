@@ -1,8 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Terminal, 
-  ChevronUp, 
-  ChevronDown, 
   X, 
   HelpCircle,
   Database,
@@ -35,12 +32,6 @@ import CanvasEditorWindow from './components/CanvasEditorWindow';
 import SettingsPanel from './components/SettingsPanel';
 import PermissionManager from './components/PermissionManager';
 import LoginPage from './components/LoginPage';
-
-interface LogLine {
-  text: string;
-  timestamp: string;
-  type: 'info' | 'success' | 'warning' | 'error';
-}
 
 const EXTENSION_STATE_STORAGE_KEY = 'pixgo-extensions-v03';
 const DCC_STATE_STORAGE_KEY = 'pixgo-dcc-state-v03';
@@ -245,10 +236,6 @@ export default function App() {
   const [simulatedDiskGB, setSimulatedDiskGB] = useState<number>(12.0);
   const [tempCacheMB, setTempCacheMB] = useState<number>(2457.6); // 2.4 GB of temp logs
 
-  // Retractable Terminal Console States
-  const [logs, setLogs] = useState<LogLine[]>([]);
-  const [consoleExpanded, setConsoleExpanded] = useState<boolean>(false);
-
   // Initializing default client notifications
   useEffect(() => {
     addLog('🖥️ PixGo Client v1.0.4 初始化启动...', 'info');
@@ -266,17 +253,12 @@ export default function App() {
     localStorage.setItem(EXTENSION_STATE_STORAGE_KEY, JSON.stringify(extensions));
   }, [extensions]);
 
-  // System logging helper. Success/error also raise a global toast (1.5s), unless the caller
-  // opts out via { toast: false } — used by sub-flows that already show an inline message.
+  // Success/error actions raise a global toast unless the caller already shows inline feedback.
   const addLog = (
     text: string,
     type: 'info' | 'success' | 'warning' | 'error' = 'info',
     options?: { toast?: boolean }
   ) => {
-    const now = new Date();
-    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
-    setLogs(prev => [...prev, { text, timestamp: timeStr, type }]);
-
     const shouldToast = options?.toast !== false && (type === 'success' || type === 'error');
     if (shouldToast) {
       // Strip a leading emoji + spaces so the toast reads cleanly.
@@ -475,7 +457,7 @@ export default function App() {
         isCanvasEditorWindow ? (
           <CanvasEditorWindow theme={theme} />
         ) : (
-    <div className={`flex h-screen overflow-hidden font-sans select-none antialiased transition-colors duration-200 relative ${
+    <div className={`ui-v2 flex h-screen overflow-hidden font-sans select-none antialiased transition-colors duration-200 relative ${
       theme === 'light' ? 'bg-[#f8fafc] text-zinc-800 light' : 'bg-[#09090b] text-zinc-200 dark'
     }`}>
       
@@ -533,7 +515,7 @@ export default function App() {
         onOpenNotification={openNotificationDetail}
       />
 
-      {/* 2. Main Work Content Area (split with bottom collapsible terminal log) */}
+      {/* 2. Main Work Content Area */}
       <div className={`flex-1 flex flex-col h-screen min-w-0 relative ${
         theme === 'light' ? 'bg-[#f8fafc]' : 'bg-[#09090b]'
       }`}>
@@ -556,59 +538,6 @@ export default function App() {
             />
           </div>
           {currentTab !== 'extensions' && renderTabContent()}
-        </div>
-
-        {/* 3. Retractable PixGo System Console Drawer at Bottom */}
-        <div className="shrink-0 bg-[#070708] border-t border-[#1c1c1f] flex flex-col z-40 transition-all font-mono">
-          
-          {/* Console Header Bar */}
-          <div 
-            onClick={() => setConsoleExpanded(!consoleExpanded)}
-            className="px-4 py-2 bg-[#0a0a0c] hover:bg-[#121214] flex items-center justify-between text-[11px] text-zinc-400 font-bold tracking-wider cursor-pointer border-b border-[#18181a] select-none console-header-bar"
-          >
-            <div className="flex items-center gap-2">
-              <Terminal size={12} className="text-[#00ff00]" />
-              <span className="text-[#f4f4f5]">运行日志与派发流</span>
-              <span className="text-[9px] bg-zinc-900 border border-zinc-800 text-zinc-500 rounded px-1 min-w-[30px] text-center font-normal">
-                {logs.length} 条
-              </span>
-            </div>
-            
-            <div className="flex items-center gap-3 font-normal text-[10px]">
-              <span className="text-zinc-600 truncate max-w-[240px] md:max-w-md hidden sm:inline">
-                {logs.length > 0 ? `最新: ${logs[logs.length - 1].text}` : ''}
-              </span>
-              <div className="text-zinc-400">
-                {consoleExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-              </div>
-            </div>
-          </div>
-
-          {/* Collapsible Console Feed Lines */}
-          {consoleExpanded && (
-            <div className="h-32 p-3 overflow-y-auto text-[10.5px] leading-relaxed space-y-1 font-mono selection:bg-[#00ff00]/20 selection:text-white">
-              {logs.length === 0 ? (
-                <div className="text-zinc-700 italic select-none">等待客户端交互...</div>
-              ) : (
-                logs.map((log, index) => {
-                  let badgeColor = 'text-zinc-500';
-                  if (log.type === 'success') badgeColor = 'text-[#00ff00] font-bold';
-                  else if (log.type === 'warning') badgeColor = 'text-amber-500';
-                  else if (log.type === 'error') badgeColor = 'text-red-500 font-bold';
-
-                  return (
-                    <div key={index} className="flex items-start gap-2.5 hover:bg-zinc-90 w-full p-0.5 rounded transition-colors group">
-                      <span className="text-zinc-650 select-none shrink-0">[{log.timestamp}]</span>
-                      <span className={`${badgeColor} uppercase text-[9.2px] border border-black group-hover:border-zinc-900 cursor-default font-semibold shrink-0 px-1 rounded-sm tracking-wide`}>
-                        {log.type}
-                      </span>
-                      <span className="text-zinc-300 break-all select-text font-mono flex-1">{log.text}</span>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
         </div>
 
       </div>

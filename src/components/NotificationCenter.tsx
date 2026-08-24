@@ -60,7 +60,7 @@ export default function NotificationCenter({
         <button
           type="button"
           onClick={() => setOpen(prev => !prev)}
-          className={`group w-full rounded border transition-all cursor-pointer ${
+          className={`notification-center-trigger group w-full rounded border transition-all cursor-pointer ${
             open
               ? (isLight ? 'border-[#00C800] bg-emerald-50' : 'border-[#00ff00]/60 bg-[#00ff00]/5')
               : (isLight ? 'border-slate-200 bg-white hover:border-[#00C800]' : 'border-[#27272a] bg-[#0c0c0e] hover:border-[#00ff00]/50')
@@ -69,14 +69,14 @@ export default function NotificationCenter({
           {isCollapsed ? (
             <>
               <span className="relative">
-                <Bell size={15} className={open ? (isLight ? 'text-[#00C800]' : 'text-[#00ff00]') : (isLight ? 'text-slate-500' : 'text-zinc-400')} />
+                <Bell size={21} strokeWidth={2} className={open ? (isLight ? 'text-[#00C800]' : 'text-[#00ff00]') : (isLight ? 'text-slate-500' : 'text-zinc-400')} />
                 {unreadCount > 0 && (
-                  <span className={`absolute -right-2 -top-2 min-w-[14px] rounded-full px-1 text-[8px] font-bold leading-[14px] ring-1 ring-inset ${isLight ? 'bg-rose-100 text-rose-700 ring-rose-200' : 'bg-rose-400/20 text-rose-200 ring-rose-400/30'}`}>
+                  <span className={`notification-unread-indicator absolute -right-2 -top-2 min-w-[14px] rounded-full px-1 text-[8px] font-bold leading-[14px] ring-1 ring-inset ${isLight ? 'bg-rose-100 text-rose-700 ring-rose-200' : 'bg-rose-400/20 text-rose-200 ring-rose-400/30'}`}>
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
               </span>
-              <span className={`text-[9px] font-sans ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>通知</span>
+              <span className={`notification-trigger-label text-[9px] font-sans ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>通知</span>
             </>
           ) : (
             <>

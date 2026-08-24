@@ -1224,17 +1224,7 @@ export const ART_ASSETS_PROJECT_A: ArtAsset[] = RAW_ART_ASSETS_PROJECT_A.map((as
 
 export const INITIAL_ASSET_FOLDERS_PROJECT_A: AssetFolder[] = [
   { id: 'folder-primary', name: '一级文件夹', parentId: null },
-  { id: 'folder-character', name: '二级文件夹', parentId: 'folder-primary' },
-  { id: 'folder-scene', name: '二级文件夹01', parentId: 'folder-primary' },
-  { id: 'folder-003', name: '003', parentId: 'folder-primary' },
-  { id: 'folder-004', name: '004', parentId: 'folder-primary' },
-  { id: 'folder-005', name: '005', parentId: 'folder-primary' },
-  { id: 'folder-006', name: '006', parentId: 'folder-primary' },
-  { id: 'folder-007', name: '007', parentId: 'folder-primary' },
-  { id: 'folder-character-hero', name: '武将参考', parentId: 'folder-character' },
-  { id: 'folder-character-weapon', name: '武器道具', parentId: 'folder-character' },
-  { id: 'folder-scene-redcliff', name: '赤壁战场', parentId: 'folder-scene' },
-  { id: 'folder-scene-luoyang', name: '洛阳建筑', parentId: 'folder-scene' }
+  { id: 'folder-003', name: '003', parentId: 'folder-primary' }
 ];
 
 export const INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A = ART_ASSETS_PROJECT_A.reduce<Record<string, string>>((acc, asset) => {
@@ -1247,13 +1237,13 @@ export const INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A = ART_ASSETS_PROJECT_A.r
 
   const byCategory: Record<AssetCategory, string> = {
     [AssetCategory.All]: 'folder-primary',
-    [AssetCategory.CharConcept]: 'folder-character-hero',
-    [AssetCategory.SceneConcept]: 'folder-scene-luoyang',
-    [AssetCategory.CharModel]: 'folder-character-weapon',
-    [AssetCategory.SceneModel]: 'folder-scene-redcliff',
-    [AssetCategory.Animation]: 'folder-004',
-    [AssetCategory.Video]: 'folder-005',
-    [AssetCategory.GUI]: 'folder-006'
+    [AssetCategory.CharConcept]: 'folder-primary',
+    [AssetCategory.SceneConcept]: 'folder-primary',
+    [AssetCategory.CharModel]: 'folder-primary',
+    [AssetCategory.SceneModel]: 'folder-primary',
+    [AssetCategory.Animation]: 'folder-primary',
+    [AssetCategory.Video]: 'folder-primary',
+    [AssetCategory.GUI]: 'folder-primary'
   };
 
   acc[asset.id] = byCategory[asset.category] ?? 'folder-primary';

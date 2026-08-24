@@ -126,7 +126,7 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
         <button
           type="button"
           onClick={() => setOpen(prev => !prev)}
-          className={`group w-full rounded border transition-all cursor-pointer ${
+          className={`dcc-monitor-trigger group w-full rounded border transition-all cursor-pointer ${
             open
               ? (isLight ? 'border-[#00C800] bg-emerald-50' : 'border-[#00ff00]/60 bg-[#00ff00]/5')
               : (isLight ? 'border-slate-200 bg-white hover:border-[#00C800]' : 'border-[#27272a] bg-[#0c0c0e] hover:border-[#00ff00]/50')
@@ -135,12 +135,12 @@ export default function DccMonitor({ apps, setApps, addLog, theme, isCollapsed }
           {isCollapsed ? (
             <>
               <div className="relative">
-                <Monitor size={15} className={isLight ? 'text-[#00C800]' : 'text-[#00ff00]'} />
+                <Monitor size={21} strokeWidth={2} className={isLight ? 'text-[#00C800]' : 'text-[#00ff00]'} />
                 <span className="absolute -right-1.5 -top-1.5 flex h-1.5 w-1.5">
-                  <span className={`h-full w-full rounded-full ${connectedCount > 0 ? 'bg-[#00ff00] animate-pulse' : 'bg-zinc-600'}`}></span>
+                  <span className={`dcc-monitor-status-dot h-full w-full rounded-full ${connectedCount > 0 ? 'is-connected bg-[#00ff00] animate-pulse' : 'bg-zinc-600'}`}></span>
                 </span>
               </div>
-              <span className={`text-[9px] font-mono ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>{connectedCount}/{totalCount}</span>
+              <span className={`dcc-monitor-count text-[9px] font-mono ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>{connectedCount}/{totalCount}</span>
             </>
           ) : (
             <>

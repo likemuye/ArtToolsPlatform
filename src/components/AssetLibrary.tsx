@@ -37,7 +37,8 @@ import {
   Eye,
   Package,
   SlidersHorizontal,
-  Info
+  Info,
+  Minus
 } from 'lucide-react';
 import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType, AssetTaskStatus, PlatformUser, ProjectMember } from '../types';
 import { INITIAL_ASSET_FOLDERS_PROJECT_A, INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A, PROJECT_SPACES, ASSET_ORG_OPTIONS, ASSET_TASK_STATUS_LABELS, PLATFORM_USERS, INITIAL_PROJECT_MEMBERS, CURRENT_USER_EMAIL } from '../data';
@@ -120,7 +121,20 @@ const ASSET_ITEMS_PER_PAGE_STORAGE_KEY = 'art-launcher-items-per-page-v1';
 const ASSET_SHARES_STORAGE_KEY = 'art-launcher-asset-shares-v1';
 const PROJECT_MEMBERS_STORAGE_KEY = 'art-launcher-project-members-v1';
 const DCC_IMPORT_ENTRY_ENABLED = false;
-const REMOVED_DEFAULT_FOLDER_IDS = new Set(['folder-browser', 'folder-cloud-local']);
+const REMOVED_DEFAULT_FOLDER_IDS = new Set([
+  'folder-browser',
+  'folder-cloud-local',
+  'folder-character',
+  'folder-character-hero',
+  'folder-character-weapon',
+  'folder-scene',
+  'folder-scene-redcliff',
+  'folder-scene-luoyang',
+  'folder-004',
+  'folder-005',
+  'folder-006',
+  'folder-007'
+]);
 const REMOVED_SYSTEM_FOLDER_IDS = new Set(['space-root-project-group']);
 const FOLDER_SCOPE_SEPARATOR = '::';
 const DEFAULT_ASSET_FOLDER_BASE_ID = 'folder-primary';
@@ -162,13 +176,13 @@ const SYSTEM_FOLDER_IDS = new Set(SYSTEM_FOLDERS.map(folder => folder.id));
 
 // Per-space visual identity for the four top-level folders.
 // `icon` distinguishes the space at a glance; `accent` is the icon/active color.
-const ROOT_FOLDER_VISUALS: Record<string, { icon: typeof User; accent: string }> = {
-  [PERSONAL_SPACE_FOLDER_ID]: { icon: User, accent: '#38bdf8' }, // 个人空间 - sky
-  [SHARED_SPACE_FOLDER_ID]: { icon: Users, accent: '#a78bfa' }, // 与我共享 - violet
-  [TUYOO_COMMON_FOLDER_ID]: { icon: Package, accent: '#facc15' }, // 途游通用 - amber
-  [PROJECT_A_SPACE_FOLDER_ID]: { icon: Boxes, accent: '#00ff00' }, // 项目空间 - green
-  [PROJECT_B_SPACE_FOLDER_ID]: { icon: Boxes, accent: '#00ff00' }, // 项目空间 - green
-  [EXTERNAL_ASSET_FOLDER_ID]: { icon: Globe, accent: '#fb923c' } // 外部素材 - orange
+const ROOT_FOLDER_VISUALS: Record<string, { icon: typeof User; accent: string; tone: string }> = {
+  [PERSONAL_SPACE_FOLDER_ID]: { icon: User, accent: '#f59a45', tone: 'personal' },
+  [SHARED_SPACE_FOLDER_ID]: { icon: Users, accent: '#8b6ee8', tone: 'shared' },
+  [TUYOO_COMMON_FOLDER_ID]: { icon: Package, accent: '#4aa7e8', tone: 'common' },
+  [PROJECT_A_SPACE_FOLDER_ID]: { icon: Boxes, accent: '#6c43ed', tone: 'project-a' },
+  [PROJECT_B_SPACE_FOLDER_ID]: { icon: Boxes, accent: '#2f80ed', tone: 'project-b' },
+  [EXTERNAL_ASSET_FOLDER_ID]: { icon: Globe, accent: '#fb923c', tone: 'external' }
 };
 const DEFAULT_ASSET_FOLDER_ID = `${SpaceId.ProjectA}${FOLDER_SCOPE_SEPARATOR}${DEFAULT_ASSET_FOLDER_BASE_ID}`;
 const CREATED_FOLDER_ID_PATTERN = /^folder-(\d{10,})$/;
@@ -1204,7 +1218,11 @@ const getFolderBaseId = (folderId: string) => {
 
 const buildScopedFolderId = (spaceId: SpaceId, folderId: string) => `${spaceId}${FOLDER_SCOPE_SEPARATOR}${folderId}`;
 
-const getDefaultFolderIdBySpace = (spaceId: SpaceId) => buildScopedFolderId(spaceId, DEFAULT_ASSET_FOLDER_BASE_ID);
+const getDefaultFolderIdBySpace = (spaceId: SpaceId) => (
+  spaceId === SpaceId.Personal
+    ? PERSONAL_SPACE_FOLDER_ID
+    : buildScopedFolderId(spaceId, DEFAULT_ASSET_FOLDER_BASE_ID)
+);
 
 const isPersonalAssetId = (assetId: string) => assetId.startsWith('personal-asset-');
 
@@ -1238,6 +1256,7 @@ const normalizeFolders = (folders: AssetFolder[]) => {
   folders.forEach((folder) => {
     if (SYSTEM_FOLDER_IDS.has(folder.id)) return;
     if (REMOVED_SYSTEM_FOLDER_IDS.has(folder.id)) return;
+    if (folder.id === buildScopedFolderId(SpaceId.Personal, DEFAULT_ASSET_FOLDER_BASE_ID)) return;
     if (REMOVED_DEFAULT_FOLDER_IDS.has(getFolderBaseId(folder.id))) return;
     if (folder.parentId === null || REMOVED_SYSTEM_FOLDER_IDS.has(folder.parentId)) {
       const inferredSpaceId = inferSpaceIdFromFolderId(folder.id) ?? SpaceId.ProjectA;
@@ -1295,7 +1314,6 @@ const buildDefaultFolderTree = () => {
     ...SYSTEM_FOLDERS,
     ...scopeFoldersForSpace(seedFolders, SpaceId.ProjectA),
     ...scopeFoldersForSpace(seedFolders, SpaceId.ProjectB),
-    ...scopeFoldersForSpace(seedFolders, SpaceId.Personal),
     ...scopeFoldersForSpace(seedFolders, SpaceId.Shared)
   ]);
 };
@@ -1326,7 +1344,6 @@ const getInitialFolders = () => {
           ...SYSTEM_FOLDERS,
           ...scopeFoldersForSpace(legacyFolders, SpaceId.ProjectA),
           ...scopeFoldersForSpace(legacyFolders, SpaceId.ProjectB),
-          ...scopeFoldersForSpace(legacyFolders, SpaceId.Personal),
           ...scopeFoldersForSpace(legacyFolders, SpaceId.Shared)
         ]);
       }
@@ -2055,7 +2072,7 @@ export default function AssetLibrary({
   const [internalSizeHMax, setInternalSizeHMax] = useState<string>('');
   const [internalDurationBuckets, setInternalDurationBuckets] = useState<Set<string>>(() => new Set());
   const [openInternalFilter, setOpenInternalFilter] = useState<FilterKey | null>(null);
-  const [filtersExpanded, setFiltersExpanded] = useState<boolean>(false);
+  const [filtersExpanded, setFiltersExpanded] = useState<boolean>(true);
   const internalFilterBarRef = useRef<HTMLDivElement | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<ArtAsset | null>(null);
   const [assetDetailNameDraft, setAssetDetailNameDraft] = useState<string>('');
@@ -5587,11 +5604,11 @@ export default function AssetLibrary({
             type="button"
             onClick={() => setSelectedFolderId(folder.id)}
             onContextMenu={(event) => openFolderContextMenu(event, folder.id)}
-            className={`group/folder flex w-full items-center gap-1.5 rounded text-left transition-all px-2 ${
+            className={`asset-folder-tree-item group/folder flex w-full items-center gap-1.5 rounded text-left transition-all px-2 ${
               isRoot ? 'py-2 text-[13px] font-semibold' : 'py-1.5 text-xs'
             } ${
               isSelected
-                ? 'border-l-2 border-transparent bg-[#18181b] text-white'
+                ? 'is-selected border-l-2 border-transparent bg-[#18181b] text-white'
                 : `border-l-2 border-transparent ${isRoot ? 'text-zinc-300' : 'text-zinc-400'} hover:bg-[#0c0c0e] hover:text-white`
             }`}
             style={{
@@ -5624,11 +5641,13 @@ export default function AssetLibrary({
               )}
             </span>
             {isRoot && RootIcon ? (
-              <RootIcon size={15} style={{ color: accent }} className="shrink-0" />
+              <span className={`asset-tree-root-icon is-${rootVisual.tone}`}>
+                <RootIcon size={15} strokeWidth={2} style={{ color: accent }} />
+              </span>
             ) : isExpanded && hasChildren ? (
-              <FolderOpen size={14} className={isSelected ? 'text-zinc-300' : 'text-zinc-500 group-hover/folder:text-zinc-300'} />
+              <FolderOpen size={18} strokeWidth={1.7} className={`asset-tree-folder-icon ${isSelected ? 'text-zinc-300' : 'text-zinc-500 group-hover/folder:text-zinc-300'}`} />
             ) : (
-              <Folder size={14} className={isSelected ? 'text-zinc-300' : 'text-zinc-500 group-hover/folder:text-zinc-300'} />
+              <Folder size={18} strokeWidth={1.7} className={`asset-tree-folder-icon ${isSelected ? 'text-zinc-300' : 'text-zinc-500 group-hover/folder:text-zinc-300'}`} />
             )}
             <TooltipText
               content={folder.name}
@@ -5867,12 +5886,12 @@ export default function AssetLibrary({
           <button
             type="button"
             onClick={() => setFiltersExpanded(prev => !prev)}
+            aria-expanded={filtersExpanded}
             className={`asset-filter-expand-toggle ${filtersExpanded ? 'is-active' : ''}`}
           >
             <SlidersHorizontal size={12} />
-            <span>{filtersExpanded ? '收起' : '展开更多'}</span>
+            <span>筛选</span>
             {activeFilterCount > 0 && <span className="asset-filter-count">{activeFilterCount}</span>}
-            <ChevronDown size={11} className={`transition-transform ${filtersExpanded ? 'rotate-180' : ''}`} />
           </button>
         </div>
 
@@ -6027,7 +6046,7 @@ export default function AssetLibrary({
   };
 
   return (
-    <div className="flex-1 overflow-hidden flex flex-col font-sans">
+    <div className="asset-library-v2 flex-1 overflow-hidden flex flex-col font-sans">
 
       <input
         ref={personalUploadInputRef}
@@ -6080,7 +6099,7 @@ export default function AssetLibrary({
       />
 
       {/* Main body content */}
-      <div ref={assetLayoutRef} className="flex-1 overflow-hidden flex flex-col lg:flex-row min-h-0">
+      <div ref={assetLayoutRef} className="asset-workspace flex-1 overflow-hidden flex flex-col lg:flex-row min-h-0">
           {assetContextMenu && contextMenuAsset && (
             <div
               className="fixed z-50 w-44 overflow-hidden rounded border border-[#27272a] bg-[#0c0c0e] py-1 shadow-xl font-mono text-[11px]"
@@ -6269,7 +6288,7 @@ export default function AssetLibrary({
           )}
 
           <aside
-            className="w-full shrink-0 border-b lg:border-b-0 border-[#27272a] bg-[#070708] flex flex-col min-h-0"
+            className="asset-directory-pane w-full shrink-0 border-b lg:border-b-0 border-[#27272a] bg-[#070708] flex flex-col min-h-0"
             style={isDesktopLayout ? { width: `${folderPaneWidth}px` } : undefined}
           >
             <div className="asset-folder-header flex h-[52px] shrink-0 items-center border-b border-[#1c1c1f] px-3">
@@ -6353,7 +6372,7 @@ export default function AssetLibrary({
             aria-orientation="vertical"
             aria-label="调整目录结构宽度"
             onMouseDown={startFolderPaneResize}
-            className="group relative hidden w-2 shrink-0 cursor-col-resize lg:block"
+            className="asset-directory-resizer group relative hidden w-2 shrink-0 cursor-col-resize lg:block"
           >
             <div
               className={`absolute inset-y-0 left-1/2 -translate-x-1/2 w-px transition-colors ${
@@ -6362,7 +6381,7 @@ export default function AssetLibrary({
             />
           </div>
 
-          <section className="flex-1 overflow-hidden flex flex-col min-w-0">
+          <section className="asset-content-panel flex-1 overflow-hidden flex flex-col min-w-0">
             <div className="asset-content-toolbar shrink-0 border-b border-[#27272a] bg-[#0c0c0e]/60 px-4 py-2">
               <div className="flex flex-col gap-2.5">
                 {isBatchMode ? (
@@ -6424,7 +6443,7 @@ export default function AssetLibrary({
                       <ChevronLeft size={14} />
                     </button>
                     */}
-                    <div className="flex min-w-0 items-center gap-2 text-sm font-bold text-white">
+                    <div className="asset-page-title flex min-w-0 items-center gap-2 text-sm font-bold text-white">
                       <FolderOpen size={16} className="text-[#00ff00]" />
                       <span className="truncate">{selectedFolder?.name ?? '未选择文件夹'}</span>
                     </div>
@@ -6438,11 +6457,11 @@ export default function AssetLibrary({
                         className="asset-upload-trigger inline-flex items-center justify-center gap-1.5 rounded border px-3 py-1.5 text-[10.5px] font-mono font-semibold transition-colors"
                       >
                         <Upload size={12} />
-                        上传
+                        上传素材
                       </button>
                     )}
 
-                    <div className="relative w-56 sm:w-72 xl:w-80">
+                    <div className="asset-search-box relative w-56 sm:w-72 xl:w-80">
                       <Search size={13} className="absolute left-3 top-2 text-zinc-500" />
                       <input
                         type="text"
@@ -6454,7 +6473,7 @@ export default function AssetLibrary({
                             : setKeyword(event.target.value)
                         )}
                         placeholder={imageSearchQuery !== null ? '以图搜图进行中…' : '输入关键词、标签，或一句话描述'}
-                        className="w-full bg-zinc-950 border border-zinc-800 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-1.5 pl-9 pr-9 text-zinc-200 font-mono disabled:cursor-not-allowed disabled:opacity-50"
+                        className="asset-search-input w-full bg-zinc-950 border border-zinc-800 focus:border-[#00ff00] transition-colors outline-none text-xs rounded py-1.5 pl-9 pr-9 text-zinc-200 font-mono disabled:cursor-not-allowed disabled:opacity-50"
                       />
                       <button
                         type="button"
@@ -6476,7 +6495,7 @@ export default function AssetLibrary({
                         type="button"
                         onClick={enterBatchMode}
                         title="批量操作：多选后批量删除"
-                        className="inline-flex shrink-0 items-center gap-1.5 rounded border border-zinc-700 bg-black px-2.5 py-1.5 text-[10.5px] font-mono text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-white"
+                        className="asset-batch-trigger inline-flex shrink-0 items-center gap-1.5 rounded border border-zinc-700 bg-black px-2.5 py-1.5 text-[10.5px] font-mono text-zinc-300 transition-colors hover:border-[#00ff00]/60 hover:text-white"
                       >
                         <CheckCircle size={12} />
                         批量操作
@@ -6515,11 +6534,11 @@ export default function AssetLibrary({
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-5 space-y-7">
+            <div className="asset-content-scroll flex-1 overflow-y-auto p-5 space-y-7">
               {!isExternalRootSelected && directChildFolders.length > 0 && (
                 <section>
                   <div className="mb-3 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-sm font-bold text-white">
+                    <div className="asset-section-title flex items-center gap-2 text-sm font-bold text-white">
                       <Folder size={16} className="text-[#00ff00]" />
                       <span>子文件夹</span>
                       <span className="font-mono text-xs text-zinc-500">({directChildFolders.length})</span>
@@ -6541,7 +6560,7 @@ export default function AssetLibrary({
                             setExpandedFolderIds(prev => new Set(prev).add(selectedFolderId));
                           }}
                           onContextMenu={(event) => openFolderContextMenu(event, folder.id)}
-                          className="group/folderCard rounded border border-[#27272a] bg-[#0c0c0e] p-2 text-center transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
+                          className="asset-folder-card group/folderCard rounded border border-[#27272a] bg-[#0c0c0e] p-2 text-center transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
                         >
                           <div className="asset-folder-cover relative aspect-[4/3] overflow-hidden rounded-md border border-zinc-800 bg-[#1f2430] p-1 transition-colors group-hover/folderCard:border-[#00ff00]/50">
                             {coverAssets.length > 0 ? (
@@ -6590,12 +6609,12 @@ export default function AssetLibrary({
                               {assetCount}
                             </span>
                           </div>
-                          <div className="mt-1.5 min-w-0">
+                          <div className="asset-folder-meta mt-1.5 flex min-w-0 items-center justify-between gap-2">
                             <p className="truncate text-[11px] font-semibold leading-4 text-zinc-200 group-hover/folderCard:text-white">
                               {folder.name}
                             </p>
-                            <p className="mt-0.5 text-[9px] font-mono leading-3 text-zinc-500">
-                              {childFolderCount} 个子目录
+                            <p className="shrink-0 text-[9px] font-mono leading-3 text-zinc-500">
+                              {childFolderCount} 个子文件夹 | {assetCount}
                             </p>
                           </div>
                         </button>
@@ -6607,28 +6626,13 @@ export default function AssetLibrary({
 
               <section>
                 <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-2 text-sm font-bold text-white">
+                  <div className="asset-section-title flex items-center gap-2 text-sm font-bold text-white">
                     <Files size={16} className="text-[#00ff00]" />
                     <span>素材</span>
                     <span className="font-mono text-xs text-zinc-500">({totalItems})</span>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* 卡片宽度调节滑动条 */}
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-[10.5px] text-zinc-500">预览</span>
-                      <input
-                        type="range"
-                        min={CARD_WIDTH_MIN}
-                        max={CARD_WIDTH_MAX}
-                        step={10}
-                        value={cardWidth}
-                        onChange={(event) => setCardWidth(clampCardWidth(Number(event.target.value)))}
-                        className="asset-card-width-slider h-1 w-28 cursor-pointer appearance-none rounded-full bg-zinc-700 accent-[#00ff00]"
-                        title={`封面宽度 ${cardWidth}px`}
-                      />
-                    </div>
-
                     {!isExternalRootSelected && (
                       <button
                         type="button"
@@ -6649,6 +6653,22 @@ export default function AssetLibrary({
                         显示子文件夹素材
                       </button>
                     )}
+
+                    {/* 卡片宽度调节滑动条 */}
+                    <div className="asset-card-size-control flex items-center gap-2">
+                      <Minus size={14} className="text-zinc-500" />
+                      <input
+                        type="range"
+                        min={CARD_WIDTH_MIN}
+                        max={CARD_WIDTH_MAX}
+                        step={10}
+                        value={cardWidth}
+                        onChange={(event) => setCardWidth(clampCardWidth(Number(event.target.value)))}
+                        className="asset-card-width-slider h-1 w-24 cursor-pointer appearance-none rounded-full bg-zinc-700 accent-[#00ff00]"
+                        title={`封面宽度 ${cardWidth}px`}
+                      />
+                      <Plus size={14} className="text-zinc-500" />
+                    </div>
                   </div>
                 </div>
 
@@ -6672,7 +6692,7 @@ export default function AssetLibrary({
                   </div>
                 ) : (
                   isExternalRootSelected ? (
-                    <div style={assetGridStyle}>
+                    <div className="asset-card-grid" style={assetGridStyle}>
                       {paginatedExternalAssets.map((asset) => {
                         const sourceMeta = EXTERNAL_SOURCE_META[asset.source];
                         const isCurSelected = selectedAsset?.id === asset.id;
@@ -6682,7 +6702,7 @@ export default function AssetLibrary({
                             key={asset.id}
                             type="button"
                             onClick={() => setSelectedAsset(asset)}
-                            className={`group/card rounded border overflow-hidden bg-[#0c0c0e] text-left transition-all ${
+                            className={`asset-grid-card group/card rounded border overflow-hidden bg-[#0c0c0e] text-left transition-all ${
                               isCurSelected
                                 ? 'border-[#00ff00]'
                                 : 'border-[#27272a] hover:border-zinc-700'
@@ -6696,7 +6716,7 @@ export default function AssetLibrary({
                                 referrerPolicy="no-referrer"
                               />
                               <span className="absolute left-2 top-2 rounded border border-zinc-800 bg-black/85 px-1.5 py-0.5 text-[9.5px] font-mono font-bold uppercase text-[#00ff00]">
-                                .{asset.format}
+                                {asset.format}
                               </span>
                               <span className={`absolute right-2 top-2 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-mono ${sourceMeta.badgeClassName}`}>
                                 <span className={`h-1.5 w-1.5 rounded-full ${sourceMeta.dotClassName}`} />
@@ -6722,7 +6742,7 @@ export default function AssetLibrary({
                       })}
                     </div>
                   ) : (
-                    <div style={assetGridStyle}>
+                    <div className="asset-card-grid" style={assetGridStyle}>
                       {paginatedInternalAssets.map((asset) => {
                         const isCurSelected = selectedAsset?.id === asset.id;
                         const isBatchSelected = isBatchMode && batchSelectedIds.has(asset.id);
@@ -6738,7 +6758,7 @@ export default function AssetLibrary({
                               else setSelectedAsset(asset);
                             }}
                             onContextMenu={(event) => { if (!isBatchMode) openAssetContextMenu(event, asset.id); }}
-                            className={`group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
+                            className={`asset-grid-card group/card bg-[#0c0c0e] border rounded overflow-hidden cursor-pointer flex flex-col transition-all relative ${
                               isBatchSelected
                                 ? 'border-[#00ff00] ring-1 ring-[#00ff00]/60'
                                 : isCurSelected && !isBatchMode
@@ -6747,7 +6767,7 @@ export default function AssetLibrary({
                             }`}
                           >
                             {/* Thumbnail wrapper */}
-                            <div className="group/cover aspect-video relative overflow-hidden bg-black/60 shrink-0 select-none border-b border-[#18181b]">
+                            <div className="asset-card-preview group/cover aspect-video relative overflow-hidden bg-black/60 shrink-0 select-none border-b border-[#18181b]">
                               <img
                                 src={asset.thumbnail}
                                 alt={asset.name}
@@ -6765,11 +6785,13 @@ export default function AssetLibrary({
                               )}
 
                               {/* Format sticker and category indicator */}
-                              <div className={`absolute top-2 left-2 flex items-center gap-1 ${isBatchMode ? 'opacity-0' : ''}`}>
-                                <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded uppercase">
-                                  .{asset.format}
-                                </span>
-                              </div>
+                              {!['png', 'jpg', 'jpeg', 'webp'].includes(asset.format.toLowerCase()) && (
+                                <div className={`absolute top-2 left-2 flex items-center gap-1 ${isBatchMode ? 'opacity-0' : ''}`}>
+                                  <span className="text-[9.5px] font-mono bg-black/90 text-[#00ff00] font-bold border border-zinc-800 px-1 py-0.2 rounded">
+                                    {asset.format.toLowerCase() === 'blend' ? 'Blender' : asset.format.toUpperCase()}
+                                  </span>
+                                </div>
+                              )}
 
                               {imageSearchQuery && (
                                 <span className="absolute bottom-2 left-2 z-10 rounded border border-[#00ff00]/50 bg-black/85 px-1.5 py-0.5 text-[9.5px] font-mono font-bold text-[#00ff00]">
@@ -6790,20 +6812,6 @@ export default function AssetLibrary({
                                         className="asset-cover-action-btn asset-cover-action-btn-share flex h-7 w-7 items-center justify-center rounded-md bg-[#111214] text-emerald-300 transition-colors hover:bg-[#1a1c1f] focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-300/80"
                                       >
                                         <Send size={12} />
-                                      </button>
-                                    </Tooltip>
-                                  )}
-                                  {(isPersonalSpace || isProjectA) && (
-                                    <Tooltip content="复制链接" placement="top">
-                                      <button
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void handleCopyPersonalAssetLink(asset);
-                                        }}
-                                        className="asset-cover-action-btn asset-cover-action-btn-copy flex h-7 w-7 items-center justify-center rounded-md bg-[#111214] text-cyan-300 transition-colors hover:bg-[#1a1c1f] focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-300/80"
-                                      >
-                                        <Link2 size={12} />
                                       </button>
                                     </Tooltip>
                                   )}
@@ -6836,15 +6844,17 @@ export default function AssetLibrary({
                                   )}
                                 </div>
                               )}
-                            </div>
 
-                            <div className="flex h-8 items-center px-1.5 py-1">
-                              <TooltipText
-                                content={asset.name}
-                                className="block w-full truncate text-[11px] font-medium text-zinc-200 transition-colors group-hover/card:text-white"
-                                placement="top"
-                                align="start"
-                              />
+                              {!imageSearchQuery && (
+                                <div className="asset-card-title-overlay absolute inset-x-0 bottom-0 z-10 flex h-10 items-end px-2.5 pb-2 pt-4">
+                                  <TooltipText
+                                    content={asset.name}
+                                    className="block w-full truncate text-[11px] font-medium text-white"
+                                    placement="top"
+                                    align="start"
+                                  />
+                                </div>
+                              )}
                             </div>
 
                             {showAssetCardInfo && (
@@ -7645,13 +7655,13 @@ export default function AssetLibrary({
       )}
 
       {personalUploadDraft && (
-        <div className="personal-upload-modal fixed inset-0 z-50 bg-black/85 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center">
+        <div className="personal-upload-modal personal-upload-workspace-page fixed inset-0 z-50 bg-black/85 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center">
           <div className="personal-upload-modal-panel w-full max-w-[1080px] h-[76vh] min-h-[520px] max-h-[760px] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] flex flex-col">
-            <div className="shrink-0 px-5 py-4 border-b border-[#27272a] flex items-start justify-between gap-4">
+            <div className="personal-upload-dialog-header shrink-0 px-5 py-4 border-b border-[#27272a] flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
                   <Sparkles size={14} className="text-[#00ff00]" />
-                  上传预处理与 AI 自动打标
+                  上传资源到指定目录 & AI 资源自动打标
                 </h3>
                 <p className="mt-1 text-[11px] text-zinc-500 font-mono">
                   总数 {personalUploadStats.total} | 上传中 {personalUploadStats.uploading} | 已打标 {personalUploadStats.ready} | 失败 {personalUploadStats.failed}
@@ -7673,30 +7683,46 @@ export default function AssetLibrary({
               </button>
             </div>
 
-            <div className="personal-upload-threshold shrink-0 border-b border-[#27272a] px-5 py-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="min-w-[150px]">
-                  <p className="text-[11px] font-semibold text-zinc-300">AI 打标阈值</p>
-                  <p className="mt-0.5 text-[10px] font-mono text-zinc-500">仅显示置信度达到阈值的 AI 标签</p>
+            <div className="personal-upload-threshold personal-upload-progress-section shrink-0 border-b border-[#27272a] px-5 py-3">
+              <div className="personal-upload-progress-row flex items-center gap-4">
+                <div className="personal-upload-progress-label flex shrink-0 items-center gap-2">
+                  <Sparkles size={17} />
+                  <p className="text-[12px] font-medium text-zinc-300">AI 自动标签智能分析进度</p>
                 </div>
-                <div className="flex min-w-[240px] flex-1 items-center gap-3">
-                  <span className="w-6 text-right text-[10px] font-mono text-zinc-500">{AI_TAG_THRESHOLD_MIN}</span>
-                  <input
-                    type="range"
-                    min={AI_TAG_THRESHOLD_MIN}
-                    max={AI_TAG_THRESHOLD_MAX}
-                    value={aiTagThreshold}
-                    onChange={(event) => updateAiTagThreshold(Number(event.target.value))}
-                    className="personal-upload-threshold-slider h-1.5 min-w-0 flex-1 cursor-pointer accent-[#00ff00]"
+                <div className="personal-upload-progress-track min-w-[160px] flex-1 overflow-hidden rounded-full">
+                  <span
+                    className="block h-full rounded-full"
                     style={{
-                      '--range-progress': `${((aiTagThreshold - AI_TAG_THRESHOLD_MIN) / (AI_TAG_THRESHOLD_MAX - AI_TAG_THRESHOLD_MIN)) * 100}%`
-                    } as React.CSSProperties}
+                      width: `${personalUploadStats.total > 0
+                        ? Math.round(((personalUploadStats.ready + personalUploadStats.failed) / personalUploadStats.total) * 100)
+                        : 0}%`
+                    }}
                   />
-                  <span className="w-7 text-[10px] font-mono text-zinc-500">{AI_TAG_THRESHOLD_MAX}</span>
                 </div>
-                <div className="rounded border border-[#00ff00]/30 bg-[#00ff00]/10 px-2.5 py-1 text-[11px] font-mono text-[#00ff00]">
-                  {aiTagThreshold}
-                </div>
+                <details className="personal-upload-threshold-settings relative shrink-0">
+                  <summary className="personal-upload-progress-value text-[11px] font-mono" title="调整 AI 标签置信度" aria-label="调整 AI 标签置信度">
+                    {personalUploadStats.total > 0
+                      ? Math.round(((personalUploadStats.ready + personalUploadStats.failed) / personalUploadStats.total) * 100)
+                      : 0}%
+                  </summary>
+                  <div className="personal-upload-threshold-popover absolute right-0 top-full z-40 mt-2 w-64 rounded-lg border p-3 shadow-lg">
+                    <div className="mb-2 flex items-center justify-between text-[11px]">
+                      <span>标签置信度阈值</span>
+                      <strong>{aiTagThreshold}</strong>
+                    </div>
+                    <input
+                      type="range"
+                      min={AI_TAG_THRESHOLD_MIN}
+                      max={AI_TAG_THRESHOLD_MAX}
+                      value={aiTagThreshold}
+                      onChange={(event) => updateAiTagThreshold(Number(event.target.value))}
+                      className="personal-upload-threshold-slider h-1.5 w-full cursor-pointer accent-[#00ff00]"
+                      style={{
+                        '--range-progress': `${((aiTagThreshold - AI_TAG_THRESHOLD_MIN) / (AI_TAG_THRESHOLD_MAX - AI_TAG_THRESHOLD_MIN)) * 100}%`
+                      } as React.CSSProperties}
+                    />
+                  </div>
+                </details>
               </div>
             </div>
 
@@ -7761,7 +7787,7 @@ export default function AssetLibrary({
                   }}
                 >
                   <div className="flex items-start gap-3">
-                    <div className="w-28 sm:w-32 shrink-0">
+                    <div className="personal-upload-preview-column w-28 sm:w-32 shrink-0">
                       <div className="personal-upload-modal-preview relative aspect-[4/3] rounded border border-zinc-800 overflow-hidden bg-black">
                         {item.uploadType === 'video' ? (
                           <video src={item.previewUrl} className="h-full w-full object-cover" muted playsInline preload="metadata" />
@@ -7782,38 +7808,42 @@ export default function AssetLibrary({
                       </div>
                     </div>
 
-                    <div className="min-w-0 flex-1 space-y-2">
-                      <div className="space-y-1">
-                        <div className="min-w-0 flex items-center gap-2">
-                          <span className="shrink-0 text-[10px] font-mono text-zinc-500">文件名</span>
+                    <div className="personal-upload-item-main min-w-0 flex-1 space-y-2">
+                      <div className="personal-upload-meta space-y-1">
+                        <div className="personal-upload-title-row min-w-0 flex items-center gap-0.5">
+                          <span className="personal-upload-file-name-label shrink-0 text-[10px] font-mono text-zinc-500">文件名</span>
                           <input
                             type="text"
+                            size={Math.min(Math.max(item.fileName.length, 12), 64)}
                             value={item.fileName}
                             onChange={(event) => updateDraftItemName(item.id, event.target.value)}
                             placeholder="请输入素材名称"
-                            className="personal-upload-modal-input min-w-0 w-full rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
+                            className="personal-upload-modal-input personal-upload-file-name min-w-0 w-full rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
                           />
+                          <span className="personal-upload-file-format shrink-0 text-[12px] text-zinc-500">.{item.format.toLowerCase()}</span>
                         </div>
-                        <div className="flex flex-wrap items-center gap-y-1 text-[10.5px] font-mono">
-                          <span className="text-zinc-500">.{item.format}</span>
-                          <span className="ml-2 border-l border-zinc-800 pl-2 text-zinc-500">{toDisplayMB(item.sizeBytes)} MB</span>
-                          <span className="ml-2 border-l border-zinc-800 pl-2 text-[#00ff00]">{personalTypeLabel[item.uploadType]}</span>
+                        <div className="personal-upload-file-meta flex flex-wrap items-center gap-y-1 text-[10.5px] font-mono">
+                          <span className="text-zinc-500">{personalTypeLabel[item.uploadType]}</span>
                         </div>
                         {sourceFolderPath && (
-                          <div className="flex min-w-0 items-center gap-1.5 text-[10px] font-mono text-zinc-500" title={item.sourceFileName}>
+                          <div className="personal-upload-source-path flex min-w-0 items-center gap-1.5 text-[10px] font-mono text-zinc-500" title={item.sourceFileName}>
                             <FolderOpen size={11} className="shrink-0" />
                             <span className="truncate">{sourceFolderPath}</span>
                           </div>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="inline-flex items-center text-[10.5px] font-mono text-zinc-500">分类</span>
+                      <p className="personal-upload-ai-description text-[10.5px] leading-4 text-zinc-500">
+                        <strong>AI 识别：</strong>已识别素材画面内容并生成建议分类与标签，可在上传前继续调整。
+                      </p>
+
+                      <div className="personal-upload-tags flex flex-wrap items-center gap-1.5">
+                        <span className="personal-upload-tags-label inline-flex items-center text-[10.5px] font-mono text-zinc-500">标签：</span>
                         {/* 已选分类全部展示为可移除标签 */}
                         {item.categories.map((cat) => (
                           <span
                             key={`${item.id}-cat-${cat}`}
-                            className="inline-flex items-center gap-1 rounded border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] font-mono text-cyan-200"
+                            className="personal-upload-category-chip inline-flex items-center gap-1 rounded border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] font-mono text-cyan-200"
                           >
                             {ASSET_CATEGORY_TABS.find(t => t.id === cat)?.name ?? cat}
                             <button
@@ -7834,7 +7864,7 @@ export default function AssetLibrary({
                           <button
                             type="button"
                             onClick={() => setCategoryMenuItemId(prev => prev === item.id ? null : item.id)}
-                            className="inline-flex items-center gap-0.5 rounded border border-zinc-800 bg-[#0c0c0e] px-1.5 py-0.5 text-[10px] text-zinc-300 transition-colors hover:border-cyan-400/50 hover:text-cyan-200"
+                            className="personal-upload-category-add inline-flex items-center gap-0.5 rounded border border-zinc-800 bg-[#0c0c0e] px-1.5 py-0.5 text-[10px] text-zinc-300 transition-colors hover:border-cyan-400/50 hover:text-cyan-200"
                           >
                             <Plus size={10} />
                             分类
@@ -7863,13 +7893,10 @@ export default function AssetLibrary({
                             </div>
                           )}
                         </div>
-                        <span className="ml-1 inline-flex items-center border-l border-zinc-800 pl-2 text-[10.5px] font-mono text-zinc-500">
-                          标签
-                        </span>
                         {item.tags.map((tag) => (
                           <span
                             key={`${item.id}-${tag}`}
-                            className="inline-flex items-center gap-1 rounded border border-[#00ff00]/20 bg-[#00ff00]/5 px-2 py-0.5 text-[10px] font-mono text-[#00ff00]"
+                            className="personal-upload-tag-chip inline-flex items-center gap-1 rounded border border-[#00ff00]/20 bg-[#00ff00]/5 px-2 py-0.5 text-[10px] font-mono text-[#00ff00]"
                           >
                             <button
                               type="button"
@@ -7893,10 +7920,7 @@ export default function AssetLibrary({
                         {item.tags.length === 0 && (
                           <span className="text-[10px] text-zinc-600 font-mono">暂无标签</span>
                         )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <div className="w-full max-w-[420px]">
+                        <div className="personal-upload-tag-composer flex items-center gap-1">
                           <input
                             type="text"
                             value={pendingTagInputs[item.id] ?? ''}
@@ -7907,21 +7931,24 @@ export default function AssetLibrary({
                                 addDraftTag(item.id);
                               }
                             }}
-                            placeholder="新增标签并回车"
-                            className="personal-upload-modal-input w-full rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
+                            placeholder="新增标签"
+                            aria-label="新增标签并回车"
+                            className="personal-upload-modal-input personal-upload-tag-input rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
                           />
+                          <button
+                            type="button"
+                            aria-label="添加标签"
+                            title="添加标签"
+                            onClick={() => addDraftTag(item.id)}
+                            className="personal-upload-modal-add-tag shrink-0 rounded border border-zinc-800 bg-black px-2.5 py-1.5 text-[11px] font-mono text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
+                          >
+                            <Plus size={11} />
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => addDraftTag(item.id)}
-                          className="personal-upload-modal-add-tag shrink-0 rounded border border-zinc-800 bg-black px-2.5 py-1.5 text-[11px] font-mono text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
-                        >
-                          添加
-                        </button>
                       </div>
 
                       {tagSuggestions.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="personal-upload-tag-suggestions flex flex-wrap gap-1.5">
                           <span className="text-[10px] font-mono text-zinc-500">推荐标签</span>
                           {tagSuggestions.map((tag) => (
                             <button
@@ -7937,14 +7964,17 @@ export default function AssetLibrary({
                       )}
                     </div>
                     <div className="personal-upload-modal-remove-slot shrink-0 self-stretch flex items-center justify-center border-l border-zinc-800 px-3">
+                      <span className="personal-upload-file-size whitespace-nowrap text-[10.5px] font-mono text-zinc-500">
+                        {toDisplayMB(item.sizeBytes)} MB
+                      </span>
                       <button
                         type="button"
                         onClick={() => removeDraftItem(item.id, item.fileName)}
                         className="shrink-0 inline-flex items-center gap-1 rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] font-mono text-zinc-500 transition-colors hover:border-red-500/60 hover:text-red-300"
                         title="移除此素材"
                       >
-                        <X size={10} />
-                        移除
+                        <Trash2 size={13} />
+                        <span className="personal-upload-remove-label">移除</span>
                       </button>
                     </div>
                   </div>
@@ -7956,7 +7986,7 @@ export default function AssetLibrary({
               </div>
             </div>
 
-            <div className="shrink-0 px-5 py-4 border-t border-[#27272a] flex items-center justify-between gap-3">
+            <div className="personal-upload-dialog-footer shrink-0 px-5 py-4 border-t border-[#27272a] flex items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -7989,7 +8019,7 @@ export default function AssetLibrary({
                   type="button"
                   onClick={confirmPersonalUpload}
                   disabled={personalUploadDraft.isTagging || personalUploadDraft.items.length === 0}
-                  className={`rounded px-4 py-1.5 text-xs font-bold transition-colors ${
+                  className={`personal-upload-confirm rounded px-4 py-1.5 text-xs font-bold transition-colors ${
                     personalUploadDraft.isTagging || personalUploadDraft.items.length === 0
                       ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
                       : 'bg-[#00ff00] text-black hover:bg-[#00dd00]'
@@ -8133,16 +8163,16 @@ export default function AssetLibrary({
       {/* Large asset detail modal */}
       {selectedAsset && (
         <div
-          className="fixed inset-0 z-40 bg-black/80 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center"
+          className="asset-detail-overlay fixed inset-0 z-40 bg-black/80 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center"
           onClick={() => setSelectedAsset(null)}
         >
           <div
-            className="h-[min(88vh,760px)] w-full max-w-[1200px] bg-[#0c0c0e] border border-[#27272a] rounded-xl overflow-hidden flex flex-col lg:flex-row"
+            className="asset-detail-dialog h-[min(88vh,760px)] w-full max-w-[1200px] bg-[#0c0c0e] border border-[#27272a] rounded-xl overflow-hidden flex flex-col lg:flex-row"
             onClick={(event) => event.stopPropagation()}
           >
             <div
               ref={previewViewportRef}
-              className="relative flex-1 min-h-[280px] bg-black border-b lg:border-b-0 lg:border-r border-[#27272a] overflow-hidden"
+              className="asset-detail-viewport relative flex-1 min-h-[280px] bg-black border-b lg:border-b-0 lg:border-r border-[#27272a] overflow-hidden"
               onWheel={handlePreviewWheel}
             >
               <img
@@ -8210,7 +8240,7 @@ export default function AssetLibrary({
                 )}
               </div>
 
-              <div className="absolute left-4 bottom-4 flex items-center gap-2 rounded border border-zinc-800 bg-black/90 px-2 py-1 text-[10px] font-mono text-zinc-300">
+              <div className="asset-detail-zoom absolute left-4 bottom-4 flex items-center gap-2 rounded border border-zinc-800 bg-black/90 px-2 py-1 text-[10px] font-mono text-zinc-300">
                 <button
                   type="button"
                   onClick={() => stepPreviewZoom('out')}
@@ -8222,9 +8252,9 @@ export default function AssetLibrary({
                   }`}
                   title="缩小"
                 >
-                  -
+                  <Minus size={14} />
                 </button>
-                <span className="min-w-[48px] text-center text-zinc-200">{Math.round((previewMode === 'fit' ? 1 : previewZoom) * 100)}%</span>
+                <span className="asset-detail-zoom-value min-w-[48px] text-center text-zinc-200">{Math.round((previewMode === 'fit' ? 1 : previewZoom) * 100)}%</span>
                 <button
                   type="button"
                   onClick={() => stepPreviewZoom('in')}
@@ -8236,14 +8266,14 @@ export default function AssetLibrary({
                   }`}
                   title="放大"
                 >
-                  +
+                  <Plus size={14} />
                 </button>
               </div>
             </div>
 
             <div className="asset-detail-sidebar w-full lg:w-[320px] xl:w-[336px] bg-[#0a0a0c] border-t lg:border-t-0 lg:border-l border-[#27272a] px-4 py-5 overflow-y-auto flex flex-col">
-              <div className="flex items-center justify-between gap-3 border-b border-zinc-900 pb-3 shrink-0">
-                <div className="flex items-center gap-1">
+              <div className="asset-detail-sidebar-header flex items-center justify-between gap-3 border-b border-zinc-900 pb-3 shrink-0">
+                <div className="asset-detail-header-actions flex items-center gap-1">
                   {canShareSelectedAsset && selectedAsset && (
                     <Tooltip content="分享素材" placement="bottom">
                       <button
@@ -8254,19 +8284,6 @@ export default function AssetLibrary({
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 bg-black text-emerald-300 transition-colors hover:border-emerald-300/70 hover:text-emerald-200"
                       >
                         <Send size={13} />
-                      </button>
-                    </Tooltip>
-                  )}
-                  {canCopySelectedAssetLink && selectedAsset && (
-                    <Tooltip content="复制链接" placement="bottom">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void handleCopyPersonalAssetLink(selectedAsset);
-                        }}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 bg-black text-cyan-300 transition-colors hover:border-cyan-300/70 hover:text-cyan-200"
-                      >
-                        <Link2 size={13} />
                       </button>
                     </Tooltip>
                   )}
@@ -8283,8 +8300,9 @@ export default function AssetLibrary({
                 </Tooltip>
               </div>
 
-              <div className="mt-4 space-y-3.5">
+              <div className="asset-detail-content mt-4 space-y-3.5">
                 <div className="space-y-3">
+                  <h3 className="asset-detail-field-label text-sm font-semibold text-zinc-200">文件名称</h3>
                   {isSelectedExternalAsset ? (
                     <div className="asset-detail-form-field w-full rounded-xl border border-zinc-800 bg-black px-3 py-2.5 text-[14px] font-medium tracking-wide text-zinc-200">
                       {selectedAsset.name}
@@ -8306,6 +8324,64 @@ export default function AssetLibrary({
                       className="asset-detail-form-field w-full rounded-xl border border-zinc-800 bg-black px-3 py-2.5 text-[14px] font-medium tracking-wide text-zinc-300 outline-none focus:border-[#00ff00]"
                     />
                   )}
+                  <div className="asset-detail-description rounded-lg border border-zinc-800 bg-black/25 px-3 py-2.5">
+                    <p className="text-[11px] leading-[1.65] text-zinc-500">{selectedAsset.desc}</p>
+                  </div>
+
+                  <div className="asset-detail-figma-actions items-stretch gap-2">
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {canShareSelectedAsset && (
+                        <Tooltip content="分享素材" placement="bottom">
+                          <button
+                            type="button"
+                            aria-label="分享素材"
+                            onClick={() => void handleSharePersonalAsset(selectedAsset)}
+                            className="asset-detail-figma-icon-button flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400"
+                          >
+                            <Send size={14} />
+                          </button>
+                        </Tooltip>
+                      )}
+                    </div>
+
+                    {!isSelectedExternalAsset ? (
+                      selectedAssetTask ? (
+                        <div className="asset-detail-figma-progress flex min-w-0 flex-1 flex-col justify-center rounded-lg border border-zinc-800 px-3 py-2">
+                          <div className="flex items-center justify-between gap-3 text-[11px]">
+                            <span>{selectedAssetTask.status === 'queued' ? '等待下载' : '下载中'}</span>
+                            <span>{selectedAssetTask.status === 'queued' ? '--' : `${selectedAssetTask.progress}%`}</span>
+                          </div>
+                          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-zinc-800">
+                            <div
+                              className="h-full rounded-full bg-[#00ff00]"
+                              style={{ width: `${selectedAssetTask.status === 'queued' ? 8 : selectedAssetTask.progress}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleLocalDownload(selectedAsset)}
+                          className="asset-detail-figma-download flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-4 text-xs font-semibold"
+                        >
+                          <Download size={14} />
+                          <span>{downloadedAssetIds.has(selectedAsset.id) ? '打开本地目录' : '下载'}</span>
+                        </button>
+                      )
+                    ) : (
+                      <a
+                        href={selectedExternalAsset?.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="asset-detail-figma-download flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-4 text-xs font-semibold"
+                      >
+                        <ExternalLink size={14} />
+                        <span>打开来源页面</span>
+                      </a>
+                    )}
+                  </div>
+
+                  <h3 className="asset-detail-field-label pt-1 text-sm font-semibold text-zinc-200">标签</h3>
                   <div ref={assetDetailTagComposerRef} className="asset-detail-tags-panel min-h-[56px] rounded-xl border border-zinc-800/80 px-2 py-2">
                     <div className="flex items-start gap-2">
                       <Tag size={14} className="asset-detail-tags-icon mt-1 shrink-0 text-zinc-600" />
@@ -8399,8 +8475,8 @@ export default function AssetLibrary({
                 </div>
 
                 <div className="pt-1">
-                  <h3 className="text-sm font-semibold text-zinc-200">素材信息</h3>
-                  <div className="mt-2.5 space-y-2.5 font-mono">
+                  <h3 className="asset-detail-field-label text-sm font-semibold text-zinc-200">基本信息</h3>
+                  <div className="asset-detail-info-grid mt-2.5 space-y-2.5 font-mono">
                     <div className="flex items-center justify-between gap-3 text-xs">
                       <span className="w-[60px] shrink-0 text-left text-zinc-500">文件夹</span>
                       <TooltipText
@@ -8462,7 +8538,7 @@ export default function AssetLibrary({
 
                 {/* ACTION BUTTONS (F9 Paths) */}
                 {!isSelectedExternalAsset ? (
-                  <div className="pt-4 border-t border-zinc-900 space-y-3">
+                  <div className="asset-detail-legacy-actions pt-4 border-t border-zinc-900 space-y-3">
                   {/* Path A: Local high-speed download */}
                   <div>
                     <h4 className="text-[10.2px] text-zinc-500 font-mono uppercase mb-1.5 tracking-wide">
@@ -8500,7 +8576,7 @@ export default function AssetLibrary({
                     ) : (
                       <button
                         onClick={() => handleLocalDownload(selectedAsset)}
-                        className={`w-full py-2 px-4 text-xs font-semibold rounded flex items-center justify-center gap-1.5 transition-all text-center cursor-pointer ${
+                        className={`asset-detail-download w-full py-2 px-4 text-xs font-semibold rounded flex items-center justify-center gap-1.5 transition-all text-center cursor-pointer ${
                           downloadedAssetIds.has(selectedAsset.id)
                             ? 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white btn-secondary'
                             : 'bg-white hover:bg-zinc-150 text-black font-bold shadow-lg btn-primary'
@@ -8573,7 +8649,7 @@ export default function AssetLibrary({
 
                   </div>
                 ) : (
-                  <div className="pt-4 border-t border-zinc-900 space-y-3">
+                  <div className="asset-detail-legacy-actions pt-4 border-t border-zinc-900 space-y-3">
                     <div className="rounded border border-zinc-800 bg-black/40 p-3.5 text-[11px] font-mono text-zinc-300 space-y-2">
                       <p className="text-zinc-100 font-semibold">外部来源信息</p>
                       <p>来源平台：{selectedExternalSourceMeta?.label ?? selectedAsset.platform}</p>

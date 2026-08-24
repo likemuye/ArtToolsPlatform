@@ -1,15 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Layers,
+  Archive,
+  Grid2X2,
+  Users,
   Settings,
-  HardDrive,
-  User,
-  FolderOpen,
-  Palette,
   Sun,
   Moon,
   Monitor,
-  ShieldCheck,
   LogOut,
   Check,
   IdCard,
@@ -108,21 +105,22 @@ export default function Sidebar({
 
 
   const mainTabs = [
-    { id: 'assets', name: '素材', icon: FolderOpen, badge: currentSpace.id === SpaceId.ProjectA ? '100+' : '0' },
-    { id: 'extensions', name: '工具', icon: Layers, badge: '22' },
+    { id: 'assets', name: '素材', icon: Archive, badge: currentSpace.id === SpaceId.ProjectA ? '100+' : '0' },
+    { id: 'extensions', name: '工具', icon: Grid2X2, badge: '22' },
     // Canvas is temporarily hidden. Restore this item when the feature is reopened.
-    // { id: 'canvas', name: '画布', icon: Palette },
-    { id: 'permissions', name: '权限管理', icon: ShieldCheck },
+    { id: 'permissions', name: '管理', icon: Users },
   ];
 
   return (
-    <div className={`${isCollapsed ? 'w-[72px]' : 'w-68'} bg-black h-screen border-r border-[#27272a] flex flex-col select-none font-sans justify-between transition-all duration-300 ease-out`}>
+    <div className={`app-primary-sidebar ${isCollapsed ? 'w-[72px]' : 'w-68'} bg-black h-screen border-r border-[#27272a] flex flex-col select-none font-sans justify-between transition-all duration-300 ease-out`}>
       {/* Upper Area */}
       <div className="flex flex-col flex-1 min-h-0">
         {/* Platform Title */}
         <div className={`app-sidebar-brand h-[52px] shrink-0 border-b border-[#27272a] bg-[#0c0c0e] ${isCollapsed ? 'px-3 flex items-center justify-center relative' : 'px-5 flex items-center justify-between'}`}>
           <div className={`flex items-center ${isCollapsed ? '' : 'gap-2'}`}>
-            <div className="w-3 h-3 bg-[#00ff00] animate-pulse"></div>
+            <div className="app-sidebar-logo relative flex h-9 w-9 items-center justify-center">
+              <img className="app-sidebar-logo-mark" src="/logo.svg" alt="PixGo" />
+            </div>
             {!isCollapsed && (
               <span className={`font-display font-bold tracking-widest text-sm ${theme === 'light' ? 'text-zinc-900' : 'text-[#f4f4f5]'}`}>
                 PixGo <span className="text-[#00ff00] font-mono text-xs font-normal">V1</span>
@@ -143,14 +141,16 @@ export default function Sidebar({
                 <button
                   key={tab.id}
                   onClick={() => setCurrentTab(tab.id)}
-                  className={`w-full transition-all rounded group cursor-pointer ${
+                  className={`app-sidebar-tab ${isActive ? 'is-active' : ''} w-full transition-all rounded group cursor-pointer ${
                     isActive 
                       ? 'bg-[#18181b] text-white font-medium' 
                       : 'text-zinc-400 hover:text-white hover:bg-[#0c0c0e]'
                   } ${isCollapsed ? 'h-14 w-14 mx-auto p-1.5 flex flex-col items-center justify-center gap-0.5' : 'py-2 px-3 flex items-center justify-between text-left'}`}
                 >
                   <div className={`flex ${isCollapsed ? 'flex-col items-center gap-1' : 'items-center gap-3'}`}>
-                    <TabIcon size={isCollapsed ? 15 : 16} className={isActive ? 'text-[#00ff00]' : 'text-zinc-400 group-hover:text-zinc-200'} />
+                    <span className="app-sidebar-tab-icon relative inline-flex h-6 w-6 items-center justify-center">
+                      <TabIcon size={isCollapsed ? 24 : 16} strokeWidth={1.8} className={isActive ? 'text-[#00ff00]' : 'text-zinc-400 group-hover:text-zinc-200'} />
+                    </span>
                     <span className={isCollapsed ? 'block w-full overflow-hidden text-ellipsis whitespace-nowrap text-[9px] leading-tight text-center' : 'text-xs'}>{tab.name}</span>
                   </div>
                   {!isCollapsed && tab.badge && (
@@ -172,26 +172,26 @@ export default function Sidebar({
       </div>
 
       {/* Bottom: DCC monitor + theme selector + profile */}
-      <div className={`${isCollapsed ? 'p-2' : 'p-4'} border-t border-[#27272a] bg-[#0c0c0e] font-mono`}>
-        <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
+      <div className={`app-sidebar-footer ${isCollapsed ? 'p-2' : 'p-4'} border-t border-[#27272a] bg-[#0c0c0e] font-mono`}>
+        <div className={`app-sidebar-footer-item ${isCollapsed ? '' : 'mb-3'}`}>
           <Tooltip content="设置" placement="right">
             <button
               type="button"
               onClick={() => setCurrentTab('settings')}
-              className={`h-14 w-14 mx-auto rounded border transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+              className={`app-sidebar-control app-sidebar-settings h-14 w-14 mx-auto rounded border transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
                 currentTab === 'settings'
                   ? 'border-[#00ff00] text-[#00ff00] bg-[#00ff00]/5'
                   : 'border-[#27272a] text-zinc-400 hover:border-[#00ff00]/60 hover:text-[#00ff00]'
               }`}
             >
-              <Settings size={15} />
-              <span className="text-[9px] font-sans">设置</span>
+              <Settings size={20} strokeWidth={2} />
+              <span className="app-sidebar-control-label text-[9px] font-sans">设置</span>
             </button>
           </Tooltip>
         </div>
 
         {/* Canvas collaboration notifications */}
-        <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
+        <div className={`app-sidebar-footer-item ${isCollapsed ? '' : 'mb-3'}`}>
           <NotificationCenter
             notifications={notifications}
             onMarkAllRead={onMarkAllNotificationsRead}
@@ -202,7 +202,7 @@ export default function Sidebar({
         </div>
 
         {/* Persistent DCC connection-status monitor */}
-        <div className={isCollapsed ? 'mb-1.5' : 'mb-3'}>
+        <div className={`app-sidebar-footer-item ${isCollapsed ? '' : 'mb-3'}`}>
           <DccMonitor
             apps={apps}
             setApps={setApps}
@@ -214,24 +214,24 @@ export default function Sidebar({
 
         {/* Theme selector: 浅色 / 深色 / 跟随系统 */}
         {isCollapsed ? (
-          <div className="relative mb-1.5" ref={themePickerRef}>
+          <div className="app-sidebar-footer-item relative" ref={themePickerRef}>
             <Tooltip content="切换显示模式" placement="right">
               <button
                 onClick={() => setThemeMenuOpen(prev => !prev)}
-                className={`h-14 w-14 mx-auto rounded border transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                className={`app-sidebar-theme-trigger h-14 w-14 mx-auto rounded border transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
                   themeMenuOpen
                     ? 'border-[#00ff00] text-[#00ff00] bg-[#00ff00]/5'
                     : 'border-[#27272a] hover:border-[#00ff00] text-zinc-400 hover:text-[#00ff00]'
                 }`}
               >
                 {themePref === 'system' ? (
-                  <Monitor size={14} className={theme === 'light' ? 'text-sky-500' : 'text-zinc-300'} />
+                  <Monitor size={20} className={theme === 'light' ? 'text-slate-500' : 'text-zinc-300'} />
                 ) : theme === 'dark' ? (
-                  <Sun size={14} className="text-amber-500" />
+                  <Moon size={20} className="text-indigo-400" />
                 ) : (
-                  <Moon size={14} className="text-indigo-400" />
+                  <Sun size={20} className="text-slate-500" />
                 )}
-                <span className="text-[10px] font-sans">{themePref === 'system' ? '系统' : theme === 'dark' ? '深色' : '浅色'}</span>
+                <span className="app-sidebar-control-label text-[10px] font-sans">{themePref === 'system' ? '系统' : theme === 'dark' ? '深色' : '浅色'}</span>
               </button>
             </Tooltip>
 
@@ -289,19 +289,18 @@ export default function Sidebar({
         )}
 
         {/* Profile: avatar + name + department，点击弹出菜单 */}
-        <div className="relative" ref={profileRef}>
+        <div className="app-sidebar-footer-item relative" ref={profileRef}>
           <Tooltip content={`${userName}${userDept ? ' · ' + userDept : ''}`} placement={isCollapsed ? 'right' : 'top'} disabled={!isCollapsed}>
             <button
               onClick={() => setProfileMenuOpen(prev => !prev)}
-              className={`group w-full rounded transition-colors cursor-pointer ${
+              className={`app-sidebar-profile-trigger group w-full rounded transition-colors cursor-pointer ${
                 profileMenuOpen
                   ? (isLight ? 'bg-emerald-50' : 'bg-[#00ff00]/5')
                   : (isLight ? 'bg-white hover:bg-slate-50' : 'bg-[#0c0c0e] hover:bg-[#18181b]')
               } ${isCollapsed ? 'h-14 w-14 mx-auto flex items-center justify-center' : 'flex items-center gap-2.5 px-2.5 py-2'}`}
             >
               <span
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
-                style={{ background: 'linear-gradient(135deg,#00C800,#0891b2)' }}
+                className="app-sidebar-avatar flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
               >
                 {userName.charAt(0)}
               </span>
