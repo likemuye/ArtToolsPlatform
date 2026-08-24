@@ -10,7 +10,8 @@ import {
   LogOut,
   Check,
   IdCard,
-  X
+  X,
+  ArrowUpDown
 } from 'lucide-react';
 import { SpaceId, ProjectSpace, AppConfig, AuthSession, AppNotification } from '../types';
 import DccMonitor from './DccMonitor';
@@ -34,6 +35,9 @@ interface SidebarProps {
   notifications: AppNotification[];
   onMarkAllNotificationsRead: () => void;
   onOpenNotification: (id: string) => void;
+  transferCenterOpen: boolean;
+  onToggleTransferCenter: () => void;
+  transferBadge: { count: number; tone: 'pending' | 'failed' | 'active' | 'idle' };
 }
 
 export default function Sidebar({
@@ -52,7 +56,10 @@ export default function Sidebar({
   onLogout,
   notifications,
   onMarkAllNotificationsRead,
-  onOpenNotification
+  onOpenNotification,
+  transferCenterOpen,
+  onToggleTransferCenter,
+  transferBadge
 }: SidebarProps) {
   // V1 sharing mode keeps the primary navigation collapsed; expansion is disabled for now.
   const isCollapsed = true;
@@ -174,22 +181,20 @@ export default function Sidebar({
       {/* Bottom: DCC monitor + theme selector + profile */}
       <div className={`app-sidebar-footer ${isCollapsed ? 'p-2' : 'p-4'} border-t border-[#27272a] bg-[#0c0c0e] font-mono`}>
         <div className={`app-sidebar-footer-item ${isCollapsed ? '' : 'mb-3'}`}>
-          <Tooltip content="设置" placement="right">
+          <Tooltip content="传输中心" placement="right">
             <button
               type="button"
-              onClick={() => setCurrentTab('settings')}
-              className={`app-sidebar-control app-sidebar-settings h-14 w-14 mx-auto rounded border transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
-                currentTab === 'settings'
-                  ? 'border-[#00ff00] text-[#00ff00] bg-[#00ff00]/5'
-                  : 'border-[#27272a] text-zinc-400 hover:border-[#00ff00]/60 hover:text-[#00ff00]'
-              }`}
+              onClick={onToggleTransferCenter}
+              className={`app-sidebar-control app-sidebar-transfer h-14 w-14 mx-auto rounded border transition-colors cursor-pointer flex flex-col items-center justify-center gap-0.5 ${transferCenterOpen ? 'is-active' : ''}`}
             >
-              <Settings size={20} strokeWidth={2} />
-              <span className="app-sidebar-control-label text-[9px] font-sans">设置</span>
+              <span className="app-sidebar-transfer-icon">
+                <ArrowUpDown size={20} strokeWidth={2} />
+                {transferBadge.count > 0 && <span className={`app-sidebar-transfer-badge is-${transferBadge.tone}`}>{transferBadge.count > 99 ? '99+' : transferBadge.count}</span>}
+              </span>
+              <span className="app-sidebar-control-label text-[9px] font-sans">传输</span>
             </button>
           </Tooltip>
         </div>
-
         {/* Canvas collaboration notifications */}
         <div className={`app-sidebar-footer-item ${isCollapsed ? '' : 'mb-3'}`}>
           <NotificationCenter
@@ -290,7 +295,7 @@ export default function Sidebar({
 
         {/* Profile: avatar + name + department，点击弹出菜单 */}
         <div className="app-sidebar-footer-item relative" ref={profileRef}>
-          <Tooltip content={`${userName}${userDept ? ' · ' + userDept : ''}`} placement={isCollapsed ? 'right' : 'top'} disabled={!isCollapsed}>
+          <Tooltip content={`${userName}${userDept ? ' · ' + userDept : ''}`} placement={isCollapsed ? 'right' : 'top'} disabled={!isCollapsed || profileMenuOpen}>
             <button
               onClick={() => setProfileMenuOpen(prev => !prev)}
               className={`app-sidebar-profile-trigger group w-full rounded transition-colors cursor-pointer ${
@@ -333,6 +338,17 @@ export default function Sidebar({
               >
                 <IdCard size={14} className={isLight ? 'text-slate-400' : 'text-zinc-400'} />
                 个人信息
+              </button>
+              <button
+                onClick={() => { setCurrentTab('settings'); setProfileMenuOpen(false); }}
+                className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-xs font-sans transition-colors ${
+                  currentTab === 'settings'
+                    ? (isLight ? 'bg-violet-50 text-violet-700' : 'bg-violet-500/10 text-violet-300')
+                    : (isLight ? 'text-slate-700 hover:bg-slate-50' : 'text-zinc-300 hover:bg-[#18181b]')
+                }`}
+              >
+                <Settings size={14} className={currentTab === 'settings' ? 'text-violet-500' : (isLight ? 'text-slate-400' : 'text-zinc-400')} />
+                设置
               </button>
               <button
                 onClick={() => { setLogoutConfirmOpen(true); setProfileMenuOpen(false); }}

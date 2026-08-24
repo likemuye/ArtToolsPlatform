@@ -15,7 +15,6 @@ import {
   Play,
   Puzzle,
   RefreshCw,
-  RotateCcw,
   Search,
   Share2,
   SlidersHorizontal,
@@ -39,7 +38,9 @@ import {
   NotificationInput,
   PlatformUser,
   ProjectMember,
-  SpaceId
+  SpaceId,
+  DownloadTransferInput,
+  TransferTask
 } from '../types';
 import {
   applyDraftToExtension,
@@ -68,9 +69,15 @@ interface ExtensionManagerProps {
   addNotification: (notification: NotificationInput) => void;
   navigationTarget: NotificationAction | null;
   theme: 'light' | 'dark';
+  transferTasks: TransferTask[];
+  enqueueDownload: (input: DownloadTransferInput) => string | null;
+  pauseTransferTask: (taskId: string) => void;
+  resumeTransferTask: (taskId: string) => void;
+  cancelTransferTask: (taskId: string) => void;
+  retryTransferTask: (taskId: string) => void;
 }
 
-type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'waiting_network' | 'completed';
+type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'waiting_network' | 'completed' | 'failed';
 type DownloadKind = 'download' | 'update';
 
 interface ExtensionDownloadTask {
@@ -88,9 +95,7 @@ interface LaunchPrompt {
   type: 'missing' | 'restart' | 'hotload_failure' | 'update_close';
 }
 
-const DOWNLOAD_STORAGE_KEY = 'pixgo-extension-download-tasks-v03';
 const PROJECT_MEMBERS_STORAGE_KEY = 'art-launcher-project-members-v1';
-const MAX_CONCURRENT_DOWNLOADS = 3;
 
 const DCC_META = EXTENSION_TYPE_META;
 const DCC_OPTIONS = EXTENSION_TYPE_OPTIONS;
@@ -115,28 +120,6 @@ const STAGE_TABS: Array<{ value: ExtensionArtStage | null; label: string }> = [
   { value: null, label: '全部' },
   ...STAGE_OPTIONS.map(stage => ({ value: stage, label: STAGE_META[stage] }))
 ];
-
-const readDownloadTasks = (): ExtensionDownloadTask[] => {
-  try {
-    const raw = localStorage.getItem(DOWNLOAD_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(item => item && typeof item.extensionId === 'string' && typeof item.progress === 'number')
-      .map(item => ({
-        ...item,
-        id: String(item.id ?? `task-${item.extensionId}`),
-        kind: item.kind === 'update' ? 'update' : 'download',
-        status: 'paused' as DownloadStatus,
-        progress: Math.max(0, Math.min(99, item.progress)),
-        speedMBps: Number(item.speedMBps) || 6.8,
-        createdAt: Number(item.createdAt) || Date.now()
-      }));
-  } catch {
-    return [];
-  }
-};
 
 const formatDate = (value: string) => new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric',
@@ -194,7 +177,13 @@ export default function ExtensionManager({
   addLog,
   addNotification,
   navigationTarget,
-  theme
+  theme,
+  transferTasks,
+  enqueueDownload,
+  pauseTransferTask,
+  resumeTransferTask,
+  cancelTransferTask,
+  retryTransferTask
 }: ExtensionManagerProps) {
   const [selectedSpaceId, setSelectedSpaceId] = useState<SpaceId>(SpaceId.ProjectA);
   const [keyword, setKeyword] = useState('');
@@ -203,9 +192,28 @@ export default function ExtensionManager({
   const [selectedLifecycles, setSelectedLifecycles] = useState<ExtensionLifecycle[]>([]);
   const [selectedExtensionId, setSelectedExtensionId] = useState<string | null>(null);
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
-  const [tasks, setTasks] = useState<ExtensionDownloadTask[]>(readDownloadTasks);
+  const tasks = useMemo<ExtensionDownloadTask[]>(() => transferTasks
+    .filter(task => task.direction === 'download' && task.resourceKind === 'tool' && !['cancelled', 'completed'].includes(task.status))
+    .map(task => ({
+      id: task.id,
+      extensionId: task.resourceId,
+      kind: task.downloadKind ?? 'download',
+      status: task.status === 'transferring'
+        ? 'downloading'
+        : task.status === 'waiting_network'
+          ? 'waiting_network'
+          : task.status === 'failed'
+            ? 'failed'
+            : task.status === 'completed'
+              ? 'completed'
+              : task.status === 'paused'
+                ? 'paused'
+                : 'queued',
+      progress: task.progress,
+      speedMBps: task.speedMBps,
+      createdAt: new Date(task.createdAt).getTime()
+    })), [transferTasks]);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-  const [showResumePrompt, setShowResumePrompt] = useState(() => readDownloadTasks().length > 0);
   const [cancelTaskId, setCancelTaskId] = useState<string | null>(null);
   const [launchPrompt, setLaunchPrompt] = useState<LaunchPrompt | null>(null);
   const [deleteExtension, setDeleteExtension] = useState<DccExtension | null>(null);
@@ -221,7 +229,6 @@ export default function ExtensionManager({
   const [editorOriginalDraft, setEditorOriginalDraft] = useState<ExtensionDraft | null>(null);
   const [editorMessage, setEditorMessage] = useState('');
   const [pendingVersionPublish, setPendingVersionPublish] = useState<{ extensionId: string; draft: ExtensionDraft; currentVersion: string; nextVersion: string } | null>(null);
-  const completedTaskIds = useRef<Set<string>>(new Set());
   const previousSpaceId = useRef<SpaceId>(SpaceId.ProjectA);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const isLight = theme === 'light';
@@ -277,16 +284,10 @@ export default function ExtensionManager({
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      setTasks(previous => previous.map(task => task.status === 'waiting_network' ? { ...task, status: 'queued' } : task));
       addLog('网络已恢复，工具下载任务将从断点继续。', 'success');
     };
     const handleOffline = () => {
       setIsOnline(false);
-      setTasks(previous => previous.map(task => (
-        task.status === 'downloading' || task.status === 'queued'
-          ? { ...task, status: 'waiting_network' }
-          : task
-      )));
       addLog('网络已中断，工具下载进度已保留。', 'warning');
     };
     window.addEventListener('online', handleOnline);
@@ -298,56 +299,8 @@ export default function ExtensionManager({
   }, [addLog]);
 
   useEffect(() => {
-    localStorage.setItem(DOWNLOAD_STORAGE_KEY, JSON.stringify(tasks.filter(task => task.status !== 'completed')));
     onDownloadActivityChange(tasks.filter(task => task.status !== 'completed').length);
   }, [tasks, onDownloadActivityChange]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setTasks(previous => {
-        if (!isOnline) return previous;
-        let activeCount = previous.filter(task => task.status === 'downloading').length;
-        const promoted = previous.map(task => {
-          if (task.status === 'queued' && activeCount < MAX_CONCURRENT_DOWNLOADS) {
-            activeCount += 1;
-            return { ...task, status: 'downloading' as DownloadStatus };
-          }
-          return task;
-        });
-        return promoted.map(task => {
-          if (task.status !== 'downloading') return task;
-          const increment = 3 + (task.extensionId.charCodeAt(task.extensionId.length - 1) % 4);
-          const progress = Math.min(100, task.progress + increment);
-          return { ...task, progress, status: progress >= 100 ? 'completed' : task.status };
-        });
-      });
-    }, 650);
-    return () => window.clearInterval(timer);
-  }, [isOnline]);
-
-  useEffect(() => {
-    const completed = tasks.filter(task => task.status === 'completed' && !completedTaskIds.current.has(task.id));
-    if (completed.length === 0) return;
-    completed.forEach(task => completedTaskIds.current.add(task.id));
-    const completedByExtension = new Map(completed.map(task => [task.extensionId, task]));
-    setExtensions(previous => previous.map(extension => {
-      const task = completedByExtension.get(extension.id);
-      if (!task) return extension;
-      return {
-        ...extension,
-        version: task.kind === 'update' ? extension.latestVersion : extension.version,
-        lifecycle: 'installed_latest',
-        isActivated: false
-      };
-    }));
-    completed.forEach(task => {
-      const extension = extensions.find(item => item.id === task.extensionId);
-      if (extension) {
-        addLog(`${task.kind === 'update' ? '工具更新' : '工具下载'}完成：${extension.name}，文件完整性校验通过。`, 'success');
-      }
-    });
-    setTasks(previous => previous.filter(task => task.status !== 'completed'));
-  }, [tasks, extensions, setExtensions, addLog]);
 
   useEffect(() => {
     if (previousSpaceId.current === selectedSpaceId) return;
@@ -385,34 +338,36 @@ export default function ExtensionManager({
       addLog(`磁盘空间不足，需要 ${extension.fileSizeMB} MB，当前剩余 ${(simulatedDiskGB * 1024).toFixed(0)} MB。`, 'error');
       return;
     }
-    const activeCount = tasks.filter(task => task.status === 'downloading').length;
-    const nextStatus: DownloadStatus = isOnline
-      ? (activeCount < MAX_CONCURRENT_DOWNLOADS ? 'downloading' : 'queued')
-      : 'waiting_network';
-    const task: ExtensionDownloadTask = {
-      id: `extension-task-${extension.id}-${Date.now()}`,
-      extensionId: extension.id,
-      kind,
-      status: nextStatus,
-      progress: 0,
-      speedMBps: 5.2 + (extension.fileSizeMB % 5),
-      createdAt: Date.now()
-    };
-    setTasks(previous => [...previous, task]);
-    addLog(`${kind === 'update' ? '开始更新' : '开始下载'}「${extension.name}」${nextStatus === 'queued' ? '，当前并行任务已满，已进入队列。' : '。'}`, 'info');
+    const taskId = enqueueDownload({
+      resourceKind: 'tool',
+      resourceId: extension.id,
+      name: extension.name,
+      sizeMB: extension.fileSizeMB,
+      format: 'ZIP',
+      previewUrl: extension.thumbnail,
+      targetSpaceId: extension.spaceId,
+      downloadKind: kind
+    });
+    if (!taskId) {
+      addLog('工具下载任务创建失败：传输队列已满。', 'error');
+      return;
+    }
+    addLog(`${kind === 'update' ? '开始更新' : '开始下载'}「${extension.name}」，任务已加入传输中心。`, 'info');
   };
 
   const pauseTask = (taskId: string) => {
-    setTasks(previous => previous.map(task => task.id === taskId ? { ...task, status: 'paused' } : task));
+    pauseTransferTask(taskId);
   };
 
   const resumeTask = (taskId: string) => {
-    setTasks(previous => previous.map(task => task.id === taskId ? { ...task, status: isOnline ? 'queued' : 'waiting_network' } : task));
+    const task = tasks.find(item => item.id === taskId);
+    if (task?.status === 'failed') retryTransferTask(taskId);
+    else resumeTransferTask(taskId);
   };
 
   const confirmCancelTask = () => {
     if (!cancelTaskId) return;
-    setTasks(previous => previous.filter(task => task.id !== cancelTaskId));
+    cancelTransferTask(cancelTaskId);
     setCancelTaskId(null);
     addLog('工具下载已取消，临时文件已清理。', 'warning');
   };
@@ -707,7 +662,7 @@ export default function ExtensionManager({
     const task = getTask(extension.id);
     if (!task) return null;
     const remainingSeconds = Math.max(1, Math.ceil(((100 - task.progress) / 100 * extension.fileSizeMB) / task.speedMBps));
-    const taskLabel = task.status === 'queued' ? '等待下载' : task.status === 'paused' ? '已暂停' : task.status === 'waiting_network' ? '等待网络恢复' : task.kind === 'update' ? '正在更新' : '正在下载';
+    const taskLabel = task.status === 'queued' ? '等待下载' : task.status === 'paused' ? '已暂停' : task.status === 'waiting_network' ? '等待网络恢复' : task.status === 'failed' ? '下载失败，点击重试' : task.kind === 'update' ? '正在更新' : '正在下载';
 
     if (compact) {
       return (
@@ -1077,7 +1032,6 @@ export default function ExtensionManager({
         />
       )}
 
-      {showResumePrompt && tasks.length > 0 && <ConfirmDialog title="检测到未完成的下载" description={`已恢复 ${tasks.length} 个工具下载断点，是否继续下载？`} confirmLabel="继续下载" icon={RotateCcw} isLight={isLight} onCancel={() => { setTasks([]); setShowResumePrompt(false); }} onConfirm={() => { setTasks(previous => previous.map(task => ({ ...task, status: isOnline ? 'queued' : 'waiting_network' }))); setShowResumePrompt(false); }} />}
       {cancelTaskId && <ConfirmDialog title="取消下载任务？" description="取消后会删除当前临时文件，工具状态将恢复为未下载。" confirmLabel="取消下载" danger isLight={isLight} onCancel={() => setCancelTaskId(null)} onConfirm={confirmCancelTask} />}
       {deleteExtension && <ConfirmDialog title={`删除「${deleteExtension.name}」？`} description={`此操作不可恢复。${deleteExtension.sharedWith.length > 0 ? `该工具已分享给 ${deleteExtension.sharedWith.length} 位用户，删除后他们也将无法访问。` : ''} 已下载到本地的版本不受影响。`} confirmLabel="确认删除" danger isLight={isLight} onCancel={() => setDeleteExtension(null)} onConfirm={confirmDelete} />}
 

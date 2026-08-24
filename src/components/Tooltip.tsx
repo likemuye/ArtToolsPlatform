@@ -184,6 +184,10 @@ export function Tooltip({
     updatePosition();
   }, [content, open, updatePosition]);
 
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
   const child = React.Children.only(children) as React.ReactElement<any>;
   const childProps = child.props as Record<string, unknown>;
   const childAriaLabel = childProps['aria-label'];

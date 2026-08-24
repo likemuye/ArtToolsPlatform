@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   X, 
   HelpCircle,
@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { PROJECT_SPACES, INITIAL_APPS, EXTENSIONS_PROJECT_A, ART_ASSETS_PROJECT_A } from './data';
-import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession, AppNotification, NotificationAction, NotificationDomain, NotificationInput } from './types';
+import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession, AppNotification, NotificationAction, NotificationDomain, NotificationInput, TransferTask, AssetCategory } from './types';
 import {
   loadSession,
   saveSession,
@@ -32,6 +32,8 @@ import CanvasEditorWindow from './components/CanvasEditorWindow';
 import SettingsPanel from './components/SettingsPanel';
 import PermissionManager from './components/PermissionManager';
 import LoginPage from './components/LoginPage';
+import TransferCenter from './components/TransferCenter';
+import { useTransferQueue } from './hooks/useTransferQueue';
 
 const EXTENSION_STATE_STORAGE_KEY = 'pixgo-extensions-v03';
 const DCC_STATE_STORAGE_KEY = 'pixgo-dcc-state-v03';
@@ -196,6 +198,7 @@ export default function App() {
   const [notifications, setNotifications] = useState<AppNotification[]>(readInitialNotifications);
   const [notificationDetailId, setNotificationDetailId] = useState<string | null>(null);
   const [toolNavigationTarget, setToolNavigationTarget] = useState<NotificationAction | null>(readToolNavigationFromLocation);
+  const [isTransferCenterOpen, setIsTransferCenterOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(notifications));
@@ -266,6 +269,99 @@ export default function App() {
       setToast({ id: Date.now(), message, type });
     }
   };
+
+  const handleTransferCompleted = useCallback((task: TransferTask) => {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(task.direction === 'upload' ? '上传处理完成' : '下载完成', {
+        body: task.direction === 'upload' ? `「${task.name}」已提交到素材库。` : `「${task.name}」已写入本地缓存。`
+      });
+    }
+    if (task.direction === 'download' && task.resourceKind === 'asset') {
+      setDownloadedAssetIds(previous => {
+        if (previous.has(task.resourceId)) return previous;
+        const next = new Set(previous);
+        next.add(task.resourceId);
+        return next;
+      });
+      setSimulatedDiskGB(previous => Math.max(0.1, previous - task.sizeMB / 1024));
+      addLog(`素材「${task.name}」下载完成，已写入本地缓存。`, 'success');
+      return;
+    }
+
+    if (task.direction === 'download' && task.resourceKind === 'tool') {
+      setExtensions(previous => previous.map(extension => extension.id === task.resourceId ? {
+        ...extension,
+        version: task.downloadKind === 'update' ? extension.latestVersion : extension.version,
+        lifecycle: 'installed_latest',
+        isActivated: false
+      } : extension));
+      setSimulatedDiskGB(previous => Math.max(0.1, previous - task.sizeMB / 1024));
+      addLog(`${task.downloadKind === 'update' ? '工具更新' : '工具下载'}完成：「${task.name}」。`, 'success');
+      return;
+    }
+
+    if (task.direction === 'upload') {
+      const uploadedAt = new Date().toISOString();
+      const asset: PersonalUploadedAsset = {
+        id: `personal-asset-${task.id}`,
+        name: task.name,
+        category: task.category ?? AssetCategory.GUI,
+        format: task.format,
+        sizeMB: task.sizeMB,
+        thumbnail: task.previewUrl ?? '',
+        previewUrl: task.previewUrl ?? '',
+        author: session?.name ?? '当前用户',
+        platform: `个人空间·${task.targetFolderLabel ?? '置顶目录'}`,
+        desc: `用户上传文件 ${task.sourceFileName ?? task.name}，已完成质量检查与 AI 自动打标。`,
+        tags: task.tags,
+        uploadType: task.uploadType ?? 'image',
+        sourceFileName: task.sourceFileName ?? task.name,
+        uploadedAt
+      };
+      setPersonalAssets(previous => previous.some(item => item.id === asset.id) ? previous : [asset, ...previous]);
+      addLog(`素材「${task.name}」已提交到个人空间。`, 'success');
+    }
+  }, [session?.name]);
+
+  const transferQueue = useTransferQueue({
+    accountId: session?.email ?? 'signed-out',
+    onTaskCompleted: handleTransferCompleted
+  });
+  const transferExpiryRemindersRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const reminderThreshold = 6 * 24 * 60 * 60 * 1000;
+    const expiringTasks = transferQueue.tasks.filter(task => (
+      task.status === 'pending_submit'
+      && Date.now() - new Date(task.updatedAt).getTime() >= reminderThreshold
+      && !transferExpiryRemindersRef.current.has(task.id)
+    ));
+    if (expiringTasks.length === 0) return;
+    expiringTasks.forEach(task => transferExpiryRemindersRef.current.add(task.id));
+    setToast({
+      id: Date.now(),
+      message: `${expiringTasks.length} 个待提交素材将在 1 天内过期，请及时处理。`,
+      type: 'warning'
+    });
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('待提交素材即将过期', { body: `${expiringTasks.length} 个素材将在 1 天内自动清理。` });
+    }
+  }, [transferQueue.tasks]);
+
+  useEffect(() => {
+    setActiveExtensionDownloadCount(transferQueue.tasks.filter(task => (
+      task.direction === 'download' && task.resourceKind === 'tool' && !['completed', 'cancelled'].includes(task.status)
+    )).length);
+  }, [transferQueue.tasks]);
+
+  const transferBadge = useMemo(() => {
+    const pending = transferQueue.tasks.filter(task => task.status === 'pending_submit').length;
+    if (pending > 0) return { count: pending, tone: 'pending' as const };
+    const failed = transferQueue.tasks.filter(task => task.status === 'failed').length;
+    if (failed > 0) return { count: failed, tone: 'failed' as const };
+    const active = transferQueue.tasks.filter(task => !['completed', 'cancelled'].includes(task.status)).length;
+    return { count: active, tone: active > 0 ? 'active' as const : 'idle' as const };
+  }, [transferQueue.tasks]);
 
   const addNotification = (notification: NotificationInput) => {
     const nextNotification: AppNotification = {
@@ -350,16 +446,17 @@ export default function App() {
     }
   };
 
-  // 主动登出：清 Token / 下载任务 / 缓存，返回登录页。
+  // 主动登出：暂停并按账号保留传输断点，清理登录态后返回登录页。
   const handleLogout = () => {
+    transferQueue.pauseAllAndPersist();
     clearSession();
     setSession(null);
     setDownloadedAssetIds(new Set());
     setPersonalAssets([]);
     setCurrentTab('assets');
-    localStorage.removeItem('pixgo-extension-download-tasks-v03');
+    setIsTransferCenterOpen(false);
     setActiveExtensionDownloadCount(0);
-    addLog('👋 已退出登录，本地令牌与下载任务已清除。', 'info', { toast: false });
+    addLog('已退出登录，传输任务已暂停并按账号保留。', 'info', { toast: false });
   };
 
   // Token 生命周期守护：过期则自动登出；进入续期窗口（<1天）静默续期。
@@ -368,6 +465,7 @@ export default function App() {
     const guard = () => {
       const now = Date.now();
       if (isExpired(session, now)) {
+        transferQueue.pauseAllAndPersist();
         clearSession();
         setSession(null);
         setToast({ id: Date.now(), message: '登录态已过期，请重新扫码登录。', type: 'warning' });
@@ -405,6 +503,10 @@ export default function App() {
             setSimulatedDiskGB={setSimulatedDiskGB}
             theme={theme}
             addLog={addLog}
+            transferTasks={transferQueue.tasks}
+            enqueueDownload={transferQueue.enqueueDownload}
+            enqueueUploadBatch={transferQueue.enqueueUploadBatch}
+            cancelTransferTask={transferQueue.cancelTask}
           />
         );
       case 'settings':
@@ -513,6 +615,31 @@ export default function App() {
         notifications={notifications}
         onMarkAllNotificationsRead={markAllNotificationsRead}
         onOpenNotification={openNotificationDetail}
+        transferCenterOpen={isTransferCenterOpen}
+        onToggleTransferCenter={() => setIsTransferCenterOpen(previous => !previous)}
+        transferBadge={transferBadge}
+      />
+
+      <TransferCenter
+        open={isTransferCenterOpen}
+        onClose={() => setIsTransferCenterOpen(false)}
+        theme={theme}
+        tasks={transferQueue.tasks}
+        batches={transferQueue.batches}
+        isOnline={transferQueue.isOnline}
+        onPauseTask={transferQueue.pauseTask}
+        onResumeTask={transferQueue.resumeTask}
+        onCancelTask={transferQueue.cancelTask}
+        onRetryTask={transferQueue.retryTask}
+        onRemoveTask={transferQueue.removeTask}
+        onPauseBatch={transferQueue.pauseBatch}
+        onResumeBatch={transferQueue.resumeBatch}
+        onCancelBatch={transferQueue.cancelBatch}
+        onDiscardBatch={transferQueue.discardBatch}
+        onSubmitBatch={transferQueue.submitBatch}
+        onUpdateTaskTags={transferQueue.updateTaskTags}
+        onChangeBatchTarget={transferQueue.changeBatchTarget}
+        onClearCompleted={transferQueue.clearCompleted}
       />
 
       {/* 2. Main Work Content Area */}
@@ -531,6 +658,12 @@ export default function App() {
               simulatedDiskGB={simulatedDiskGB}
               onOpenSettings={() => setCurrentTab('settings')}
               onDownloadActivityChange={setActiveExtensionDownloadCount}
+              transferTasks={transferQueue.tasks}
+              enqueueDownload={transferQueue.enqueueDownload}
+              pauseTransferTask={transferQueue.pauseTask}
+              resumeTransferTask={transferQueue.resumeTask}
+              cancelTransferTask={transferQueue.cancelTask}
+              retryTransferTask={transferQueue.retryTask}
               addLog={addLog}
               addNotification={addNotification}
               navigationTarget={toolNavigationTarget}

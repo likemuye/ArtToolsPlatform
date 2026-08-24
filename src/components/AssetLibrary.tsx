@@ -40,7 +40,7 @@ import {
   Info,
   Minus
 } from 'lucide-react';
-import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType, AssetTaskStatus, PlatformUser, ProjectMember } from '../types';
+import { AppId, AppStatus, AppConfig, ArtAsset, AssetCategory, SpaceId, ProjectSpace, AssetFolder, PersonalUploadedAsset, PersonalUploadType, AssetTaskStatus, PlatformUser, ProjectMember, DownloadTransferInput, TransferTask, UploadTransferInput } from '../types';
 import { INITIAL_ASSET_FOLDERS_PROJECT_A, INITIAL_ASSET_FOLDER_ASSIGNMENTS_PROJECT_A, PROJECT_SPACES, ASSET_ORG_OPTIONS, ASSET_TASK_STATUS_LABELS, PLATFORM_USERS, INITIAL_PROJECT_MEMBERS, CURRENT_USER_EMAIL } from '../data';
 import { Tooltip, TooltipText } from './Tooltip';
 import { PlatformUserPicker, PLATFORM_USER_PICKER_MAX_USERS } from './PlatformUserPicker';
@@ -58,6 +58,10 @@ interface AssetLibraryProps {
   setSimulatedDiskGB: React.Dispatch<React.SetStateAction<number>>;
   theme: 'dark' | 'light';
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
+  transferTasks: TransferTask[];
+  enqueueDownload: (input: DownloadTransferInput) => string | null;
+  enqueueUploadBatch: (inputs: UploadTransferInput[], targetFolderLabel: string) => string | null;
+  cancelTransferTask: (taskId: string) => void;
 }
 
 type PersonalUploadItemStatus = 'tagging' | 'ready' | 'failed';
@@ -187,7 +191,7 @@ const ROOT_FOLDER_VISUALS: Record<string, { icon: typeof User; accent: string; t
 const DEFAULT_ASSET_FOLDER_ID = `${SpaceId.ProjectA}${FOLDER_SCOPE_SEPARATOR}${DEFAULT_ASSET_FOLDER_BASE_ID}`;
 const CREATED_FOLDER_ID_PATTERN = /^folder-(\d{10,})$/;
 const PERSONAL_UPLOAD_MAX_COUNT = 500;
-const PERSONAL_UPLOAD_MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024;
+const PERSONAL_UPLOAD_MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 const PERSONAL_UPLOAD_INLINE_FOLDER_LEVELS = 6;
 const PERSONAL_UPLOAD_FOLDER_INDENT_PX = 16;
 const BYTES_IN_MB = 1024 * 1024;
@@ -2004,7 +2008,11 @@ export default function AssetLibrary({
   simulatedDiskGB,
   setSimulatedDiskGB,
   theme,
-  addLog
+  addLog,
+  transferTasks,
+  enqueueDownload,
+  enqueueUploadBatch,
+  cancelTransferTask
 }: AssetLibraryProps) {
   // Navigation & filter states
   const [keyword, setKeyword] = useState<string>('');
@@ -2165,6 +2173,7 @@ export default function AssetLibrary({
   const [isPersonalUploadInfoOpen, setIsPersonalUploadInfoOpen] = useState<boolean>(false);
   const [isPersonalUploadDropzoneActive, setIsPersonalUploadDropzoneActive] = useState<boolean>(false);
   const [personalUploadDraft, setPersonalUploadDraft] = useState<PersonalUploadDraft | null>(null);
+  const [personalUploadQueuedBatchId, setPersonalUploadQueuedBatchId] = useState<string | null>(null);
   const [collapsedPersonalUploadFolderPaths, setCollapsedPersonalUploadFolderPaths] = useState<Set<string>>(new Set());
   const [aiTagThreshold, setAiTagThreshold] = useState<number>(DEFAULT_AI_TAG_THRESHOLD);
   const [pendingTagInputs, setPendingTagInputs] = useState<Record<string, string>>({});
@@ -2895,6 +2904,7 @@ export default function AssetLibrary({
   const closePersonalUploadDraft = () => {
     uploadSessionRef.current += 1;
     setPersonalUploadDraft(null);
+    setPersonalUploadQueuedBatchId(null);
     setCollapsedPersonalUploadFolderPaths(new Set());
     aiTagThresholdRef.current = DEFAULT_AI_TAG_THRESHOLD;
     setAiTagThreshold(DEFAULT_AI_TAG_THRESHOLD);
@@ -3033,109 +3043,30 @@ export default function AssetLibrary({
   };
 
   const confirmPersonalUpload = () => {
-    if (!personalUploadDraft || personalUploadDraft.isTagging) return;
-    const personalDefaultFolderId = getDefaultFolderIdBySpace(SpaceId.Personal);
-
-    const timestampBase = Date.now();
-    const createdFolders: AssetFolder[] = [];
-    const foldersAfterUpload = [...folders];
-    const pathToFolderId = new Map<string, string>();
-    let folderSequence = 0;
-
-    const targetFolderIds = personalUploadDraft.items.map((item) => {
-      const segments = getUploadFolderSegments(item.sourceFileName);
-      let parentId = personalDefaultFolderId;
-      let currentPath = '';
-
-      segments.forEach((segment) => {
-        currentPath = currentPath ? `${currentPath}/${segment}` : segment;
-        const resolvedFolderId = pathToFolderId.get(currentPath);
-        if (resolvedFolderId) {
-          parentId = resolvedFolderId;
-          return;
-        }
-
-        const existingFolder = foldersAfterUpload.find(folder => (
-          folder.parentId === parentId &&
-          folder.name.trim().toLocaleLowerCase() === segment.trim().toLocaleLowerCase()
-        ));
-
-        if (existingFolder) {
-          parentId = existingFolder.id;
-          pathToFolderId.set(currentPath, existingFolder.id);
-          return;
-        }
-
-        const newFolder: AssetFolder = {
-          id: buildScopedFolderId(SpaceId.Personal, `folder-${timestampBase + folderSequence}`),
-          name: segment,
-          parentId,
-          createdAt: new Date(timestampBase).toISOString()
-        };
-        folderSequence += 1;
-        foldersAfterUpload.push(newFolder);
-        createdFolders.push(newFolder);
-        pathToFolderId.set(currentPath, newFolder.id);
-        parentId = newFolder.id;
-      });
-
-      return parentId;
-    });
-
-    const newAssets: PersonalUploadedAsset[] = personalUploadDraft.items.map((item, index) => ({
-      id: `personal-asset-${timestampBase}-${index}`,
+    if (!personalUploadDraft || personalUploadDraft.isTagging || personalUploadQueuedBatchId) return;
+    const rootPaths = personalUploadDraft.items
+      .map(item => getUploadFolderSegments(item.sourceFileName)[0])
+      .filter((value): value is string => Boolean(value));
+    const targetFolderLabel = rootPaths.length > 0 && rootPaths.every(path => path === rootPaths[0])
+      ? rootPaths[0]
+      : '置顶目录';
+    const inputs: UploadTransferInput[] = personalUploadDraft.items.map(item => ({
       name: item.fileName.trim() || getFileBaseName(item.sourceFileName),
-      category: item.category,
-      format: item.format,
-      sizeMB: toDisplayMB(item.sizeBytes),
-      thumbnail: item.previewUrl,
-      previewUrl: item.previewUrl,
-      author: '当前用户',
-      platform: `个人空间·${getUploadFolderPath(item.sourceFileName) || '置顶目录'}`,
-      desc: `用户上传文件 ${item.sourceFileName}，已完成 AI 自动识别与标签确认。`,
-      tags: dedupeTags(item.tags),
-      uploadType: item.uploadType,
       sourceFileName: item.sourceFileName,
-      uploadedAt: new Date().toISOString()
+      sizeMB: toDisplayMB(item.sizeBytes),
+      format: item.format,
+      previewUrl: item.previewUrl,
+      category: item.category,
+      uploadType: item.uploadType,
+      tags: dedupeTags(item.tags)
     }));
-
-    if (createdFolders.length > 0) {
-      setFolders(foldersAfterUpload);
+    const batchId = enqueueUploadBatch(inputs, targetFolderLabel);
+    if (!batchId) {
+      addLog('上传任务创建失败：队列已满或存在超过 2 GB 的文件。', 'error');
+      return;
     }
-    setPersonalAssets(prev => [...newAssets, ...prev]);
-    setFolderAssignments(prev => {
-      const next = { ...prev };
-      newAssets.forEach((asset, index) => {
-        next[asset.id] = targetFolderIds[index] ?? personalDefaultFolderId;
-      });
-      return next;
-    });
-
-    const rootFolderIds = new Set(
-      personalUploadDraft.items
-        .map(item => getUploadFolderSegments(item.sourceFileName)[0])
-        .filter((name): name is string => Boolean(name))
-        .map(name => pathToFolderId.get(name))
-        .filter((folderId): folderId is string => Boolean(folderId))
-    );
-    const hasLooseFiles = personalUploadDraft.items.some(item => getUploadFolderSegments(item.sourceFileName).length === 0);
-    const destinationFolderId = !hasLooseFiles && rootFolderIds.size === 1
-      ? [...rootFolderIds][0]
-      : personalDefaultFolderId;
-    setSelectedFolderId(destinationFolderId);
-    setExpandedFolderIds(prev => {
-      const next = new Set(prev);
-      next.add(personalDefaultFolderId);
-      pathToFolderId.forEach(folderId => next.add(folderId));
-      return next;
-    });
-    addLog(
-      createdFolders.length > 0
-        ? `📤 个人空间上传完成：${newAssets.length} 条素材已按本地结构归档，并创建 ${createdFolders.length} 个文件夹。`
-        : `📤 个人空间上传完成：${newAssets.length} 条素材已归档到对应目录。`,
-      'success'
-    );
-    closePersonalUploadDraft();
+    addLog(`已创建上传批次，共 ${inputs.length} 个文件。处理完成后请在传输中心提交入库。`, 'success');
+    setPersonalUploadQueuedBatchId(batchId);
   };
 
   const togglePersonalUploadFolder = (folderPath: string) => {
@@ -3166,12 +3097,14 @@ export default function AssetLibrary({
       return;
     }
 
-    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-    if (totalBytes > PERSONAL_UPLOAD_MAX_TOTAL_BYTES) {
-      alert(`单次上传总大小不能超过 10 GB。\n当前选择总大小：${formatUploadTotal(totalBytes)}。`);
-      addLog(`❌ 个人空间上传被拦截：批量体积 ${formatUploadTotal(totalBytes)} 超过 10 GB。`, 'error', { toast: false });
+    const oversized = files.filter(file => file.size > PERSONAL_UPLOAD_MAX_FILE_BYTES);
+    if (oversized.length > 0) {
+      alert(`单文件不能超过 2 GB。\n当前有 ${oversized.length} 个文件超出限制。`);
+      addLog(`个人空间上传被拦截：${oversized.length} 个文件超过 2 GB。`, 'error', { toast: false });
       return;
     }
+
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
 
     setIsPersonalUploadInfoOpen(false);
 
@@ -3201,6 +3134,7 @@ export default function AssetLibrary({
 
     setPendingTagInputs({});
     setCollapsedPersonalUploadFolderPaths(new Set());
+    setPersonalUploadQueuedBatchId(null);
     setPersonalUploadDraft({
       items: initialItems,
       totalBytes,
@@ -3268,13 +3202,13 @@ export default function AssetLibrary({
       return;
     }
 
-    const addedBytes = files.reduce((sum, file) => sum + file.size, 0);
-    const combinedBytes = draft.totalBytes + addedBytes;
-    if (combinedBytes > PERSONAL_UPLOAD_MAX_TOTAL_BYTES) {
-      alert(`单次上传总大小不能超过 10 GB。\n合计：${formatUploadTotal(combinedBytes)}。`);
-      addLog(`❌ 继续添加被拦截：合计体积 ${formatUploadTotal(combinedBytes)} 超过 10 GB。`, 'error', { toast: false });
+    const oversized = files.filter(file => file.size > PERSONAL_UPLOAD_MAX_FILE_BYTES);
+    if (oversized.length > 0) {
+      alert(`单文件不能超过 2 GB。\n当前有 ${oversized.length} 个文件超出限制。`);
+      addLog(`继续添加被拦截：${oversized.length} 个文件超过 2 GB。`, 'error', { toast: false });
       return;
     }
+    const addedBytes = files.reduce((sum, file) => sum + file.size, 0);
 
     const sessionId = Date.now();
     uploadSessionRef.current = sessionId;
@@ -3775,6 +3709,13 @@ export default function AssetLibrary({
     return matches;
   }, [folderById, folderKeyword, folders]);
 
+  const getAssetTransferTask = useCallback((assetId: string) => transferTasks.find(task => (
+    task.direction === 'download'
+    && task.resourceKind === 'asset'
+    && task.resourceId === assetId
+    && !['completed', 'cancelled'].includes(task.status)
+  )), [transferTasks]);
+
   // Queue Concurrency Handler (Max 3 concurrent downloading)
   useEffect(() => {
     const downloadingCount = activeDownloads.filter(d => d.status === 'downloading').length;
@@ -3872,26 +3813,24 @@ export default function AssetLibrary({
       return;
     }
 
-    // Check if copy task is already active
-    if (activeDownloads.some(d => d.assetId === asset.id)) {
+    if (getAssetTransferTask(asset.id)) {
+      addLog(`素材「${asset.name}」已在下载队列中。`, 'info');
       return;
     }
-
-    // Push into active tasks
-    const downloadingCount = activeDownloads.filter(d => d.status === 'downloading').length;
-    const initialStatus = downloadingCount < 3 ? 'downloading' : 'queued';
-
-    setActiveDownloads(prev => [...prev, {
-      assetId: asset.id,
-      progress: 0,
-      status: initialStatus
-    }]);
-
-    if (initialStatus === 'queued') {
-      addLog(`⏳ (下载队满) 队列负荷中，素材 ${asset.name} 已安全置入第 ${activeDownloads.length - downloadingCount + 1} 位缓冲等候列中...`, 'warning');
-    } else {
-      simulateDownloadProgress(asset.id);
+    const taskId = enqueueDownload({
+      resourceKind: 'asset',
+      resourceId: asset.id,
+      name: asset.name,
+      sizeMB: asset.sizeMB,
+      format: asset.format,
+      previewUrl: asset.thumbnail,
+      targetSpaceId: currentSpace.id
+    });
+    if (!taskId) {
+      addLog('下载任务创建失败：传输队列已达到 500 项上限。', 'error');
+      return;
     }
+    addLog(`素材「${asset.name}」已加入下载队列。`, 'info');
   };
 
   // Check compatibility Matrix for Import DCC - F9 Path B
@@ -4061,8 +4000,10 @@ export default function AssetLibrary({
 
   // Clear specific download task in queue
   const cancelActiveDownload = (id: string) => {
+    const transferTask = getAssetTransferTask(id);
+    if (transferTask) cancelTransferTask(transferTask.id);
     setActiveDownloads(prev => prev.filter(d => d.assetId !== id));
-    addLog(`⚠️ 已从后台下载排队中移除该素材缓存下载操作。`, 'warning');
+    addLog('已取消该素材的下载任务。', 'warning');
   };
 
   const closeFolderEditor = () => {
@@ -5447,7 +5388,7 @@ export default function AssetLibrary({
   const canShareSelectedAsset = !!selectedAsset && !isSelectedExternalAsset && isPersonalSpace;
   const canCopySelectedAssetLink = !!selectedAsset && !isSelectedExternalAsset && (isPersonalSpace || isProjectA);
   const selectedAssetTask = selectedAsset && !isSelectedExternalAsset
-    ? activeDownloads.find(task => task.assetId === selectedAsset.id)
+    ? getAssetTransferTask(selectedAsset.id)
     : null;
   const projectDetailTimestampLabel = useMemo(() => formatDetailDateTime(new Date().toISOString()), []);
   const selectedPersonalAsset = selectedAsset
@@ -6050,6 +5991,7 @@ export default function AssetLibrary({
 
       <input
         ref={personalUploadInputRef}
+        aria-label="选择上传文件"
         type="file"
         multiple
         accept="image/*,video/*,.gif"
@@ -6748,7 +6690,7 @@ export default function AssetLibrary({
                         const isBatchSelected = isBatchMode && batchSelectedIds.has(asset.id);
 
                         // Check if currently downloading/queued
-                        const activeTask = activeDownloads.find(task => task.assetId === asset.id);
+                        const activeTask = getAssetTransferTask(asset.id);
 
                         return (
                           <div
@@ -7004,7 +6946,7 @@ export default function AssetLibrary({
             </div>
 
             <div className="personal-upload-info-body mt-4 rounded border border-zinc-800 bg-black/40 p-3 text-[11px] font-mono text-zinc-300 space-y-1.5">
-              <p>支持图片、动图（GIF）和视频；单次最多 500 条，总大小不超过 10 GB。</p>
+              <p>支持图片、动图（GIF）和视频；单文件不超过 2 GB，队列最多容纳 500 项。</p>
               <p>确认上传前会自动完成 AI 打标，可继续调整素材名称、分类和标签。</p>
             </div>
 
@@ -7656,7 +7598,7 @@ export default function AssetLibrary({
 
       {personalUploadDraft && (
         <div className="personal-upload-modal personal-upload-workspace-page fixed inset-0 z-50 bg-black/85 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center">
-          <div className="personal-upload-modal-panel w-full max-w-[1080px] h-[76vh] min-h-[520px] max-h-[760px] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] flex flex-col">
+          <div className={`personal-upload-modal-panel w-full max-w-[1080px] h-[76vh] min-h-[520px] max-h-[760px] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] flex flex-col ${personalUploadQueuedBatchId ? 'is-queued' : ''}`}>
             <div className="personal-upload-dialog-header shrink-0 px-5 py-4 border-b border-[#27272a] flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
@@ -7670,6 +7612,12 @@ export default function AssetLibrary({
                   <div className="mt-1.5 flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
                     <Loader2 size={11} className="animate-spin text-[#00ff00]" />
                     正在执行上传预处理和智能打标...
+                  </div>
+                )}
+                {personalUploadQueuedBatchId && (
+                  <div className="personal-upload-queued-notice mt-1.5 flex items-center gap-1.5 text-[11px] font-medium">
+                    <CheckCircle size={13} />
+                    已加入上传队列，可手动关闭此窗口
                   </div>
                 )}
               </div>
@@ -7991,8 +7939,8 @@ export default function AssetLibrary({
                 <button
                   type="button"
                   onClick={() => personalAppendInputRef.current?.click()}
-                  disabled={personalUploadDraft.isTagging}
-                  className={`personal-upload-modal-cancel inline-flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white ${personalUploadDraft.isTagging ? 'cursor-not-allowed opacity-50' : ''}`}
+                  disabled={personalUploadDraft.isTagging || Boolean(personalUploadQueuedBatchId)}
+                  className={`personal-upload-modal-cancel inline-flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white ${personalUploadDraft.isTagging || personalUploadQueuedBatchId ? 'cursor-not-allowed opacity-50' : ''}`}
                 >
                   <Plus size={13} />
                   添加文件
@@ -8000,8 +7948,8 @@ export default function AssetLibrary({
                 <button
                   type="button"
                   onClick={() => personalAppendFolderInputRef.current?.click()}
-                  disabled={personalUploadDraft.isTagging}
-                  className={`personal-upload-modal-cancel inline-flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white ${personalUploadDraft.isTagging ? 'cursor-not-allowed opacity-50' : ''}`}
+                  disabled={personalUploadDraft.isTagging || Boolean(personalUploadQueuedBatchId)}
+                  className={`personal-upload-modal-cancel inline-flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white ${personalUploadDraft.isTagging || personalUploadQueuedBatchId ? 'cursor-not-allowed opacity-50' : ''}`}
                 >
                   <FolderOpen size={13} />
                   添加文件夹
@@ -8013,19 +7961,19 @@ export default function AssetLibrary({
                   onClick={closePersonalUploadDraft}
                   className="personal-upload-modal-cancel rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white"
                 >
-                  取消
+                  {personalUploadQueuedBatchId ? '关闭' : '取消'}
                 </button>
                 <button
                   type="button"
                   onClick={confirmPersonalUpload}
-                  disabled={personalUploadDraft.isTagging || personalUploadDraft.items.length === 0}
+                  disabled={personalUploadDraft.isTagging || personalUploadDraft.items.length === 0 || Boolean(personalUploadQueuedBatchId)}
                   className={`personal-upload-confirm rounded px-4 py-1.5 text-xs font-bold transition-colors ${
-                    personalUploadDraft.isTagging || personalUploadDraft.items.length === 0
+                    personalUploadDraft.isTagging || personalUploadDraft.items.length === 0 || personalUploadQueuedBatchId
                       ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
                       : 'bg-[#00ff00] text-black hover:bg-[#00dd00]'
                   }`}
                 >
-                  确认上传
+                  开始上传
                 </button>
               </div>
             </div>

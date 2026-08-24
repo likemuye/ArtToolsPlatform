@@ -148,6 +148,82 @@ export interface AssetFolder {
   createdAt?: string;
 }
 
+export type TransferDirection = 'upload' | 'download';
+export type TransferResourceKind = 'asset' | 'tool';
+export type TransferStatus =
+  | 'queued'
+  | 'transferring'
+  | 'inspecting'
+  | 'tagging'
+  | 'pending_submit'
+  | 'submitting'
+  | 'paused'
+  | 'waiting_network'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface TransferTask {
+  id: string;
+  batchId?: string;
+  direction: TransferDirection;
+  resourceKind: TransferResourceKind;
+  resourceId: string;
+  name: string;
+  sourceFileName?: string;
+  sizeMB: number;
+  format: string;
+  previewUrl?: string;
+  category?: AssetCategory;
+  uploadType?: PersonalUploadType;
+  tags: string[];
+  targetSpaceId?: SpaceId;
+  targetFolderLabel?: string;
+  downloadKind?: 'download' | 'update';
+  status: TransferStatus;
+  resumeStatus?: TransferStatus;
+  progress: number;
+  speedMBps: number;
+  retryCount: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  completionApplied?: boolean;
+}
+
+export interface TransferBatch {
+  id: string;
+  name: string;
+  taskIds: string[];
+  targetSpaceId: SpaceId;
+  targetFolderLabel: string;
+  createdAt: string;
+  submittedAt?: string;
+}
+
+export interface UploadTransferInput {
+  name: string;
+  sourceFileName: string;
+  sizeMB: number;
+  format: string;
+  previewUrl: string;
+  category: AssetCategory;
+  uploadType: PersonalUploadType;
+  tags: string[];
+}
+
+export interface DownloadTransferInput {
+  resourceKind: TransferResourceKind;
+  resourceId: string;
+  name: string;
+  sizeMB: number;
+  format: string;
+  previewUrl?: string;
+  targetSpaceId?: SpaceId;
+  downloadKind?: 'download' | 'update';
+}
+
 export type CanvasRole = 'owner' | 'editor' | 'viewer';
 
 export interface CanvasFolder {
