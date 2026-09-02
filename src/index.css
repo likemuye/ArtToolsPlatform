@@ -3969,6 +3969,13 @@ input:focus {
   color: #ffffff !important;
 }
 
+.ui-v2.light .personal-upload-confirm:disabled {
+  background: #e5e7eb !important;
+  color: #9ca3af !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+}
+
 @media (max-width: 1100px) {
   .ui-v2.light .asset-detail-dialog {
     display: flex !important;
@@ -4542,6 +4549,9 @@ input:focus {
 .app-sidebar-transfer-badge.is-pending { background: #7c3aed; }
 .app-sidebar-transfer-badge.is-failed { background: #dc2626; }
 .app-sidebar-transfer-badge.is-active { background: #2563eb; }
+.app-sidebar-transfer-badge.is-active::after { content: ''; position: absolute; inset: -4px; border: 1px solid rgba(37, 99, 235, .45); border-radius: 50%; animation: transfer-badge-pulse 1.4s ease-out infinite; }
+.app-sidebar-transfer-label { max-width: 52px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes transfer-badge-pulse { from { opacity: 1; transform: scale(.75); } to { opacity: 0; transform: scale(1.35); } }
 .app-sidebar-transfer.is-active { border-color: #8b5cf6 !important; background: #f3efff !important; color: #6d28d9 !important; }
 
 .transfer-center { position: fixed; z-index: 220; top: 0; bottom: 0; left: 72px; width: min(680px, calc(100vw - 72px)); display: flex; flex-direction: column; transform: translateX(calc(-100% - 74px)); transition: transform 220ms cubic-bezier(.2,.8,.2,1); border-right: 1px solid #dfe3e9; background: #f6f7f9; color: #222936; box-shadow: 18px 0 42px rgba(40, 32, 68, .14); pointer-events: none; }
@@ -4560,17 +4570,31 @@ input:focus {
 .transfer-tabs button { height: 34px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 4px; background: transparent; color: #6f7988; font-size: 12px; cursor: pointer; }
 .transfer-tabs button.is-active { background: #fff; color: #6d28d9; font-weight: 650; box-shadow: 0 1px 3px rgba(32, 26, 52, .1); }
 .transfer-tabs button > span { min-width: 17px; padding: 1px 5px; border-radius: 8px; background: #ede9fe; color: #6d28d9; font-size: 9px; }
+.transfer-section-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin: 10px 24px 0; border-bottom: 1px solid #e3e6eb; }
+.transfer-section-tabs button { height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #858e9c; font-size: 10px; cursor: pointer; }
+.transfer-section-tabs button span { min-width: 15px; padding: 0 4px; border-radius: 8px; background: #eceef2; color: #7d8694; font-size: 8px; }
+.transfer-section-tabs button.is-active { border-bottom-color: #7c3aed; color: #6d28d9; font-weight: 650; }
+.transfer-section-tabs button.is-active span { background: #ede9fe; color: #6d28d9; }
 .transfer-toolbar { display: flex; align-items: center; justify-content: space-between; height: 48px; padding: 0 24px; color: #7e8795; font-size: 10px; }
+.transfer-toolbar > div { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .transfer-toolbar button { border: 0; background: transparent; color: #7c3aed; font-size: 10px; cursor: pointer; }
 .transfer-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 24px 24px; }
 .transfer-batch, .transfer-task-row { border: 1px solid #dfe3e9; border-radius: 6px; background: #fff; }
 .transfer-batch + .transfer-batch, .transfer-task-row + .transfer-task-row { margin-top: 10px; }
-.transfer-batch-header { display: flex; align-items: center; min-height: 54px; padding: 0 12px; border-bottom: 1px solid #eceef2; }
+.transfer-batch-header { display: flex; align-items: center; min-height: 72px; padding: 0 12px; border-bottom: 1px solid #eceef2; }
 .transfer-batch-toggle { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; background: transparent; color: #8a93a1; cursor: pointer; }
 .transfer-batch-toggle:hover { background: #f3efff; color: #7c3aed; }
-.transfer-batch-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; margin-left: 4px; }
-.transfer-batch-copy strong { overflow: hidden; color: #2c3340; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.transfer-batch-copy span { margin-top: 3px; color: #969eaa; font-size: 9px; }
+.transfer-batch-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; margin-left: 4px; padding: 10px 8px 10px 0; }
+.transfer-batch-title-line { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.transfer-batch-title-line strong { flex: 1; overflow: hidden; color: #2c3340; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.transfer-batch-title-line time { flex: 0 0 auto; color: #969eaa; font: 9px/1 var(--font-mono); }
+.transfer-batch-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.transfer-batch-metrics span { padding: 2px 6px; border-radius: 8px; background: #f0f1f4; color: #7b8492; font-size: 8px; line-height: 12px; }
+.transfer-batch-metrics span.is-success { background: #edf8f1; color: #39785a; }
+.transfer-batch-metrics span.is-danger { background: #fef0f0; color: #c93737; }
+.transfer-batch-metrics span.is-active { background: #f1edff; color: #6d28d9; }
+.transfer-batch-progress { height: 3px; overflow: hidden; border-radius: 2px; background: #eceef2; }
+.transfer-batch-progress span { display: block; height: 100%; border-radius: inherit; background: #7c3aed; transition: width 300ms ease; }
 .transfer-batch-actions, .transfer-task-actions { display: flex; gap: 2px; }
 .transfer-icon-button { width: 28px; height: 28px; border-radius: 4px; }
 .transfer-icon-button:disabled { opacity: .35; cursor: not-allowed; }
@@ -4578,6 +4602,8 @@ input:focus {
 .transfer-target { width: calc(100% - 24px); height: 34px; margin: 10px 12px; padding: 0 10px; display: flex; align-items: center; gap: 7px; border: 1px solid #e6e8ed; border-radius: 4px; background: #fafafa; color: #667182; font-size: 10px; text-align: left; cursor: pointer; }
 .transfer-target span:first-of-type { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .transfer-target span:last-child { color: #7c3aed; }
+.transfer-target-static { min-height: 34px; margin: 10px 12px; padding: 7px 10px; display: flex; align-items: center; gap: 7px; border: 1px solid #e6e8ed; border-radius: 4px; background: #fafafa; color: #667182; font-size: 10px; }
+.transfer-target-static span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .transfer-batch-tasks { border-top: 1px solid #eceef2; }
 .transfer-task-row { min-height: 82px; display: flex; align-items: flex-start; gap: 11px; padding: 12px; }
 .transfer-task-row.is-compact { border: 0; border-radius: 0; min-height: 76px; }
@@ -4587,6 +4613,7 @@ input:focus {
 .transfer-task-main { flex: 1; min-width: 0; }
 .transfer-task-title-row { display: flex; align-items: center; gap: 8px; }
 .transfer-task-name { flex: 1; overflow: hidden; color: #303744; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.transfer-task-path { margin-top: 4px; overflow: hidden; color: #7d8694; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .transfer-status { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 3px; background: #f1f2f4; color: #747e8d; font-size: 9px; }
 .transfer-status.is-active, .transfer-status.is-pending, .transfer-status.is-tagging { background: #f1edff; color: #6d28d9; }
 .transfer-status.is-inspection { background: #edf5ff; color: #2563eb; }
@@ -4594,11 +4621,12 @@ input:focus {
 .transfer-status.is-success { background: #edf8f1; color: #39785a; }
 .transfer-status.is-danger { background: #fef0f0; color: #c93737; }
 .transfer-task-meta { display: flex; gap: 8px; margin-top: 5px; color: #969eaa; font: 9px/14px var(--font-mono); }
+.transfer-task-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 5px; }
+.transfer-task-chip { display: inline-flex; align-items: center; min-height: 18px; padding: 1px 6px; border: 1px solid #e6e1fb; border-radius: 4px; background: #f7f4ff; color: #6d28d9; font-size: 9px; line-height: 14px; }
+.transfer-task-chip.is-type { border-color: #dbeafe; background: #eff6ff; color: #2563eb; }
 .transfer-progress { height: 3px; margin-top: 7px; overflow: hidden; border-radius: 2px; background: #eceef2; }
 .transfer-progress span { display: block; height: 100%; border-radius: inherit; background: #7c3aed; transition: width 300ms ease; }
 .transfer-error { margin: 5px 0 0; color: #c93737; font-size: 9px; }
-.transfer-tags { display: flex; align-items: center; gap: 4px; max-width: 100%; margin-top: 6px; padding: 0; border: 0; background: transparent; color: #8a93a1; font-size: 9px; cursor: pointer; }
-.transfer-tags span { padding: 1px 5px; border-radius: 3px; background: #f1edff; color: #7450b7; }
 .transfer-batch-footer { min-height: 53px; padding: 9px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #eceef2; background: #fbfbfc; }
 .transfer-batch-footer > span { color: #8d96a3; font-size: 9px; }
 .transfer-batch-footer > div { display: flex; gap: 7px; }
@@ -4619,14 +4647,29 @@ input:focus {
 .transfer-center.is-dark .transfer-network-row, .transfer-center.is-dark .transfer-batch-footer { border-color: #292933; background: #141419; }
 .transfer-center.is-dark .transfer-tabs { border-color: #30303a; background: #0d0d11; }
 .transfer-center.is-dark .transfer-tabs button.is-active { background: #272231; color: #c4b5fd; }
+.transfer-center.is-dark .transfer-section-tabs { border-color: #30303a; }
+.transfer-center.is-dark .transfer-section-tabs button { color: #8f8f99; }
+.transfer-center.is-dark .transfer-section-tabs button span { background: #25252c; color: #a1a1aa; }
+.transfer-center.is-dark .transfer-section-tabs button.is-active { color: #c4b5fd; }
+.transfer-center.is-dark .transfer-section-tabs button.is-active span { background: #30283f; color: #c4b5fd; }
 .transfer-center.is-dark .transfer-batch-header, .transfer-center.is-dark .transfer-batch-tasks, .transfer-center.is-dark .transfer-batch-footer { border-color: #292933; }
-.transfer-center.is-dark .transfer-target, .transfer-center.is-dark .transfer-file-icon { border-color: #30303a; background: #101014; color: #a1a1aa; }
+.transfer-center.is-dark .transfer-batch-title-line time { color: #777784; }
+.transfer-center.is-dark .transfer-batch-metrics span { background: #25252c; color: #a1a1aa; }
+.transfer-center.is-dark .transfer-batch-metrics span.is-success { background: #173128; color: #86d3af; }
+.transfer-center.is-dark .transfer-batch-metrics span.is-danger { background: #381e22; color: #f4a6ad; }
+.transfer-center.is-dark .transfer-batch-metrics span.is-active { background: #30283f; color: #c4b5fd; }
+.transfer-center.is-dark .transfer-batch-progress { background: #2a2a31; }
+.transfer-center.is-dark .transfer-target, .transfer-center.is-dark .transfer-target-static, .transfer-center.is-dark .transfer-file-icon { border-color: #30303a; background: #101014; color: #a1a1aa; }
+.transfer-center.is-dark .transfer-task-path { color: #8f8f99; }
+.transfer-center.is-dark .transfer-task-chip { border-color: #39314f; background: #211b2f; color: #c4b5fd; }
+.transfer-center.is-dark .transfer-task-chip.is-type { border-color: #263a57; background: #17263d; color: #93c5fd; }
 .transfer-center.is-dark .transfer-secondary-button { border-color: #34343e; background: #18181d; color: #a1a1aa; }
 
 @media (max-width: 720px) {
   .transfer-center { left: 0; width: 100vw; transform: translateX(-100%); }
   .transfer-list, .transfer-header, .transfer-network-row { padding-left: 16px; padding-right: 16px; }
   .transfer-tabs { margin-left: 16px; margin-right: 16px; }
+  .transfer-section-tabs { margin-left: 16px; margin-right: 16px; }
   .transfer-toolbar { padding-left: 16px; padding-right: 16px; }
   .transfer-batch-footer { align-items: flex-start; flex-direction: column; }
 }

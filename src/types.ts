@@ -146,16 +146,22 @@ export interface AssetFolder {
   name: string;
   parentId: string | null;
   createdAt?: string;
+  /** Optional user-provided cover image (stored as a data URL in this demo). */
+  coverUrl?: string;
+  /** Sibling ordering; larger values are placed later in the same directory. */
+  sortOrder?: number;
 }
 
 export type TransferDirection = 'upload' | 'download';
 export type TransferResourceKind = 'asset' | 'tool';
+export type TransferFailureStage = 'upload' | 'inspection' | 'tagging' | 'ingestion' | 'download' | 'source' | 'storage';
+export type TransferPauseReason = 'network' | 'token' | 'logout' | 'restart' | 'manual';
 export type TransferStatus =
   | 'queued'
   | 'transferring'
+  | 'packing'
   | 'inspecting'
   | 'tagging'
-  | 'pending_submit'
   | 'submitting'
   | 'paused'
   | 'waiting_network'
@@ -177,15 +183,23 @@ export interface TransferTask {
   category?: AssetCategory;
   uploadType?: PersonalUploadType;
   tags: string[];
+  /** Source space for downloads; upload tasks use targetSpaceId instead. */
+  sourceSpaceId?: SpaceId;
   targetSpaceId?: SpaceId;
+  targetFolderId?: string;
   targetFolderLabel?: string;
-  downloadKind?: 'download' | 'update';
+  downloadKind?: 'download' | 'update' | 'pack';
   status: TransferStatus;
   resumeStatus?: TransferStatus;
+  pauseReason?: TransferPauseReason;
   progress: number;
   speedMBps: number;
   retryCount: number;
   error?: string;
+  failureStage?: TransferFailureStage;
+  retryable?: boolean;
+  failedAt?: string;
+  temporaryDataExpiresAt?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -197,9 +211,24 @@ export interface TransferBatch {
   name: string;
   taskIds: string[];
   targetSpaceId: SpaceId;
+  targetFolderId?: string;
   targetFolderLabel: string;
   createdAt: string;
   submittedAt?: string;
+  settledAt?: string;
+  notificationApplied?: boolean;
+  direction?: TransferDirection;
+  downloadMode?: 'files' | 'pack';
+  /** Shared content-understanding confidence chosen before an upload starts. */
+  confidence?: number;
+}
+
+export interface TransferBatchSummary {
+  batch: TransferBatch;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  total: number;
 }
 
 export interface UploadTransferInput {
@@ -211,6 +240,8 @@ export interface UploadTransferInput {
   category: AssetCategory;
   uploadType: PersonalUploadType;
   tags: string[];
+  /** Batch-wide content-understanding confidence (0-100). */
+  confidence?: number;
 }
 
 export interface DownloadTransferInput {
@@ -221,6 +252,8 @@ export interface DownloadTransferInput {
   format: string;
   previewUrl?: string;
   targetSpaceId?: SpaceId;
+  /** Local save directory for a single download; batch cards carry this on the batch. */
+  targetFolderLabel?: string;
   downloadKind?: 'download' | 'update';
 }
 

@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { PROJECT_SPACES, INITIAL_APPS, EXTENSIONS_PROJECT_A, ART_ASSETS_PROJECT_A } from './data';
-import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession, AppNotification, NotificationAction, NotificationDomain, NotificationInput, TransferTask, AssetCategory } from './types';
+import { ProjectSpace, AppConfig, DccExtension, ArtAsset, PersonalUploadedAsset, SpaceId, AuthSession, AppNotification, NotificationAction, NotificationDomain, NotificationInput, TransferBatchSummary, TransferTask, AssetCategory } from './types';
 import {
   loadSession,
   saveSession,
@@ -194,11 +194,12 @@ export default function App() {
       ?? PROJECT_SPACES[0]
   );
   const [isInitial, setIsInitial] = useState<boolean>(true);
-  const [toast, setToast] = useState<{ id: number; message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ id: number; message: string; type: 'info' | 'success' | 'warning' | 'error'; action?: 'open-upload-failures' } | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>(readInitialNotifications);
   const [notificationDetailId, setNotificationDetailId] = useState<string | null>(null);
   const [toolNavigationTarget, setToolNavigationTarget] = useState<NotificationAction | null>(readToolNavigationFromLocation);
   const [isTransferCenterOpen, setIsTransferCenterOpen] = useState(false);
+  const [transferFocusRequest, setTransferFocusRequest] = useState<{ direction: 'upload' | 'download'; section: 'failed'; nonce: number } | null>(null);
 
   useEffect(() => {
     localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(notifications));
@@ -271,12 +272,10 @@ export default function App() {
   };
 
   const handleTransferCompleted = useCallback((task: TransferTask) => {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification(task.direction === 'upload' ? '上传处理完成' : '下载完成', {
-        body: task.direction === 'upload' ? `「${task.name}」已提交到素材库。` : `「${task.name}」已写入本地缓存。`
-      });
-    }
     if (task.direction === 'download' && task.resourceKind === 'asset') {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('下载完成', { body: `「${task.name}」已写入本地缓存。` });
+      }
       setDownloadedAssetIds(previous => {
         if (previous.has(task.resourceId)) return previous;
         const next = new Set(previous);
@@ -289,6 +288,9 @@ export default function App() {
     }
 
     if (task.direction === 'download' && task.resourceKind === 'tool') {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('下载完成', { body: `「${task.name}」已写入本地缓存。` });
+      }
       setExtensions(previous => previous.map(extension => extension.id === task.resourceId ? {
         ...extension,
         version: task.downloadKind === 'update' ? extension.latestVersion : extension.version,
@@ -312,41 +314,36 @@ export default function App() {
         previewUrl: task.previewUrl ?? '',
         author: session?.name ?? '当前用户',
         platform: `个人空间·${task.targetFolderLabel ?? '置顶目录'}`,
-        desc: `用户上传文件 ${task.sourceFileName ?? task.name}，已完成质量检查与 AI 自动打标。`,
+        desc: `用户上传文件 ${task.sourceFileName ?? task.name}，已完成质量检查与内容理解。`,
         tags: task.tags,
         uploadType: task.uploadType ?? 'image',
         sourceFileName: task.sourceFileName ?? task.name,
         uploadedAt
       };
       setPersonalAssets(previous => previous.some(item => item.id === asset.id) ? previous : [asset, ...previous]);
-      addLog(`素材「${task.name}」已提交到个人空间。`, 'success');
     }
   }, [session?.name]);
 
-  const transferQueue = useTransferQueue({
-    accountId: session?.email ?? 'signed-out',
-    onTaskCompleted: handleTransferCompleted
-  });
-  const transferExpiryRemindersRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    const reminderThreshold = 6 * 24 * 60 * 60 * 1000;
-    const expiringTasks = transferQueue.tasks.filter(task => (
-      task.status === 'pending_submit'
-      && Date.now() - new Date(task.updatedAt).getTime() >= reminderThreshold
-      && !transferExpiryRemindersRef.current.has(task.id)
-    ));
-    if (expiringTasks.length === 0) return;
-    expiringTasks.forEach(task => transferExpiryRemindersRef.current.add(task.id));
+  const handleTransferBatchSettled = useCallback((summary: TransferBatchSummary) => {
+    const message = summary.failed > 0
+      ? `${summary.completed} 个文件已提交，${summary.failed} 个失败`
+      : `${summary.completed} 个文件已提交`;
     setToast({
       id: Date.now(),
-      message: `${expiringTasks.length} 个待提交素材将在 1 天内过期，请及时处理。`,
-      type: 'warning'
+      message,
+      type: summary.failed > 0 ? 'error' : 'success',
+      action: summary.failed > 0 ? 'open-upload-failures' : undefined
     });
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification('待提交素材即将过期', { body: `${expiringTasks.length} 个素材将在 1 天内自动清理。` });
+    if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+      new Notification('上传批次处理完成', { body: message });
     }
-  }, [transferQueue.tasks]);
+  }, []);
+
+  const transferQueue = useTransferQueue({
+    accountId: session?.email ?? 'signed-out',
+    onTaskCompleted: handleTransferCompleted,
+    onBatchSettled: handleTransferBatchSettled
+  });
 
   useEffect(() => {
     setActiveExtensionDownloadCount(transferQueue.tasks.filter(task => (
@@ -355,13 +352,34 @@ export default function App() {
   }, [transferQueue.tasks]);
 
   const transferBadge = useMemo(() => {
-    const pending = transferQueue.tasks.filter(task => task.status === 'pending_submit').length;
-    if (pending > 0) return { count: pending, tone: 'pending' as const };
     const failed = transferQueue.tasks.filter(task => task.status === 'failed').length;
-    if (failed > 0) return { count: failed, tone: 'failed' as const };
-    const active = transferQueue.tasks.filter(task => !['completed', 'cancelled'].includes(task.status)).length;
-    return { count: active, tone: active > 0 ? 'active' as const : 'idle' as const };
+    const active = transferQueue.tasks.filter(task => !['completed', 'failed', 'cancelled'].includes(task.status)).length;
+    const activeBatchIds = new Set(transferQueue.tasks
+      .filter(task => task.direction === 'upload' && !['completed', 'failed', 'cancelled'].includes(task.status))
+      .map(task => task.batchId)
+      .filter((batchId): batchId is string => Boolean(batchId)));
+    const progressScope = transferQueue.tasks.filter(task => (
+      (task.batchId && activeBatchIds.has(task.batchId))
+      || (task.direction === 'download' && !['completed', 'failed', 'cancelled'].includes(task.status))
+    ));
+    const completed = progressScope.filter(task => task.status === 'completed').length;
+    const totalSpeed = transferQueue.tasks
+      .filter(task => task.status === 'transferring')
+      .reduce((sum, task) => sum + task.speedMBps, 0);
+    return {
+      count: failed > 0 ? failed : active,
+      tone: failed > 0 ? 'failed' as const : active > 0 ? 'active' as const : 'idle' as const,
+      progressLabel: active > 0 ? `${completed}/${progressScope.length || active}` : undefined,
+      speedLabel: totalSpeed > 0 ? `${totalSpeed.toFixed(1)} MB/s` : undefined
+    };
   }, [transferQueue.tasks]);
+
+  const handleToastClick = () => {
+    if (toast?.action !== 'open-upload-failures') return;
+    setTransferFocusRequest({ direction: 'upload', section: 'failed', nonce: Date.now() });
+    setIsTransferCenterOpen(true);
+    setToast(null);
+  };
 
   const addNotification = (notification: NotificationInput) => {
     const nextNotification: AppNotification = {
@@ -448,7 +466,7 @@ export default function App() {
 
   // 主动登出：暂停并按账号保留传输断点，清理登录态后返回登录页。
   const handleLogout = () => {
-    transferQueue.pauseAllAndPersist();
+    transferQueue.pauseAllAndPersist('logout');
     clearSession();
     setSession(null);
     setDownloadedAssetIds(new Set());
@@ -465,7 +483,7 @@ export default function App() {
     const guard = () => {
       const now = Date.now();
       if (isExpired(session, now)) {
-        transferQueue.pauseAllAndPersist();
+        transferQueue.pauseAllAndPersist('token');
         clearSession();
         setSession(null);
         setToast({ id: Date.now(), message: '登录态已过期，请重新扫码登录。', type: 'warning' });
@@ -505,6 +523,7 @@ export default function App() {
             addLog={addLog}
             transferTasks={transferQueue.tasks}
             enqueueDownload={transferQueue.enqueueDownload}
+            enqueueDownloadBatch={transferQueue.enqueueDownloadBatch}
             enqueueUploadBatch={transferQueue.enqueueUploadBatch}
             cancelTransferTask={transferQueue.cancelTask}
           />
@@ -571,7 +590,9 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.95 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2 px-3 py-2 rounded-md shadow-xl border text-[11px] font-mono select-none"
+            onClick={handleToastClick}
+            role={toast.action ? 'button' : undefined}
+            className={`fixed top-5 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2 px-3 py-2 rounded-md shadow-xl border text-[11px] font-mono select-none ${toast.action ? 'cursor-pointer' : ''}`}
             style={{
               backgroundColor: theme === 'light' ? '#ffffff' : '#0a0a0c',
               borderColor: theme === 'light' ? '#cbd5e1' : '#27272a',
@@ -585,8 +606,12 @@ export default function App() {
                 : (theme === 'light' ? 'bg-[#00C800]' : 'bg-[#00ff00]')
             }`}></div>
             <span className="font-semibold">{toast.message}</span>
+            {toast.action && <span className="text-[10px] text-violet-500">查看失败任务</span>}
             <button 
-              onClick={() => setToast(null)}
+              onClick={(event) => {
+                event.stopPropagation();
+                setToast(null);
+              }}
               className={`ml-2 text-zinc-500 transition-colors cursor-pointer shrink-0 ${
                 theme === 'light' ? 'hover:text-[#00C800]' : 'hover:text-[#00ff00]'
               }`}
@@ -626,19 +651,18 @@ export default function App() {
         theme={theme}
         tasks={transferQueue.tasks}
         batches={transferQueue.batches}
-        isOnline={transferQueue.isOnline}
+        focusRequest={transferFocusRequest}
+        onCancelTask={transferQueue.cancelTask}
         onPauseTask={transferQueue.pauseTask}
         onResumeTask={transferQueue.resumeTask}
-        onCancelTask={transferQueue.cancelTask}
-        onRetryTask={transferQueue.retryTask}
-        onRemoveTask={transferQueue.removeTask}
+        onPauseAll={transferQueue.pauseAll}
+        onResumeAll={transferQueue.resumeAll}
         onPauseBatch={transferQueue.pauseBatch}
         onResumeBatch={transferQueue.resumeBatch}
+        onRetryTask={transferQueue.retryTask}
+        onRetryAllFailed={transferQueue.retryAllFailed}
         onCancelBatch={transferQueue.cancelBatch}
-        onDiscardBatch={transferQueue.discardBatch}
-        onSubmitBatch={transferQueue.submitBatch}
-        onUpdateTaskTags={transferQueue.updateTaskTags}
-        onChangeBatchTarget={transferQueue.changeBatchTarget}
+        onClearBatch={transferQueue.discardBatch}
         onClearCompleted={transferQueue.clearCompleted}
       />
 
@@ -660,9 +684,9 @@ export default function App() {
               onDownloadActivityChange={setActiveExtensionDownloadCount}
               transferTasks={transferQueue.tasks}
               enqueueDownload={transferQueue.enqueueDownload}
+              cancelTransferTask={transferQueue.cancelTask}
               pauseTransferTask={transferQueue.pauseTask}
               resumeTransferTask={transferQueue.resumeTask}
-              cancelTransferTask={transferQueue.cancelTask}
               retryTransferTask={transferQueue.retryTask}
               addLog={addLog}
               addNotification={addNotification}

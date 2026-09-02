@@ -71,13 +71,13 @@ interface ExtensionManagerProps {
   theme: 'light' | 'dark';
   transferTasks: TransferTask[];
   enqueueDownload: (input: DownloadTransferInput) => string | null;
+  cancelTransferTask: (taskId: string) => void;
   pauseTransferTask: (taskId: string) => void;
   resumeTransferTask: (taskId: string) => void;
-  cancelTransferTask: (taskId: string) => void;
   retryTransferTask: (taskId: string) => void;
 }
 
-type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'waiting_network' | 'completed' | 'failed';
+type DownloadStatus = 'queued' | 'packing' | 'downloading' | 'paused' | 'waiting_network' | 'completed' | 'failed';
 type DownloadKind = 'download' | 'update';
 
 interface ExtensionDownloadTask {
@@ -85,6 +85,7 @@ interface ExtensionDownloadTask {
   extensionId: string;
   kind: DownloadKind;
   status: DownloadStatus;
+  pauseReason?: TransferTask['pauseReason'];
   progress: number;
   speedMBps: number;
   createdAt: number;
@@ -180,9 +181,9 @@ export default function ExtensionManager({
   theme,
   transferTasks,
   enqueueDownload,
+  cancelTransferTask,
   pauseTransferTask,
   resumeTransferTask,
-  cancelTransferTask,
   retryTransferTask
 }: ExtensionManagerProps) {
   const [selectedSpaceId, setSelectedSpaceId] = useState<SpaceId>(SpaceId.ProjectA);
@@ -197,9 +198,11 @@ export default function ExtensionManager({
     .map(task => ({
       id: task.id,
       extensionId: task.resourceId,
-      kind: task.downloadKind ?? 'download',
+      kind: task.downloadKind === 'update' ? 'update' : 'download',
       status: task.status === 'transferring'
         ? 'downloading'
+        : task.status === 'packing'
+          ? 'packing'
         : task.status === 'waiting_network'
           ? 'waiting_network'
           : task.status === 'failed'
@@ -211,6 +214,7 @@ export default function ExtensionManager({
                 : 'queued',
       progress: task.progress,
       speedMBps: task.speedMBps,
+      pauseReason: task.pauseReason,
       createdAt: new Date(task.createdAt).getTime()
     })), [transferTasks]);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -353,16 +357,6 @@ export default function ExtensionManager({
       return;
     }
     addLog(`${kind === 'update' ? '开始更新' : '开始下载'}「${extension.name}」，任务已加入传输中心。`, 'info');
-  };
-
-  const pauseTask = (taskId: string) => {
-    pauseTransferTask(taskId);
-  };
-
-  const resumeTask = (taskId: string) => {
-    const task = tasks.find(item => item.id === taskId);
-    if (task?.status === 'failed') retryTransferTask(taskId);
-    else resumeTransferTask(taskId);
   };
 
   const confirmCancelTask = () => {
@@ -662,7 +656,7 @@ export default function ExtensionManager({
     const task = getTask(extension.id);
     if (!task) return null;
     const remainingSeconds = Math.max(1, Math.ceil(((100 - task.progress) / 100 * extension.fileSizeMB) / task.speedMBps));
-    const taskLabel = task.status === 'queued' ? '等待下载' : task.status === 'paused' ? '已暂停' : task.status === 'waiting_network' ? '等待网络恢复' : task.status === 'failed' ? '下载失败，点击重试' : task.kind === 'update' ? '正在更新' : '正在下载';
+    const taskLabel = task.status === 'queued' ? '下载中' : task.status === 'packing' ? '打包中' : task.status === 'paused' ? '已暂停' : task.status === 'waiting_network' ? '已暂停（网络异常）' : task.status === 'failed' ? '下载失败，可重试' : task.kind === 'update' ? '正在更新' : '正在下载';
 
     if (compact) {
       return (
@@ -677,10 +671,14 @@ export default function ExtensionManager({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
-            {task.status === 'downloading' || task.status === 'queued' ? (
-              <button type="button" title="暂停" onClick={(event) => { event.stopPropagation(); pauseTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${isLight ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-900' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}><Pause size={11} /></button>
-            ) : (
-              <button type="button" title="继续" onClick={(event) => { event.stopPropagation(); resumeTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${isLight ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-900' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}><Play size={11} /></button>
+            {task.status === 'failed' && (
+              <button type="button" title="重试" onClick={(event) => { event.stopPropagation(); retryTransferTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${isLight ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-900' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}><RefreshCw size={11} /></button>
+            )}
+            {(task.status === 'downloading' || task.status === 'queued') && (
+              <button type="button" title="暂停下载" onClick={(event) => { event.stopPropagation(); pauseTransferTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}><Pause size={11} /></button>
+            )}
+            {task.status === 'paused' && task.pauseReason === 'manual' && (
+              <button type="button" title="继续下载" onClick={(event) => { event.stopPropagation(); resumeTransferTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}><Play size={11} /></button>
             )}
             <button type="button" title="取消下载" onClick={(event) => { event.stopPropagation(); setCancelTaskId(task.id); }} className="inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 hover:bg-red-500/10 hover:text-red-500"><X size={11} /></button>
           </div>
@@ -692,7 +690,7 @@ export default function ExtensionManager({
       <div className="mt-4 rounded border border-sky-500/25 bg-sky-500/5 p-2.5">
         <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px] font-mono">
           <span className="flex min-w-0 items-center gap-1.5 text-sky-300">
-            {task.status === 'waiting_network' ? <WifiOff size={11} /> : task.status === 'paused' ? <Pause size={11} /> : <Download size={11} />}
+            {task.status === 'waiting_network' || (task.status === 'paused' && task.pauseReason !== 'manual') ? <WifiOff size={11} /> : <Download size={11} />}
             <span className="truncate">
               {taskLabel}
             </span>
@@ -704,15 +702,21 @@ export default function ExtensionManager({
         </div>
         <div className="mt-2 flex items-center justify-between gap-2">
           <span className="text-[9px] font-mono text-zinc-500">
-            {task.status === 'downloading' ? `${task.speedMBps.toFixed(1)} MB/s · 剩余约 ${remainingSeconds}s` : '断点数据已保留'}
+            {task.status === 'downloading' ? `${task.speedMBps.toFixed(1)} MB/s · 剩余约 ${remainingSeconds}s` : task.status === 'queued' ? '等待并发槽位' : task.status === 'packing' ? '服务端打包中' : '断点数据已保留'}
           </span>
           <div className="flex shrink-0 items-center gap-1">
-            {task.status === 'downloading' || task.status === 'queued' ? (
-              <button type="button" title="暂停" onClick={(event) => { event.stopPropagation(); pauseTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}>
+            {task.status === 'failed' && (
+              <button type="button" title="重试" onClick={(event) => { event.stopPropagation(); retryTransferTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}>
+                <RefreshCw size={12} />
+              </button>
+            )}
+            {(task.status === 'downloading' || task.status === 'queued') && (
+              <button type="button" title="暂停下载" onClick={(event) => { event.stopPropagation(); pauseTransferTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}>
                 <Pause size={12} />
               </button>
-            ) : (
-              <button type="button" title="继续" onClick={(event) => { event.stopPropagation(); resumeTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}>
+            )}
+            {task.status === 'paused' && task.pauseReason === 'manual' && (
+              <button type="button" title="继续下载" onClick={(event) => { event.stopPropagation(); resumeTransferTask(task.id); }} className={`inline-flex h-6 w-6 items-center justify-center rounded text-zinc-400 ${isLight ? 'hover:bg-slate-100 hover:text-slate-900' : 'hover:bg-zinc-800 hover:text-white'}`}>
                 <Play size={12} />
               </button>
             )}

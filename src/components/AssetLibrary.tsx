@@ -60,7 +60,8 @@ interface AssetLibraryProps {
   addLog: (text: string, type: 'info' | 'success' | 'warning' | 'error', options?: { toast?: boolean }) => void;
   transferTasks: TransferTask[];
   enqueueDownload: (input: DownloadTransferInput) => string | null;
-  enqueueUploadBatch: (inputs: UploadTransferInput[], targetFolderLabel: string) => string | null;
+  enqueueDownloadBatch: (inputs: DownloadTransferInput[], targetFolderLabel?: string) => string | null;
+  enqueueUploadBatch: (inputs: UploadTransferInput[], targetFolderLabel: string, targetFolderId?: string, confidence?: number) => string | null;
   cancelTransferTask: (taskId: string) => void;
 }
 
@@ -108,14 +109,6 @@ interface ExternalAsset extends ArtAsset {
   nonCommercialNotice: string;
 }
 
-// Simulated active download task structure for queue management
-interface ActiveDownload {
-  assetId: string;
-  progress: number;
-  status: 'downloading' | 'queued';
-  targetDccImportAfterDownload?: AppId; // If triggered by import click, remembers DCC target
-}
-
 const LEGACY_ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v1';
 const LEGACY_ASSET_FOLDER_ASSIGNMENT_STORAGE_KEY = 'art-launcher-asset-folder-assignments-v1';
 const ASSET_FOLDER_STORAGE_KEY = 'art-launcher-asset-folders-v2';
@@ -124,6 +117,10 @@ const ASSET_FOLDER_PANE_WIDTH_STORAGE_KEY = 'art-launcher-folder-pane-width-v1';
 const ASSET_ITEMS_PER_PAGE_STORAGE_KEY = 'art-launcher-items-per-page-v1';
 const ASSET_SHARES_STORAGE_KEY = 'art-launcher-asset-shares-v1';
 const PROJECT_MEMBERS_STORAGE_KEY = 'art-launcher-project-members-v1';
+const LAST_DOWNLOAD_DIRECTORY_STORAGE_KEY = 'art-launcher-last-download-directory-v1';
+const LAST_UPLOAD_FOLDER_STORAGE_KEY = 'art-launcher-last-upload-folder-v1';
+const DOWNLOAD_BATCH_NAME_STORAGE_KEY = 'art-launcher-download-batch-name-v1';
+const DEFAULT_DOWNLOAD_DIRECTORY = 'D:\\PixGo\\Downloads';
 const DCC_IMPORT_ENTRY_ENABLED = false;
 const REMOVED_DEFAULT_FOLDER_IDS = new Set([
   'folder-browser',
@@ -203,14 +200,34 @@ const ITEMS_PER_PAGE_OPTIONS = [20, 50, 100];
 const PREVIEW_ZOOM_STEP = 1.2;
 const PREVIEW_DEFAULT_ZOOM = 0.5;
 const FOLDER_INFO_DEFAULT_CREATED_AT = '2023-11-22T14:58:19';
-const AI_TAG_THRESHOLD_MIN = 1;
-const AI_TAG_THRESHOLD_MAX = 100;
-const DEFAULT_AI_TAG_THRESHOLD = 60;
 // 素材卡片宽度调节：滑动条区间 140~400px，默认 240px。
 const CARD_WIDTH_STORAGE_KEY = 'art-launcher-card-width-v1';
 const CARD_WIDTH_MIN = 140;
 const CARD_WIDTH_MAX = 400;
 const DEFAULT_CARD_WIDTH = 240;
+
+const getInitialDownloadDirectory = () => {
+  try {
+    return localStorage.getItem(LAST_DOWNLOAD_DIRECTORY_STORAGE_KEY) || DEFAULT_DOWNLOAD_DIRECTORY;
+  } catch {
+    return DEFAULT_DOWNLOAD_DIRECTORY;
+  }
+};
+
+const allocateBatchDownloadFolderName = () => {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const baseName = `批量下载_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+  let count = 1;
+  try {
+    const previous = JSON.parse(localStorage.getItem(DOWNLOAD_BATCH_NAME_STORAGE_KEY) || '{}') as { baseName?: string; count?: number };
+    count = previous.baseName === baseName ? (previous.count ?? 1) + 1 : 1;
+    localStorage.setItem(DOWNLOAD_BATCH_NAME_STORAGE_KEY, JSON.stringify({ baseName, count }));
+  } catch {
+    count = 1;
+  }
+  return count > 1 ? `${baseName}_${count}` : baseName;
+};
 
 // Folder name validation rules: length cap, illegal chars, reserved names, sibling uniqueness
 const FOLDER_NAME_MAX_LENGTH = 32;
@@ -1181,28 +1198,6 @@ const readImageDimensions = (file: File): Promise<{ width: number; height: numbe
   });
 };
 
-const readVideoMetadata = (file: File): Promise<{ width: number; height: number; duration: number } | null> => {
-  return new Promise((resolve) => {
-    const objectUrl = URL.createObjectURL(file);
-    const video = document.createElement('video');
-
-    video.preload = 'metadata';
-    video.onloadedmetadata = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve({
-        width: video.videoWidth,
-        height: video.videoHeight,
-        duration: video.duration
-      });
-    };
-    video.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(null);
-    };
-    video.src = objectUrl;
-  });
-};
-
 const extractNameTags = (fileName: string) => {
   const baseName = getFileBaseName(fileName);
   const zhSegments = baseName.match(/[\u4e00-\u9fa5]{2,}/g) ?? [];
@@ -1213,6 +1208,18 @@ const extractNameTags = (fileName: string) => {
 
   return [...zhSegments, ...enSegments].slice(0, 4);
 };
+
+// Content understanding runs after the upload starts. Keep the generated tags
+// on the transfer task so they can be revealed in the locked upload workspace
+// and in the transfer center once processing begins.
+const buildUploadAutoTags = (item: Pick<PendingPersonalUploadItem, 'sourceFileName' | 'format' | 'uploadType' | 'tags'>) => (
+  dedupeTags([
+    ...item.tags,
+    'AI自动打标',
+    item.format.toUpperCase(),
+    ...extractNameTags(item.sourceFileName)
+  ]).slice(0, 8)
+);
 
 const getFolderBaseId = (folderId: string) => {
   const [head, tail] = folderId.split(FOLDER_SCOPE_SEPARATOR);
@@ -2011,6 +2018,7 @@ export default function AssetLibrary({
   addLog,
   transferTasks,
   enqueueDownload,
+  enqueueDownloadBatch,
   enqueueUploadBatch,
   cancelTransferTask
 }: AssetLibraryProps) {
@@ -2021,6 +2029,9 @@ export default function AssetLibrary({
   const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(() => new Set());
   const [pendingBatchDelete, setPendingBatchDelete] = useState<boolean>(false);
   const [batchDeleteProgress, setBatchDeleteProgress] = useState<{ done: number; total: number } | null>(null);
+  const [batchMoveEditor, setBatchMoveEditor] = useState<{ targetFolderId: string } | null>(null);
+  const [downloadModeDialogOpen, setDownloadModeDialogOpen] = useState(false);
+  const [downloadTargetDirectory, setDownloadTargetDirectory] = useState(getInitialDownloadDirectory);
   // 图片搜索（以图搜图）: active query + async color-sampling cache & version trigger
   const [imageSearchQuery, setImageSearchQuery] = useState<ImageSearchQuery | null>(null);
   const [isImageSearchProcessing, setIsImageSearchProcessing] = useState<boolean>(false);
@@ -2128,6 +2139,12 @@ export default function AssetLibrary({
     x: number;
     y: number;
   } | null>(null);
+  const [folderCoverEditor, setFolderCoverEditor] = useState<{
+    folderId: string;
+    fileName: string;
+    previewUrl: string;
+    error: string;
+  } | null>(null);
   const [assetContextMenu, setAssetContextMenu] = useState<{
     assetId: string;
     x: number;
@@ -2146,6 +2163,10 @@ export default function AssetLibrary({
   const [permissionViewTab, setPermissionViewTab] = useState<'members' | 'groups'>('members');
   const [pendingPermissionRemoval, setPendingPermissionRemoval] = useState<PermissionRemovalRequest | null>(null);
   const [folderInfoTarget, setFolderInfoTarget] = useState<string | null>(null);
+  const [folderMoveEditor, setFolderMoveEditor] = useState<{
+    folderId: string;
+    targetFolderId: string;
+  } | null>(null);
   const [pendingFolderDelete, setPendingFolderDelete] = useState<{
     folderId: string;
     folderName: string;
@@ -2175,7 +2196,6 @@ export default function AssetLibrary({
   const [personalUploadDraft, setPersonalUploadDraft] = useState<PersonalUploadDraft | null>(null);
   const [personalUploadQueuedBatchId, setPersonalUploadQueuedBatchId] = useState<string | null>(null);
   const [collapsedPersonalUploadFolderPaths, setCollapsedPersonalUploadFolderPaths] = useState<Set<string>>(new Set());
-  const [aiTagThreshold, setAiTagThreshold] = useState<number>(DEFAULT_AI_TAG_THRESHOLD);
   const [pendingTagInputs, setPendingTagInputs] = useState<Record<string, string>>({});
   // 当前展开分类多选下拉的草稿项 id（null 表示全部收起）
   const [categoryMenuItemId, setCategoryMenuItemId] = useState<string | null>(null);
@@ -2188,8 +2208,12 @@ export default function AssetLibrary({
   const personalUploadFolderInputRef = useRef<HTMLInputElement | null>(null);
   const personalAppendInputRef = useRef<HTMLInputElement | null>(null);
   const personalAppendFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const folderCoverInputRef = useRef<HTMLInputElement | null>(null);
   const uploadSessionRef = useRef<number>(0);
-  const aiTagThresholdRef = useRef<number>(DEFAULT_AI_TAG_THRESHOLD);
+  const pendingDccImportRef = useRef<Record<string, AppId>>({});
+  const folderDragRef = useRef<string | null>(null);
+  const suppressFolderClickRef = useRef(false);
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const assetDetailTagComposerRef = useRef<HTMLDivElement | null>(null);
   const assetDetailTagInputRef = useRef<HTMLInputElement | null>(null);
@@ -2545,9 +2569,6 @@ export default function AssetLibrary({
     return () => observer.disconnect();
   }, [selectedAsset]);
 
-  // Download simulation engine states (queue F9 rule)
-  const [activeDownloads, setActiveDownloads] = useState<ActiveDownload[]>([]);
-  
   // Custom dialog popups - "可选" mode selections
   const [importOptionsConfig, setImportOptionsConfig] = useState<{ asset: ArtAsset, dccId: AppId } | null>(null);
   const [selectedImportMode, setSelectedImportMode] = useState<string>('');
@@ -2815,99 +2836,17 @@ export default function AssetLibrary({
     }
   };
 
-  const getStableAiTagScore = (tag: string, sourceFileName: string, index: number) => {
-    if (tag === 'AI自动打标') return 100;
-    let hash = 0;
-    const source = `${sourceFileName}|${tag}|${index}`;
-    for (let i = 0; i < source.length; i += 1) {
-      hash = (hash * 31 + source.charCodeAt(i)) % 9973;
-    }
-    return Math.max(AI_TAG_THRESHOLD_MIN, Math.min(AI_TAG_THRESHOLD_MAX, 48 + (hash % 53)));
-  };
-
-  const buildAiTagScoreMap = (tags: string[], sourceFileName: string) => (
-    tags.reduce<Record<string, number>>((acc, tag, index) => {
-      acc[tag] = getStableAiTagScore(tag, sourceFileName, index);
-      return acc;
-    }, {})
-  );
-
-  const applyAiTagThreshold = (allAiTags: string[], aiTagScores: Record<string, number>, threshold: number) => (
-    allAiTags.filter(tag => (aiTagScores[tag] ?? AI_TAG_THRESHOLD_MAX) >= threshold)
-  );
-
-  const applyDraftAiThreshold = (item: PendingPersonalUploadItem, threshold: number) => {
-    const manualTags = item.tags.filter(tag => !(tag in item.aiTagScores));
-    const aiTags = applyAiTagThreshold(Object.keys(item.aiTagScores), item.aiTagScores, threshold);
-    return dedupeTags([...aiTags, ...manualTags]).slice(0, 12);
-  };
-
   useEffect(() => {
     if (previewZoom > previewMaxZoom) {
       applyPreviewZoom(previewMaxZoom);
     }
   }, [previewMaxZoom, previewZoom]);
 
-  const buildAiTagsForUpload = async (file: File, uploadType: PersonalUploadType) => {
-    const format = getFileExtension(file.name).toUpperCase() || 'BIN';
-    const tags: string[] = [
-      personalTypeLabel[uploadType],
-      format,
-      'AI自动打标',
-      ...extractNameTags(file.name)
-    ];
-
-    if (file.size >= 200 * BYTES_IN_MB) {
-      tags.push('大体积');
-    } else if (file.size <= 5 * BYTES_IN_MB) {
-      tags.push('轻量');
-    }
-
-    if (uploadType === 'video') {
-      const metadata = await readVideoMetadata(file);
-      if (metadata) {
-        tags.push(`${metadata.width}x${metadata.height}`);
-        if (metadata.duration <= 10) tags.push('短视频');
-        else if (metadata.duration >= 60) tags.push('长视频');
-        else tags.push('中视频');
-      }
-    } else {
-      const dimensions = await readImageDimensions(file);
-      if (dimensions) {
-        tags.push(`${dimensions.width}x${dimensions.height}`);
-        if (dimensions.width > dimensions.height) tags.push('横版');
-        else if (dimensions.width < dimensions.height) tags.push('竖版');
-        else tags.push('方图');
-      }
-    }
-
-    return dedupeTags(tags).slice(0, 8);
-  };
-
-  const updateAiTagThreshold = (nextThreshold: number) => {
-    const threshold = Math.max(AI_TAG_THRESHOLD_MIN, Math.min(AI_TAG_THRESHOLD_MAX, Math.round(nextThreshold)));
-    aiTagThresholdRef.current = threshold;
-    setAiTagThreshold(threshold);
-    setPersonalUploadDraft(prev => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        items: prev.items.map(item => (
-          item.status === 'ready'
-            ? { ...item, tags: applyDraftAiThreshold(item, threshold) }
-            : item
-        ))
-      };
-    });
-  };
-
   const closePersonalUploadDraft = () => {
     uploadSessionRef.current += 1;
     setPersonalUploadDraft(null);
     setPersonalUploadQueuedBatchId(null);
     setCollapsedPersonalUploadFolderPaths(new Set());
-    aiTagThresholdRef.current = DEFAULT_AI_TAG_THRESHOLD;
-    setAiTagThreshold(DEFAULT_AI_TAG_THRESHOLD);
     setPendingTagInputs({});
   };
 
@@ -2917,6 +2856,7 @@ export default function AssetLibrary({
   };
 
   const updateDraftItemTags = (itemId: string, updater: (tags: string[]) => string[]) => {
+    if (personalUploadQueuedBatchId) return;
     setPersonalUploadDraft(prev => {
       if (!prev) return prev;
       return {
@@ -2932,6 +2872,7 @@ export default function AssetLibrary({
 
   // 多选分类：勾选/取消某分类；至少保留一个；主分类 category 取 categories[0]。
   const toggleDraftItemCategory = (itemId: string, category: AssetCategory) => {
+    if (personalUploadQueuedBatchId) return;
     setPersonalUploadDraft(prev => {
       if (!prev) return prev;
       return {
@@ -2950,6 +2891,7 @@ export default function AssetLibrary({
   };
 
   const updateDraftItemName = (itemId: string, nextName: string) => {
+    if (personalUploadQueuedBatchId) return;
     setPersonalUploadDraft(prev => {
       if (!prev) return prev;
       return {
@@ -2964,6 +2906,7 @@ export default function AssetLibrary({
   };
 
   const addDraftTag = (itemId: string) => {
+    if (personalUploadQueuedBatchId) return;
     const value = normalizeTag(pendingTagInputs[itemId] ?? '');
     if (!value) return;
     updateDraftItemTags(itemId, tags => [...tags, value]);
@@ -2984,10 +2927,12 @@ export default function AssetLibrary({
   };
 
   const removeDraftTag = (itemId: string, tagToRemove: string) => {
+    if (personalUploadQueuedBatchId) return;
     updateDraftItemTags(itemId, tags => tags.filter(tag => tag !== tagToRemove));
   };
 
   const removeDraftItem = (itemId: string, fileName: string) => {
+    if (personalUploadQueuedBatchId) return;
     const isRemovingLastDraftItem = (
       !!personalUploadDraft &&
       personalUploadDraft.items.length === 1 &&
@@ -3030,6 +2975,7 @@ export default function AssetLibrary({
   };
 
   const editDraftTag = (itemId: string, currentTag: string) => {
+    if (personalUploadQueuedBatchId) return;
     const nextTag = window.prompt('编辑标签', currentTag);
     if (nextTag === null) return;
 
@@ -3044,12 +2990,21 @@ export default function AssetLibrary({
 
   const confirmPersonalUpload = () => {
     if (!personalUploadDraft || personalUploadDraft.isTagging || personalUploadQueuedBatchId) return;
-    const rootPaths = personalUploadDraft.items
-      .map(item => getUploadFolderSegments(item.sourceFileName)[0])
-      .filter((value): value is string => Boolean(value));
-    const targetFolderLabel = rootPaths.length > 0 && rootPaths.every(path => path === rootPaths[0])
-      ? rootPaths[0]
-      : '置顶目录';
+    const folderMap = new Map(folders.map(folder => [folder.id, folder]));
+    const targetFolder = folderMap.get(selectedFolderId);
+    if (!targetFolder || getFolderSpaceId(targetFolder.id) !== SpaceId.Personal) {
+      addLog('上传任务创建失败：目标目录不存在或无权限。', 'error');
+      return;
+    }
+    const targetSegments: string[] = [];
+    const visitedFolderIds = new Set<string>();
+    let targetCursor = folderMap.get(selectedFolderId);
+    while (targetCursor && !visitedFolderIds.has(targetCursor.id)) {
+      visitedFolderIds.add(targetCursor.id);
+      targetSegments.unshift(targetCursor.name);
+      targetCursor = targetCursor.parentId ? folderMap.get(targetCursor.parentId) : undefined;
+    }
+    const targetFolderLabel = targetSegments.length > 1 ? targetSegments.slice(1).join(' / ') : '置顶目录';
     const inputs: UploadTransferInput[] = personalUploadDraft.items.map(item => ({
       name: item.fileName.trim() || getFileBaseName(item.sourceFileName),
       sourceFileName: item.sourceFileName,
@@ -3058,18 +3013,31 @@ export default function AssetLibrary({
       previewUrl: item.previewUrl,
       category: item.category,
       uploadType: item.uploadType,
-      tags: dedupeTags(item.tags)
+      tags: buildUploadAutoTags(item)
     }));
-    const batchId = enqueueUploadBatch(inputs, targetFolderLabel);
+    const batchId = enqueueUploadBatch(inputs, targetFolderLabel, selectedFolderId);
     if (!batchId) {
       addLog('上传任务创建失败：队列已满或存在超过 2 GB 的文件。', 'error');
       return;
     }
-    addLog(`已创建上传批次，共 ${inputs.length} 个文件。处理完成后请在传输中心提交入库。`, 'success');
+    try {
+      localStorage.setItem(LAST_UPLOAD_FOLDER_STORAGE_KEY, selectedFolderId);
+    } catch {
+      // The current folder remains the target when persistence is unavailable.
+    }
+    addLog(`已创建上传批次，共 ${inputs.length} 个文件。系统将在后台自动完成上传、质检、内容理解与入库。`, 'success');
+    // Keep the upload workspace open. The user owns closing the panel, while
+    // the submitted draft is locked to prevent edits after enqueueing.
+    setCategoryMenuItemId(null);
+    setPersonalUploadDraft(previous => previous ? {
+      ...previous,
+      items: previous.items.map(item => ({ ...item, tags: buildUploadAutoTags(item) }))
+    } : previous);
     setPersonalUploadQueuedBatchId(batchId);
   };
 
   const togglePersonalUploadFolder = (folderPath: string) => {
+    if (personalUploadQueuedBatchId) return;
     setCollapsedPersonalUploadFolderPaths(previous => {
       const next = new Set(previous);
       if (next.has(folderPath)) {
@@ -3110,7 +3078,8 @@ export default function AssetLibrary({
 
     const sessionId = Date.now();
     uploadSessionRef.current = sessionId;
-    addLog(`📤 已选择 ${files.length} 个文件，开始执行上传预处理与 AI 自动打标。`, 'info');
+    setPersonalUploadQueuedBatchId(null);
+    addLog(`📤 已选择 ${files.length} 个文件，文件已就绪。点击开始上传后将在后台自动处理。`, 'info');
 
     const initialItems: PendingPersonalUploadItem[] = files.map((file, index) => {
       const uploadType = inferUploadType(file) ?? 'image';
@@ -3128,46 +3097,17 @@ export default function AssetLibrary({
         previewUrl: URL.createObjectURL(file),
         tags: [],
         aiTagScores: {},
-        status: 'tagging'
+        status: 'ready'
       };
     });
 
     setPendingTagInputs({});
     setCollapsedPersonalUploadFolderPaths(new Set());
-    setPersonalUploadQueuedBatchId(null);
     setPersonalUploadDraft({
       items: initialItems,
       totalBytes,
-      isTagging: true
+      isTagging: false
     });
-
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-      const itemId = initialItems[index].id;
-      const uploadType = inferUploadType(file) ?? 'image';
-      const aiTags = await buildAiTagsForUpload(file, uploadType);
-      const aiTagScores = buildAiTagScoreMap(aiTags, file.name);
-      const visibleAiTags = applyAiTagThreshold(aiTags, aiTagScores, aiTagThresholdRef.current);
-
-      if (uploadSessionRef.current !== sessionId) return;
-
-      setPersonalUploadDraft(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          items: prev.items.map(item => {
-            if (item.id !== itemId) return item;
-            const inferred = inferCategoryForUpload(item.fileName, item.uploadType, visibleAiTags);
-            return { ...item, tags: visibleAiTags, aiTagScores, category: inferred, categories: [inferred], status: 'ready' };
-          })
-        };
-      });
-    }
-
-    if (uploadSessionRef.current !== sessionId) return;
-
-    setPersonalUploadDraft(prev => prev ? { ...prev, isTagging: false } : prev);
-    addLog(`🤖 AI 自动打标完成：${files.length} 条素材可确认标签后入库。`, 'success');
   };
 
   const handlePersonalFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -3182,11 +3122,11 @@ export default function AssetLibrary({
     await startPersonalUploadFromFiles(files);
   };
 
-  // 继续添加素材：把新文件并入当前草稿，复用同样的校验与 AI 打标流程。
+  // 继续添加素材：把新文件并入当前草稿；质检和内容理解在开始上传后进入后台流水线。
   const appendFilesToPersonalDraft = async (files: File[]) => {
     if (files.length === 0) return;
     const draft = personalUploadDraft;
-    if (!draft) return;
+    if (!draft || personalUploadQueuedBatchId) return;
 
     const unsupported = files.filter(file => inferUploadType(file) === null);
     if (unsupported.length > 0) {
@@ -3212,7 +3152,7 @@ export default function AssetLibrary({
 
     const sessionId = Date.now();
     uploadSessionRef.current = sessionId;
-    addLog(`📤 继续添加 ${files.length} 个文件，开始上传预处理与 AI 自动打标。`, 'info');
+    addLog(`📤 已继续添加 ${files.length} 个文件，点击开始上传后将在后台自动处理。`, 'info');
 
     const newItems: PendingPersonalUploadItem[] = files.map((file, index) => {
       const uploadType = inferUploadType(file) ?? 'image';
@@ -3230,7 +3170,7 @@ export default function AssetLibrary({
         previewUrl: URL.createObjectURL(file),
         tags: [],
         aiTagScores: {},
-        status: 'tagging'
+        status: 'ready'
       };
     });
 
@@ -3238,35 +3178,8 @@ export default function AssetLibrary({
       ...prev,
       items: [...prev.items, ...newItems],
       totalBytes: prev.totalBytes + addedBytes,
-      isTagging: true
+      isTagging: false
     } : prev);
-
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-      const itemId = newItems[index].id;
-      const uploadType = inferUploadType(file) ?? 'image';
-      const aiTags = await buildAiTagsForUpload(file, uploadType);
-      const aiTagScores = buildAiTagScoreMap(aiTags, file.name);
-      const visibleAiTags = applyAiTagThreshold(aiTags, aiTagScores, aiTagThresholdRef.current);
-
-      if (uploadSessionRef.current !== sessionId) return;
-
-      setPersonalUploadDraft(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          items: prev.items.map(item => {
-            if (item.id !== itemId) return item;
-            const inferred = inferCategoryForUpload(item.fileName, item.uploadType, visibleAiTags);
-            return { ...item, tags: visibleAiTags, aiTagScores, category: inferred, categories: [inferred], status: 'ready' };
-          })
-        };
-      });
-    }
-
-    if (uploadSessionRef.current !== sessionId) return;
-    setPersonalUploadDraft(prev => prev ? { ...prev, isTagging: false } : prev);
-    addLog(`🤖 AI 自动打标完成：新增 ${files.length} 条素材已就绪。`, 'success');
   };
 
   const handlePersonalAppendSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -3324,6 +3237,15 @@ export default function AssetLibrary({
 
   const openPersonalUploadInfo = () => {
     setIsPersonalUploadDropzoneActive(false);
+    try {
+      const rememberedFolderId = localStorage.getItem(LAST_UPLOAD_FOLDER_STORAGE_KEY);
+      const rememberedFolder = rememberedFolderId ? folderById[rememberedFolderId] : undefined;
+      if (rememberedFolder && getFolderSpaceId(rememberedFolder.id) === SpaceId.Personal) {
+        setSelectedFolderId(rememberedFolder.id);
+      }
+    } catch {
+      // Fall back to the currently selected personal-space folder.
+    }
     setIsPersonalUploadInfoOpen(true);
   };
 
@@ -3353,6 +3275,14 @@ export default function AssetLibrary({
           if (aSystemOrder === undefined) return 1;
           if (bSystemOrder === undefined) return -1;
           if (aSystemOrder !== bSystemOrder) return aSystemOrder - bSystemOrder;
+        }
+
+        // User-created or moved folders carry an explicit sibling order and
+        // are rendered after the built-in folders, in insertion order.
+        if (a.sortOrder !== undefined || b.sortOrder !== undefined) {
+          if (a.sortOrder === undefined) return -1;
+          if (b.sortOrder === undefined) return 1;
+          if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
         }
 
         const aCreatedOrder = getCreatedFolderOrder(a);
@@ -3716,95 +3646,8 @@ export default function AssetLibrary({
     && !['completed', 'cancelled'].includes(task.status)
   )), [transferTasks]);
 
-  // Queue Concurrency Handler (Max 3 concurrent downloading)
-  useEffect(() => {
-    const downloadingCount = activeDownloads.filter(d => d.status === 'downloading').length;
-    
-    // If we have under 3 active, and have queued tasks, promote the first queued task
-    if (downloadingCount < 3) {
-      const nextQueuedIdx = activeDownloads.findIndex(d => d.status === 'queued');
-      if (nextQueuedIdx !== -1) {
-        const targetId = activeDownloads[nextQueuedIdx].assetId;
-        
-        // Promote to downloading status
-        setActiveDownloads(prev => prev.map((item, idx) => {
-          if (idx === nextQueuedIdx) {
-            return { ...item, status: 'downloading' };
-          }
-          return item;
-        }));
-
-        simulateDownloadProgress(targetId);
-      }
-    }
-  }, [activeDownloads]);
-
-  // Download logic worker
-  const simulateDownloadProgress = (assetId: string) => {
-    const asset = assets.find(a => a.id === assetId);
-    if (!asset) return;
-
-    addLog(`📥 (队列启动) 开始下载美术源文件: ${asset.name}...`, 'info');
-
-    let prog = 0;
-    const interval = setInterval(() => {
-      prog += 10;
-      
-      setActiveDownloads(prev => {
-        const exists = prev.some(d => d.assetId === assetId);
-        if (!exists) {
-          clearInterval(interval);
-          return prev;
-        }
-
-        if (prog >= 100) {
-          clearInterval(interval);
-          
-          // Complete download
-          setDownloadedAssetIds(prevIds => {
-            const nextSet = new Set(prevIds);
-            nextSet.add(assetId);
-            return nextSet;
-          });
-
-          // Subtract disk size (convert MB to GB)
-          const fileGB = asset.sizeMB / 1024;
-          setSimulatedDiskGB(d => Math.max(0.1, d - fileGB));
-
-          addLog(`✅ 素材 ${asset.name} 下载完毕！本地安全隔离包定位完成。`, 'success');
-
-          // Check if we need to auto trigger DCC import after this download (Path B override)
-          const currentTask = prev.find(d => d.assetId === assetId);
-          if (currentTask?.targetDccImportAfterDownload) {
-            const dccTarget = currentTask.targetDccImportAfterDownload;
-            // Delay slightly to look realistic
-            setTimeout(() => {
-              triggerDirectImport(asset, dccTarget);
-            }, 600);
-          }
-
-          // Clean up this task
-          return prev.filter(d => d.assetId !== assetId);
-        } else {
-          return prev.map(d => {
-            if (d.assetId === assetId) {
-              return { ...d, progress: prog };
-            }
-            return d;
-          });
-        }
-      });
-    }, 200);
-  };
-
   // Trigger Local Download Action - F9 Path A
   const handleLocalDownload = (asset: ArtAsset) => {
-    if (downloadedAssetIds.has(asset.id)) {
-      addLog(`📁 打开本地资源目录，定位文件夹: C:\\Program Files\\ArtPlatform\\downloads\\${asset.id}`, 'info');
-      alert(`[定位文件夹]\n已在 Windows 资源管理器中高亮定位到素材目录:\nC:\\Program Files\\ArtPlatform\\downloads\\${asset.id}\\${asset.name}.${asset.format.toLowerCase()}`);
-      return;
-    }
-
     // Disk space check
     const requiredGB = asset.sizeMB / 1024;
     if (simulatedDiskGB < requiredGB) {
@@ -3813,10 +3656,6 @@ export default function AssetLibrary({
       return;
     }
 
-    if (getAssetTransferTask(asset.id)) {
-      addLog(`素材「${asset.name}」已在下载队列中。`, 'info');
-      return;
-    }
     const taskId = enqueueDownload({
       resourceKind: 'asset',
       resourceId: asset.id,
@@ -3824,13 +3663,14 @@ export default function AssetLibrary({
       sizeMB: asset.sizeMB,
       format: asset.format,
       previewUrl: asset.thumbnail,
-      targetSpaceId: currentSpace.id
+      targetSpaceId: currentSpace.id,
+      targetFolderLabel: getInitialDownloadDirectory()
     });
     if (!taskId) {
       addLog('下载任务创建失败：传输队列已达到 500 项上限。', 'error');
       return;
     }
-    addLog(`素材「${asset.name}」已加入下载队列。`, 'info');
+    addLog(`素材「${asset.name}」已开始下载。`, 'info');
   };
 
   // Check compatibility Matrix for Import DCC - F9 Path B
@@ -3927,22 +3767,21 @@ export default function AssetLibrary({
         return;
       }
 
-      // Add to active download queue with target app override hook!
-      const downloadingCount = activeDownloads.filter(d => d.status === 'downloading').length;
-      const initialStatus = downloadingCount < 3 ? 'downloading' : 'queued';
-
-      setActiveDownloads(prev => [...prev, {
-        assetId: asset.id,
-        progress: 0,
-        status: initialStatus,
-        targetDccImportAfterDownload: appId
-      }]);
-
-      if (initialStatus === 'queued') {
-        addLog(`⏳ ${asset.name} 离线拉取队列排队中，素材下载完后将立刻自动推送至 ${dcc.name}...`, 'warning');
-      } else {
-        simulateDownloadProgress(asset.id);
+      const taskId = enqueueDownload({
+        resourceKind: 'asset',
+        resourceId: asset.id,
+        name: asset.name,
+        sizeMB: asset.sizeMB,
+        format: asset.format,
+        previewUrl: asset.thumbnail,
+        targetSpaceId: currentSpace.id
+      });
+      if (!taskId) {
+        addLog('一键导入下载失败：传输队列已达到 500 项上限。', 'error');
+        return;
       }
+      pendingDccImportRef.current[taskId] = appId;
+      addLog(`素材「${asset.name}」已开始下载，完成后将自动推送至 ${dcc.name}。`, 'info');
       return;
     }
 
@@ -3991,6 +3830,18 @@ export default function AssetLibrary({
     alert(`[DCC 一键热导入成功]\n\n素材: ${asset.name}\n已投送至: ${dcc?.name}\n投送模式: ${modeText}\n\n可在DCC的当前激活面板或编辑器大纲视图(Outliner)中直接进行细节调整。`);
   };
 
+  useEffect(() => {
+    transferTasks
+      .filter(task => task.direction === 'download' && task.status === 'completed')
+      .forEach(task => {
+        const appId = pendingDccImportRef.current[task.id];
+        if (!appId) return;
+        delete pendingDccImportRef.current[task.id];
+        const asset = assets.find(item => item.id === task.resourceId);
+        if (asset) triggerDirectImport(asset, appId);
+      });
+  }, [assets, transferTasks]);
+
   // Close Optional Dialog and complete
   const submitOptionalImport = () => {
     if (!importOptionsConfig) return;
@@ -4002,7 +3853,6 @@ export default function AssetLibrary({
   const cancelActiveDownload = (id: string) => {
     const transferTask = getAssetTransferTask(id);
     if (transferTask) cancelTransferTask(transferTask.id);
-    setActiveDownloads(prev => prev.filter(d => d.assetId !== id));
     addLog('已取消该素材的下载任务。', 'warning');
   };
 
@@ -4056,11 +3906,15 @@ export default function AssetLibrary({
     if (folderEditor.mode === 'create') {
       const targetSpaceId = folderEditor.parentId ? getFolderSpaceId(folderEditor.parentId) : currentSpace.id;
       const newFolderSpaceId = targetSpaceId ?? currentSpace.id;
+      const siblingOrders = (foldersByParent.get(folderEditor.parentId) ?? [])
+        .map(folder => folder.sortOrder)
+        .filter((order): order is number => order !== undefined);
       const newFolder: AssetFolder = {
         id: buildScopedFolderId(newFolderSpaceId, `folder-${Date.now()}`),
         name: folderName,
         parentId: folderEditor.parentId ?? SPACE_ANCHOR_FOLDER_IDS[newFolderSpaceId],
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        sortOrder: siblingOrders.length > 0 ? Math.max(...siblingOrders) + 1 : Date.now()
       };
 
       setFolders(prev => [...prev, newFolder]);
@@ -4100,6 +3954,167 @@ export default function AssetLibrary({
     if (!folderById[folderId]) return;
     setFolderContextMenu(null);
     setFolderInfoTarget(folderId);
+  };
+
+  const openFolderCoverEditor = (folderId: string) => {
+    const folder = folderById[folderId];
+    if (!folder || isSystemFolder(folder.id)) return;
+    setFolderContextMenu(null);
+    setFolderCoverEditor({ folderId, fileName: '', previewUrl: folder.coverUrl ?? '', error: '' });
+    window.setTimeout(() => folderCoverInputRef.current?.click(), 0);
+  };
+
+  const handleFolderCoverSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    const editor = folderCoverEditor;
+    if (!editor) return;
+    const isSupportedImage = ['image/jpeg', 'image/png'].includes(file.type) || /\.(jpe?g|png)$/i.test(file.name);
+    if (!isSupportedImage) {
+      setFolderCoverEditor(prev => prev ? { ...prev, error: '封面仅支持 JPG、PNG、JPEG 格式。' } : prev);
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setFolderCoverEditor(prev => prev ? { ...prev, error: '封面图片大小不能超过 5 MB。' } : prev);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const previewUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!previewUrl) {
+        setFolderCoverEditor(prev => prev ? { ...prev, error: '封面读取失败，请重新选择图片。' } : prev);
+        return;
+      }
+      const image = new Image();
+      image.onload = () => {
+        const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
+        const shortestEdge = Math.min(image.naturalWidth, image.naturalHeight);
+        if (longestEdge > 1280 || shortestEdge > 720) {
+          setFolderCoverEditor(prev => prev ? { ...prev, error: '封面分辨率不能超过 720P（最长边 1280、短边 720）。' } : prev);
+          return;
+        }
+        // Normalize the stored preview so a valid 5 MB upload does not exceed
+        // localStorage limits while preserving the original aspect ratio.
+        let normalizedPreviewUrl = previewUrl;
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext('2d');
+          context?.drawImage(image, 0, 0);
+          normalizedPreviewUrl = canvas.toDataURL('image/jpeg', 0.86);
+        } catch {
+          // Keep the original data URL when canvas encoding is unavailable.
+        }
+        setFolderCoverEditor(prev => prev ? { ...prev, fileName: file.name, previewUrl: normalizedPreviewUrl, error: '' } : prev);
+      };
+      image.onerror = () => setFolderCoverEditor(prev => prev ? { ...prev, error: '封面读取失败，请重新选择图片。' } : prev);
+      image.src = previewUrl;
+    };
+    reader.onerror = () => setFolderCoverEditor(prev => prev ? { ...prev, error: '封面读取失败，请重新选择图片。' } : prev);
+    reader.readAsDataURL(file);
+  };
+
+  const confirmFolderCover = () => {
+    if (!folderCoverEditor || folderCoverEditor.error || !folderCoverEditor.previewUrl) return;
+    const target = folderById[folderCoverEditor.folderId];
+    if (!target) return;
+    setFolders(previous => previous.map(folder => folder.id === target.id
+      ? { ...folder, coverUrl: folderCoverEditor.previewUrl }
+      : folder));
+    setFolderCoverEditor(null);
+    addLog(`🖼️ 文件夹「${target.name}」封面已更新。`, 'success');
+  };
+
+  const getNextSiblingSortOrder = (parentId: string | null, movingFolderId: string) => {
+    const siblingOrders = (foldersByParent.get(parentId) ?? [])
+      .filter(folder => folder.id !== movingFolderId)
+      .map(folder => folder.sortOrder)
+      .filter((order): order is number => order !== undefined);
+    return siblingOrders.length > 0 ? Math.max(...siblingOrders) + 1 : Date.now();
+  };
+
+  const moveFolderTo = (folderId: string, targetParentId: string) => {
+    const movingFolder = folderById[folderId];
+    const targetParent = folderById[targetParentId];
+    if (!movingFolder || !targetParent || isSystemFolder(folderId)) return false;
+    const movingSpace = getFolderSpaceId(folderId);
+    const targetSpace = getFolderSpaceId(targetParentId);
+    if (!movingSpace || movingSpace !== targetSpace || folderId === targetParentId) return false;
+    const descendants = new Set(getDescendantFolderIds(folderId));
+    if (descendants.has(targetParentId)) return false;
+    if (movingFolder.parentId === targetParentId) return false;
+    setFolders(previous => previous.map(folder => folder.id === folderId
+      ? { ...folder, parentId: targetParentId, sortOrder: getNextSiblingSortOrder(targetParentId, folderId) }
+      : folder));
+    setSelectedFolderId(folderId);
+    addLog(`📦 文件夹「${movingFolder.name}」已移动到「${targetParent.name}」下。`, 'success');
+    return true;
+  };
+
+  const openFolderMoveEditor = (folderId: string) => {
+    const movingFolder = folderById[folderId];
+    if (!movingFolder || isSystemFolder(folderId)) return;
+    setFolderContextMenu(null);
+    setFolderMoveEditor({
+      folderId,
+      targetFolderId: movingFolder.parentId ?? SPACE_ANCHOR_FOLDER_IDS[getFolderSpaceId(folderId) ?? currentSpace.id]
+    });
+  };
+
+  const submitFolderMove = () => {
+    if (!folderMoveEditor) return;
+    const movingFolder = folderById[folderMoveEditor.folderId];
+    if (!movingFolder) {
+      setFolderMoveEditor(null);
+      return;
+    }
+    if (movingFolder.parentId === folderMoveEditor.targetFolderId) {
+      setFolderMoveEditor(null);
+      return;
+    }
+    if (moveFolderTo(folderMoveEditor.folderId, folderMoveEditor.targetFolderId)) {
+      setFolderMoveEditor(null);
+    }
+  };
+
+  const handleFolderDragStart = (event: React.DragEvent, folderId: string) => {
+    if (isSystemFolder(folderId)) {
+      event.preventDefault();
+      return;
+    }
+    folderDragRef.current = folderId;
+    suppressFolderClickRef.current = true;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', folderId);
+  };
+
+  const handleFolderDragOver = (event: React.DragEvent, folderId: string) => {
+    const movingFolderId = folderDragRef.current;
+    if (!movingFolderId || movingFolderId === folderId || isSystemFolder(movingFolderId)) return;
+    if (getFolderSpaceId(movingFolderId) !== getFolderSpaceId(folderId)) return;
+    if (getDescendantFolderIds(movingFolderId).includes(folderId)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setDragOverFolderId(folderId);
+  };
+
+  const handleFolderDrop = (event: React.DragEvent, targetParentId: string) => {
+    event.preventDefault();
+    const movingFolderId = folderDragRef.current ?? event.dataTransfer.getData('text/plain');
+    if (movingFolderId) moveFolderTo(movingFolderId, targetParentId);
+    folderDragRef.current = null;
+    setDragOverFolderId(null);
+    window.setTimeout(() => { suppressFolderClickRef.current = false; }, 0);
+  };
+
+  const handleFolderDragEnd = () => {
+    folderDragRef.current = null;
+    setDragOverFolderId(null);
+    window.setTimeout(() => { suppressFolderClickRef.current = false; }, 0);
   };
 
   const confirmDeleteFolder = () => {
@@ -4157,7 +4172,8 @@ export default function AssetLibrary({
     event.preventDefault();
     event.stopPropagation();
     setAssetContextMenu(null);
-    // Right-click only opens the menu; it must not select/enter the folder.
+    // Context actions target the folder that was right-clicked without
+    // navigating away from the directory the user is currently viewing.
     setFolderContextMenu({
       folderId,
       x: event.clientX,
@@ -4838,7 +4854,6 @@ export default function AssetLibrary({
       next.delete(targetAsset.id);
       return next;
     });
-    setActiveDownloads(prev => prev.filter(task => task.assetId !== targetAsset.id));
     if (selectedAsset?.id === targetAsset.id) {
       setSelectedAsset(null);
     }
@@ -4864,6 +4879,8 @@ export default function AssetLibrary({
     setBatchSelectedIds(new Set());
     setPendingBatchDelete(false);
     setBatchDeleteProgress(null);
+    setBatchMoveEditor(null);
+    setDownloadModeDialogOpen(false);
   };
   const toggleBatchSelect = (assetId: string) => {
     setBatchSelectedIds(prev => {
@@ -4872,6 +4889,84 @@ export default function AssetLibrary({
       else next.add(assetId);
       return next;
     });
+  };
+
+  const selectedDownloadAssets = useMemo(() => Array.from(batchSelectedIds)
+    .map(id => activeAssets.find(asset => asset.id === id))
+    .filter((asset): asset is ArtAsset => Boolean(asset)), [activeAssets, batchSelectedIds]);
+
+  const openBatchDownloadDialog = () => {
+    if (selectedDownloadAssets.length === 0) return;
+    if (selectedDownloadAssets.length > 50) {
+      alert(`最多同时下载 50 个文件，请先取消部分选择（当前 ${selectedDownloadAssets.length} 个）。`);
+      return;
+    }
+    setDownloadModeDialogOpen(true);
+  };
+
+  const confirmBatchDownload = () => {
+    const totalSizeMB = selectedDownloadAssets.reduce((sum, asset) => sum + asset.sizeMB, 0);
+    const estimatedSizeGB = totalSizeMB / 1024;
+    if (simulatedDiskGB < estimatedSizeGB) {
+      alert(`本地磁盘空间不足。所需约 ${estimatedSizeGB.toFixed(2)} GB，当前可用 ${simulatedDiskGB.toFixed(2)} GB。`);
+      return;
+    }
+    const normalizedDirectory = downloadTargetDirectory.trim();
+    if (!normalizedDirectory) {
+      alert('请选择保存目录。');
+      return;
+    }
+    const batchFolderName = allocateBatchDownloadFolderName();
+    const targetFolderLabel = `${normalizedDirectory.replace(/[\\/]+$/, '')}\\${batchFolderName}`;
+    const inputs: DownloadTransferInput[] = selectedDownloadAssets.map(asset => ({
+      resourceKind: 'asset',
+      resourceId: asset.id,
+      name: asset.name,
+      sizeMB: asset.sizeMB,
+      format: asset.format,
+      previewUrl: asset.thumbnail,
+      targetSpaceId: currentSpace.id
+    }));
+    const batchId = enqueueDownloadBatch(inputs, targetFolderLabel);
+    if (!batchId) {
+      addLog('下载任务创建失败：下载队列已达到 500 项上限。', 'error');
+      return;
+    }
+    try {
+      localStorage.setItem(LAST_DOWNLOAD_DIRECTORY_STORAGE_KEY, normalizedDirectory);
+    } catch {
+      // The selected directory still applies to this download if persistence is unavailable.
+    }
+    addLog(`已创建批量下载任务，共 ${inputs.length} 个文件，保存至 ${targetFolderLabel}。`, 'success');
+    setDownloadModeDialogOpen(false);
+    exitBatchMode();
+  };
+
+  const openBatchMoveEditor = () => {
+    if (batchSelectedIds.size === 0) return;
+    setBatchMoveEditor({ targetFolderId: selectedFolderId });
+  };
+
+  const submitBatchMove = () => {
+    if (!batchMoveEditor || batchSelectedIds.size === 0) return;
+    const targetFolder = folderById[batchMoveEditor.targetFolderId];
+    if (!targetFolder || getFolderSpaceId(targetFolder.id) !== currentSpace.id) {
+      addLog('批量移动失败：目标目录不存在或不属于当前空间。', 'error');
+      return;
+    }
+    const movableIds = Array.from(batchSelectedIds).filter(assetId => activeAssets.some(asset => asset.id === assetId));
+    if (movableIds.length === 0) {
+      setBatchMoveEditor(null);
+      return;
+    }
+    setFolderAssignments(previous => {
+      const next = { ...previous };
+      movableIds.forEach(assetId => { next[assetId] = targetFolder.id; });
+      return next;
+    });
+    addLog(`已将 ${movableIds.length} 个素材移动到「${getFolderPathLabel(targetFolder.id)}」。`, 'success');
+    setBatchMoveEditor(null);
+    exitBatchMode();
   };
 
   // Remove a single asset by id (shared by single + batch delete). Returns true on success.
@@ -4903,7 +4998,6 @@ export default function AssetLibrary({
       next.delete(assetId);
       return next;
     });
-    setActiveDownloads(prev => prev.filter(task => task.assetId !== assetId));
     if (target.previewUrl.startsWith('blob:')) URL.revokeObjectURL(target.previewUrl);
     return true;
   };
@@ -4969,6 +5063,64 @@ export default function AssetLibrary({
   const moveEditorAsset = personalAssetMoveEditor
     ? activeAssets.find(asset => asset.id === personalAssetMoveEditor.assetId) ?? null
     : null;
+  const batchMoveTargetFolders = folders
+    .filter(folder => getFolderSpaceId(folder.id) === currentSpace.id)
+    .sort((a, b) => getFolderPathLabel(a.id).localeCompare(getFolderPathLabel(b.id), 'zh-Hans-CN', { numeric: true }));
+  const folderMoveSource = folderMoveEditor ? folderById[folderMoveEditor.folderId] ?? null : null;
+  const folderMoveTargetFolders = folderMoveSource
+    ? folders
+      .filter(folder => (
+        getFolderSpaceId(folder.id) === getFolderSpaceId(folderMoveSource.id)
+        && folder.id !== folderMoveSource.id
+        && !getDescendantFolderIds(folderMoveSource.id).includes(folder.id)
+      ))
+      .sort((a, b) => getFolderPathLabel(a.id).localeCompare(getFolderPathLabel(b.id), 'zh-Hans-CN', { numeric: true }))
+    : [];
+  const batchMoveTargetFolderIds = new Set(batchMoveTargetFolders.map(folder => folder.id));
+  const folderMoveTargetFolderIds = new Set(folderMoveTargetFolders.map(folder => folder.id));
+  const renderMoveTargetTree = (
+    folderId: string,
+    targetFolderId: string,
+    onSelect: (nextFolderId: string) => void,
+    allowedFolderIds: Set<string>,
+    tone: 'batch' | 'folder'
+  ): React.ReactNode => {
+    const folder = folderById[folderId];
+    if (!folder || !allowedFolderIds.has(folder.id)) return null;
+    const childFolders = (foldersByParent.get(folder.id) ?? [])
+      .filter(child => allowedFolderIds.has(child.id));
+    const isSelected = targetFolderId === folder.id;
+    return (
+      <React.Fragment key={folder.id}>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={isSelected}
+          onClick={() => onSelect(folder.id)}
+          className={`flex w-full items-center gap-2 rounded border px-3 py-2 text-left text-xs transition-colors ${isSelected
+            ? tone === 'batch'
+              ? 'border-violet-500/70 bg-violet-500/10 text-violet-200'
+              : 'border-[#00ff00]/60 bg-[#00ff00]/10 text-[#00ff00]'
+            : 'border-zinc-800 bg-black/40 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'}`}
+        >
+          <Folder size={13} className="shrink-0" />
+          <span className="truncate">{folder.name}</span>
+          {isSelected && <Check size={13} className="ml-auto shrink-0" />}
+        </button>
+        {childFolders.length > 0 && (
+          <div className="ml-4 space-y-1 border-l border-zinc-800 pl-2">
+            {childFolders.map(child => renderMoveTargetTree(child.id, targetFolderId, onSelect, allowedFolderIds, tone))}
+          </div>
+        )}
+      </React.Fragment>
+    );
+  };
+  const batchMoveRootFolders = batchMoveTargetFolders.filter(folder => (
+    !folder.parentId || !batchMoveTargetFolderIds.has(folder.parentId)
+  ));
+  const folderMoveRootFolders = folderMoveTargetFolders.filter(folder => (
+    !folder.parentId || !folderMoveTargetFolderIds.has(folder.parentId)
+  ));
   const renameEditorAsset = personalAssetRenameEditor
     ? activeAssets.find(asset => asset.id === personalAssetRenameEditor.assetId) ?? null
     : null;
@@ -5543,10 +5695,20 @@ export default function AssetLibrary({
           ) : (
           <button
             type="button"
-            onClick={() => setSelectedFolderId(folder.id)}
+            draggable={!isSystemFolder(folder.id)}
+            onClick={() => {
+              if (suppressFolderClickRef.current) return;
+              setSelectedFolderId(folder.id);
+            }}
             onContextMenu={(event) => openFolderContextMenu(event, folder.id)}
+            onDragStart={(event) => handleFolderDragStart(event, folder.id)}
+            onDragOver={(event) => handleFolderDragOver(event, folder.id)}
+            onDrop={(event) => handleFolderDrop(event, folder.id)}
+            onDragEnd={handleFolderDragEnd}
             className={`asset-folder-tree-item group/folder flex w-full items-center gap-1.5 rounded text-left transition-all px-2 ${
               isRoot ? 'py-2 text-[13px] font-semibold' : 'py-1.5 text-xs'
+            } ${
+              dragOverFolderId === folder.id ? 'ring-1 ring-[#00ff00] bg-[#00ff00]/10' : ''
             } ${
               isSelected
                 ? 'is-selected border-l-2 border-transparent bg-[#18181b] text-white'
@@ -6033,6 +6195,15 @@ export default function AssetLibrary({
       />
 
       <input
+        ref={folderCoverInputRef}
+        aria-label="选择文件夹封面"
+        type="file"
+        accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+        onChange={handleFolderCoverSelection}
+        className="hidden"
+      />
+
+      <input
         ref={imageSearchInputRef}
         type="file"
         accept="image/*"
@@ -6106,7 +6277,7 @@ export default function AssetLibrary({
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
               >
                 <Download size={12} className="text-[#00ff00]" />
-                {downloadedAssetIds.has(contextMenuAsset.id) ? '打开本地目录' : '下载'}
+                下载
               </button>
               <button
                 type="button"
@@ -6207,6 +6378,22 @@ export default function AssetLibrary({
                       分享
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => openFolderCoverEditor(contextMenuFolder.id)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                  >
+                    <Camera size={12} className="text-zinc-400" />
+                    修改封面
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openFolderMoveEditor(contextMenuFolder.id)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-300 transition-colors hover:bg-[#121214] hover:text-white"
+                  >
+                    <FolderInput size={12} className="text-zinc-400" />
+                    移动
+                  </button>
                   <button
                     type="button"
                     onClick={() => openRenameFolderEditor(contextMenuFolder.id)}
@@ -6354,6 +6541,25 @@ export default function AssetLibrary({
                     <div className="ml-auto flex items-center gap-2 shrink-0">
                       <button
                         type="button"
+                        onClick={openBatchMoveEditor}
+                        disabled={batchSelectedIds.size === 0 || !!batchDeleteProgress}
+                        className="inline-flex items-center gap-1.5 rounded border border-violet-500/50 bg-violet-500/10 px-3 py-1.5 text-[10.5px] font-mono font-semibold text-violet-300 transition-colors hover:border-violet-400 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-zinc-900 disabled:text-zinc-600"
+                      >
+                        <FolderInput size={12} />
+                        移动{batchSelectedIds.size > 0 ? `（${batchSelectedIds.size}）` : ''}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openBatchDownloadDialog}
+                        disabled={batchSelectedIds.size === 0 || selectedDownloadAssets.length > 50 || !!batchDeleteProgress}
+                        title={selectedDownloadAssets.length > 50 ? `批量下载最多选择 50 个文件（当前 ${selectedDownloadAssets.length} 个）` : '批量下载'}
+                        className="inline-flex items-center gap-1.5 rounded border border-sky-500/50 bg-sky-500/10 px-3 py-1.5 text-[10.5px] font-mono font-semibold text-sky-300 transition-colors hover:border-sky-400 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-zinc-900 disabled:text-zinc-600"
+                      >
+                        <Download size={12} />
+                        下载{batchSelectedIds.size > 0 ? `（${batchSelectedIds.size}）` : ''}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setPendingBatchDelete(true)}
                         disabled={batchSelectedIds.size === 0 || !!batchDeleteProgress}
                         className="inline-flex items-center gap-1.5 rounded border border-red-500/50 bg-red-500/10 px-3 py-1.5 text-[10.5px] font-mono font-semibold text-red-400 transition-colors hover:border-red-500 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-zinc-900 disabled:text-zinc-600"
@@ -6477,7 +6683,7 @@ export default function AssetLibrary({
             </div>
 
             <div className="asset-content-scroll flex-1 overflow-y-auto p-5 space-y-7">
-              {!isExternalRootSelected && directChildFolders.length > 0 && (
+              {!isExternalRootSelected && (directChildFolders.length > 0 || canCreateChildOfSelected) && (
                 <section>
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div className="asset-section-title flex items-center gap-2 text-sm font-bold text-white">
@@ -6497,15 +6703,28 @@ export default function AssetLibrary({
                         <button
                           key={folder.id}
                           type="button"
+                          draggable={!isSystemFolder(folder.id)}
                           onClick={() => {
+                            if (suppressFolderClickRef.current) return;
                             setSelectedFolderId(folder.id);
                             setExpandedFolderIds(prev => new Set(prev).add(selectedFolderId));
                           }}
                           onContextMenu={(event) => openFolderContextMenu(event, folder.id)}
-                          className="asset-folder-card group/folderCard rounded border border-[#27272a] bg-[#0c0c0e] p-2 text-center transition-all hover:border-[#00ff00]/60 hover:bg-[#121214]"
+                          onDragStart={(event) => handleFolderDragStart(event, folder.id)}
+                          onDragOver={(event) => handleFolderDragOver(event, folder.id)}
+                          onDrop={(event) => handleFolderDrop(event, folder.id)}
+                          onDragEnd={handleFolderDragEnd}
+                          className={`asset-folder-card group/folderCard rounded border border-[#27272a] bg-[#0c0c0e] p-2 text-center transition-all hover:border-[#00ff00]/60 hover:bg-[#121214] ${dragOverFolderId === folder.id ? 'ring-1 ring-[#00ff00] bg-[#00ff00]/10' : ''}`}
                         >
                           <div className="asset-folder-cover relative aspect-[4/3] overflow-hidden rounded-md border border-zinc-800 bg-[#1f2430] p-1 transition-colors group-hover/folderCard:border-[#00ff00]/50">
-                            {coverAssets.length > 0 ? (
+                            {folder.coverUrl ? (
+                              <img
+                                src={folder.coverUrl}
+                                alt={`${folder.name} 封面`}
+                                className="relative z-10 h-full w-full rounded object-contain bg-black"
+                                draggable={false}
+                              />
+                            ) : coverAssets.length > 0 ? (
                               <div className="relative z-10 grid h-full grid-cols-[1.55fr_1fr] gap-1 pt-1.5">
                                 <div className="asset-folder-cover-tile overflow-hidden rounded bg-black/25">
                                   <img
@@ -6572,16 +6791,13 @@ export default function AssetLibrary({
                     <Files size={16} className="text-[#00ff00]" />
                     <span>素材</span>
                     <span className="font-mono text-xs text-zinc-500">({totalItems})</span>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
                     {!isExternalRootSelected && (
                       <button
                         type="button"
                         role="switch"
                         aria-checked={includeSubfolderAssets}
                         onClick={() => setIncludeSubfolderAssets(prev => !prev)}
-                        className={`subfolder-assets-toggle inline-flex items-center gap-2 rounded border px-2.5 py-1.5 text-[10.5px] font-mono transition-colors ${
+                        className={`subfolder-assets-toggle ml-1 inline-flex items-center gap-2 rounded border px-2.5 py-1.5 text-[10.5px] font-mono font-normal transition-colors ${
                           includeSubfolderAssets
                             ? 'is-active border-zinc-700 bg-zinc-900/70 text-zinc-200'
                             : 'border-zinc-800 bg-black text-zinc-500 hover:text-zinc-300'
@@ -6595,7 +6811,9 @@ export default function AssetLibrary({
                         显示子文件夹素材
                       </button>
                     )}
+                  </div>
 
+                  <div className="flex flex-wrap items-center gap-2">
                     {/* 卡片宽度调节滑动条 */}
                     <div className="asset-card-size-control flex items-center gap-2">
                       <Minus size={14} className="text-zinc-500" />
@@ -6775,7 +6993,7 @@ export default function AssetLibrary({
                                   {activeTask.status === 'queued' ? (
                                     <div className="flex flex-col items-center gap-1.5 animate-pulse">
                                       <Clock size={16} className="text-amber-400" />
-                                      <span className="text-[10px] font-mono text-amber-400 font-bold">排队等候中...</span>
+                                      <span className="text-[10px] font-mono text-amber-400 font-bold">下载中</span>
                                     </div>
                                   ) : (
                                     <div className="w-full px-4 flex flex-col items-center">
@@ -6947,7 +7165,7 @@ export default function AssetLibrary({
 
             <div className="personal-upload-info-body mt-4 rounded border border-zinc-800 bg-black/40 p-3 text-[11px] font-mono text-zinc-300 space-y-1.5">
               <p>支持图片、动图（GIF）和视频；单文件不超过 2 GB，队列最多容纳 500 项。</p>
-              <p>确认上传前会自动完成 AI 打标，可继续调整素材名称、分类和标签。</p>
+              <p>点击开始上传后，将在后台自动完成上传、质检、内容理解与入库。</p>
             </div>
 
             <div className="mt-4">
@@ -7328,7 +7546,85 @@ export default function AssetLibrary({
         </div>
       )}
 
-      {/* V1：移动功能暂时停用（保留弹窗逻辑便于后续恢复） */}
+      {batchMoveEditor && (
+        <div
+          className="delete-folder-modal fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          onClick={() => setBatchMoveEditor(null)}
+        >
+          <div
+            className="delete-folder-modal-panel flex max-h-[76vh] w-full max-w-[520px] flex-col overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-900 px-5 py-4">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-bold text-white font-display">
+                  <FolderInput size={14} className="text-violet-300" />
+                  批量移动
+                </h3>
+                <p className="mt-1 text-[11px] font-mono text-zinc-500">当前空间：{currentSpace.name} · 将选中的 {batchSelectedIds.size} 个文件移动到目标目录</p>
+              </div>
+              <button type="button" title="关闭" onClick={() => setBatchMoveEditor(null)} className="delete-folder-modal-close flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 hover:border-zinc-600 hover:text-white"><X size={13} /></button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="space-y-1" role="radiogroup" aria-label="批量移动目标目录">
+                {batchMoveRootFolders.map(folder => renderMoveTargetTree(
+                  folder.id,
+                  batchMoveEditor.targetFolderId,
+                  nextFolderId => setBatchMoveEditor({ targetFolderId: nextFolderId }),
+                  batchMoveTargetFolderIds,
+                  'batch'
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-900 px-5 py-4">
+              <button type="button" onClick={() => setBatchMoveEditor(null)} className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 hover:border-zinc-600 hover:text-white">取消</button>
+              <button type="button" onClick={submitBatchMove} className="rounded bg-violet-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-violet-400">确认移动</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {folderMoveEditor && folderMoveSource && (
+        <div
+          className="delete-folder-modal fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          onClick={() => setFolderMoveEditor(null)}
+        >
+          <div
+            className="delete-folder-modal-panel flex max-h-[76vh] w-full max-w-[520px] flex-col overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-900 px-5 py-4">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-bold text-white font-display"><FolderInput size={14} className="text-[#00ff00]" />移动文件夹</h3>
+                <p className="mt-1 text-[11px] font-mono text-zinc-500">当前空间：{currentSpace.name} · “{folderMoveSource.name}”将作为目标目录的最后一个子文件夹</p>
+              </div>
+              <button type="button" title="关闭" onClick={() => setFolderMoveEditor(null)} className="delete-folder-modal-close flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 hover:border-zinc-600 hover:text-white"><X size={13} /></button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="space-y-1" role="radiogroup" aria-label="文件夹移动目标目录">
+                {folderMoveRootFolders.map(folder => renderMoveTargetTree(
+                  folder.id,
+                  folderMoveEditor.targetFolderId,
+                  nextFolderId => setFolderMoveEditor(previous => previous ? { ...previous, targetFolderId: nextFolderId } : previous),
+                  folderMoveTargetFolderIds,
+                  'folder'
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-900 px-5 py-4">
+              <button type="button" onClick={() => setFolderMoveEditor(null)} className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 hover:border-zinc-600 hover:text-white">取消</button>
+              <button
+                type="button"
+                disabled={folderMoveSource.parentId === folderMoveEditor.targetFolderId}
+                onClick={submitFolderMove}
+                className="rounded bg-[#00ff00] px-4 py-1.5 text-xs font-semibold text-black hover:bg-[#00dd00] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+              >确认移动</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* V1：单个素材移动入口暂时停用（批量移动使用上方目录选择器） */}
       {false && personalAssetMoveEditor && moveEditorAsset && (
         <div
           className="delete-folder-modal fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm p-4 flex items-center justify-center"
@@ -7596,46 +7892,84 @@ export default function AssetLibrary({
         </div>
       )}
 
+      {downloadModeDialogOpen && (
+        <div
+          className="delete-folder-modal fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm p-4 flex items-center justify-center"
+          onClick={() => setDownloadModeDialogOpen(false)}
+        >
+          <div
+            className="delete-folder-modal-panel w-full max-w-[460px] rounded-xl border border-[#27272a] bg-[#0c0c0e] p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-900 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                  <Download size={14} className="text-sky-300" />
+                  批量下载
+                </h3>
+                <p className="mt-1 text-[11px] text-zinc-500 font-mono">已选择 {selectedDownloadAssets.length} 个文件，每个文件独立下载</p>
+              </div>
+              <button type="button" title="关闭" onClick={() => setDownloadModeDialogOpen(false)} className="delete-folder-modal-close flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 hover:border-zinc-600 hover:text-white"><X size={13} /></button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <label className="block text-[11px] font-mono text-zinc-400">
+                <span className="mb-1.5 block">保存目录</span>
+                <input
+                  type="text"
+                  value={downloadTargetDirectory}
+                  onChange={(event) => setDownloadTargetDirectory(event.target.value)}
+                  placeholder={DEFAULT_DOWNLOAD_DIRECTORY}
+                  className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-200 outline-none transition-colors focus:border-sky-500"
+                />
+              </label>
+              <div className="rounded border border-sky-500/25 bg-sky-500/5 px-3 py-2 text-[10.5px] leading-5 text-zinc-400">
+                系统将在该目录下自动创建“批量下载_YYYYMMDD_HHmm”文件夹，所有文件平铺保存；不打包、不压缩，同名文件自动追加序号。
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setDownloadModeDialogOpen(false)} className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 hover:border-zinc-600 hover:text-white">取消</button>
+              <button type="button" disabled={!downloadTargetDirectory.trim()} onClick={confirmBatchDownload} className="rounded bg-sky-500 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500">确认下载</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {personalUploadDraft && (
         <div className="personal-upload-modal personal-upload-workspace-page fixed inset-0 z-50 bg-black/85 backdrop-blur-sm p-4 md:p-6 flex items-center justify-center">
           <div className={`personal-upload-modal-panel w-full max-w-[1080px] h-[76vh] min-h-[520px] max-h-[760px] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] flex flex-col ${personalUploadQueuedBatchId ? 'is-queued' : ''}`}>
             <div className="personal-upload-dialog-header shrink-0 px-5 py-4 border-b border-[#27272a] flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
-                  <Sparkles size={14} className="text-[#00ff00]" />
-                  上传资源到指定目录 & AI 资源自动打标
+                  <Sparkles size={14} className="text-violet-600" />
+                  文件上传
                 </h3>
                 <p className="mt-1 text-[11px] text-zinc-500 font-mono">
-                  总数 {personalUploadStats.total} | 上传中 {personalUploadStats.uploading} | 已打标 {personalUploadStats.ready} | 失败 {personalUploadStats.failed}
+                  总数 {personalUploadStats.total} | 已就绪 {personalUploadStats.ready} | 失败 {personalUploadStats.failed}
                 </p>
                 {personalUploadDraft.isTagging && (
                   <div className="mt-1.5 flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
                     <Loader2 size={11} className="animate-spin text-[#00ff00]" />
                     正在执行上传预处理和智能打标...
                   </div>
-                )}
-                {personalUploadQueuedBatchId && (
-                  <div className="personal-upload-queued-notice mt-1.5 flex items-center gap-1.5 text-[11px] font-medium">
-                    <CheckCircle size={13} />
-                    已加入上传队列，可手动关闭此窗口
-                  </div>
-                )}
+                  )}
               </div>
-              <button
-                type="button"
-                title="关闭上传面板"
-                onClick={closePersonalUploadDraft}
-                className="personal-upload-modal-close flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 transition-colors hover:border-zinc-600 hover:text-white"
-              >
-                <X size={13} />
-              </button>
+              <div className="flex shrink-0 items-start gap-4">
+                <button
+                  type="button"
+                  title="关闭上传面板"
+                  onClick={closePersonalUploadDraft}
+                  className="personal-upload-modal-close flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 transition-colors hover:border-zinc-600 hover:text-white"
+                >
+                  <X size={13} />
+                </button>
+              </div>
             </div>
 
             <div className="personal-upload-threshold personal-upload-progress-section shrink-0 border-b border-[#27272a] px-5 py-3">
               <div className="personal-upload-progress-row flex items-center gap-4">
                 <div className="personal-upload-progress-label flex shrink-0 items-center gap-2">
                   <Sparkles size={17} />
-                  <p className="text-[12px] font-medium text-zinc-300">AI 自动标签智能分析进度</p>
+                  <p className="text-[12px] font-medium text-zinc-300">文件准备进度</p>
                 </div>
                 <div className="personal-upload-progress-track min-w-[160px] flex-1 overflow-hidden rounded-full">
                   <span
@@ -7647,30 +7981,11 @@ export default function AssetLibrary({
                     }}
                   />
                 </div>
-                <details className="personal-upload-threshold-settings relative shrink-0">
-                  <summary className="personal-upload-progress-value text-[11px] font-mono" title="调整 AI 标签置信度" aria-label="调整 AI 标签置信度">
-                    {personalUploadStats.total > 0
-                      ? Math.round(((personalUploadStats.ready + personalUploadStats.failed) / personalUploadStats.total) * 100)
-                      : 0}%
-                  </summary>
-                  <div className="personal-upload-threshold-popover absolute right-0 top-full z-40 mt-2 w-64 rounded-lg border p-3 shadow-lg">
-                    <div className="mb-2 flex items-center justify-between text-[11px]">
-                      <span>标签置信度阈值</span>
-                      <strong>{aiTagThreshold}</strong>
-                    </div>
-                    <input
-                      type="range"
-                      min={AI_TAG_THRESHOLD_MIN}
-                      max={AI_TAG_THRESHOLD_MAX}
-                      value={aiTagThreshold}
-                      onChange={(event) => updateAiTagThreshold(Number(event.target.value))}
-                      className="personal-upload-threshold-slider h-1.5 w-full cursor-pointer accent-[#00ff00]"
-                      style={{
-                        '--range-progress': `${((aiTagThreshold - AI_TAG_THRESHOLD_MIN) / (AI_TAG_THRESHOLD_MAX - AI_TAG_THRESHOLD_MIN)) * 100}%`
-                      } as React.CSSProperties}
-                    />
-                  </div>
-                </details>
+                <span className="personal-upload-progress-value shrink-0 text-[11px] font-mono">
+                  {personalUploadStats.total > 0
+                    ? Math.round(((personalUploadStats.ready + personalUploadStats.failed) / personalUploadStats.total) * 100)
+                    : 0}%
+                </span>
               </div>
             </div>
 
@@ -7719,7 +8034,6 @@ export default function AssetLibrary({
                   }
 
                   const item = entry.item;
-                  const tagSuggestions = getTagSuggestions(item.id);
                   const sourceFolderPath = getUploadFolderPath(item.sourceFileName) || null;
                   const fileIndent = entry.depth > 0
                     ? 12 + (entry.depth - 1) * PERSONAL_UPLOAD_FOLDER_INDENT_PX
@@ -7751,7 +8065,7 @@ export default function AssetLibrary({
                               : 'is-pending border-amber-400/50 bg-black/65 text-amber-300'
                           }`}
                         >
-                          {item.status === 'ready' ? '已打标' : item.status === 'failed' ? '失败' : '打标中'}
+                          {item.status === 'ready' ? '已就绪' : item.status === 'failed' ? '失败' : '准备中'}
                         </span>
                       </div>
                     </div>
@@ -7765,6 +8079,7 @@ export default function AssetLibrary({
                             size={Math.min(Math.max(item.fileName.length, 12), 64)}
                             value={item.fileName}
                             onChange={(event) => updateDraftItemName(item.id, event.target.value)}
+                            disabled={Boolean(personalUploadQueuedBatchId)}
                             placeholder="请输入素材名称"
                             className="personal-upload-modal-input personal-upload-file-name min-w-0 w-full rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
                           />
@@ -7779,137 +8094,17 @@ export default function AssetLibrary({
                             <span className="truncate">{sourceFolderPath}</span>
                           </div>
                         )}
-                      </div>
-
-                      <p className="personal-upload-ai-description text-[10.5px] leading-4 text-zinc-500">
-                        <strong>AI 识别：</strong>已识别素材画面内容并生成建议分类与标签，可在上传前继续调整。
-                      </p>
-
-                      <div className="personal-upload-tags flex flex-wrap items-center gap-1.5">
-                        <span className="personal-upload-tags-label inline-flex items-center text-[10.5px] font-mono text-zinc-500">标签：</span>
-                        {/* 已选分类全部展示为可移除标签 */}
-                        {item.categories.map((cat) => (
-                          <span
-                            key={`${item.id}-cat-${cat}`}
-                            className="personal-upload-category-chip inline-flex items-center gap-1 rounded border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] font-mono text-cyan-200"
-                          >
-                            {ASSET_CATEGORY_TABS.find(t => t.id === cat)?.name ?? cat}
-                            <button
-                              type="button"
-                              onClick={() => toggleDraftItemCategory(item.id, cat)}
-                              className="text-cyan-300/70 hover:text-red-400"
-                              title="移除分类"
-                            >
-                              <X size={10} />
-                            </button>
-                          </span>
-                        ))}
-                        {/* 多选下拉：勾选/取消分类 */}
-                        <div
-                          ref={categoryMenuItemId === item.id ? categoryMenuRef : null}
-                          className="relative inline-flex"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => setCategoryMenuItemId(prev => prev === item.id ? null : item.id)}
-                            className="personal-upload-category-add inline-flex items-center gap-0.5 rounded border border-zinc-800 bg-[#0c0c0e] px-1.5 py-0.5 text-[10px] text-zinc-300 transition-colors hover:border-cyan-400/50 hover:text-cyan-200"
-                          >
-                            <Plus size={10} />
-                            分类
-                          </button>
-                          {categoryMenuItemId === item.id && (
-                            <div className="category-multi-menu absolute left-0 top-full z-30 mt-1 w-32 overflow-hidden rounded border border-zinc-700 bg-[#121214] py-1 shadow-xl">
-                              {uploadCategoryOptions.map((option) => {
-                                const checked = item.categories.includes(option.id);
-                                return (
-                                  <button
-                                    key={option.id}
-                                    type="button"
-                                    onClick={() => {
-                                      toggleDraftItemCategory(item.id, option.id);
-                                      setCategoryMenuItemId(null);
-                                    }}
-                                    className={`flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[10px] font-mono transition-colors ${
-                                      checked ? 'text-cyan-200' : 'text-zinc-400 hover:bg-zinc-900 hover:text-white'
-                                    }`}
-                                  >
-                                    {option.name}
-                                    {checked && <Check size={11} className="text-cyan-300" />}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                        {item.tags.map((tag) => (
-                          <span
-                            key={`${item.id}-${tag}`}
-                            className="personal-upload-tag-chip inline-flex items-center gap-1 rounded border border-[#00ff00]/20 bg-[#00ff00]/5 px-2 py-0.5 text-[10px] font-mono text-[#00ff00]"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => editDraftTag(item.id, tag)}
-                              className="inline-flex items-center gap-1 hover:text-white"
-                              title={tag in item.aiTagScores ? `AI 置信度 ${item.aiTagScores[tag]}` : '编辑标签'}
-                            >
-                              <Tag size={10} />
-                              #{tag}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeDraftTag(item.id, tag)}
-                              className="text-zinc-500 hover:text-red-400"
-                              title="删除标签"
-                            >
-                              <X size={10} />
-                            </button>
-                          </span>
-                        ))}
-                        {item.tags.length === 0 && (
-                          <span className="text-[10px] text-zinc-600 font-mono">暂无标签</span>
+                        {personalUploadQueuedBatchId && item.tags.length > 0 && (
+                          <div className="personal-upload-tags flex flex-wrap items-center gap-1.5" aria-label="自动标签">
+                            {item.tags.map(tag => (
+                              <span key={`${item.id}-${tag}`} className="personal-upload-tag-chip inline-flex items-center rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-mono text-violet-700">
+                                #{tag}
+                              </span>
+                            ))}
+                          </div>
                         )}
-                        <div className="personal-upload-tag-composer flex items-center gap-1">
-                          <input
-                            type="text"
-                            value={pendingTagInputs[item.id] ?? ''}
-                            onChange={(event) => setPendingTagInputs(prev => ({ ...prev, [item.id]: event.target.value }))}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault();
-                                addDraftTag(item.id);
-                              }
-                            }}
-                            placeholder="新增标签"
-                            aria-label="新增标签并回车"
-                            className="personal-upload-modal-input personal-upload-tag-input rounded border border-zinc-800 bg-[#0c0c0e] px-2 py-1.5 text-[11px] font-mono text-zinc-200 outline-none transition-colors focus:border-[#00ff00]"
-                          />
-                          <button
-                            type="button"
-                            aria-label="添加标签"
-                            title="添加标签"
-                            onClick={() => addDraftTag(item.id)}
-                            className="personal-upload-modal-add-tag shrink-0 rounded border border-zinc-800 bg-black px-2.5 py-1.5 text-[11px] font-mono text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
-                          >
-                            <Plus size={11} />
-                          </button>
-                        </div>
                       </div>
 
-                      {tagSuggestions.length > 0 && (
-                        <div className="personal-upload-tag-suggestions flex flex-wrap gap-1.5">
-                          <span className="text-[10px] font-mono text-zinc-500">推荐标签</span>
-                          {tagSuggestions.map((tag) => (
-                            <button
-                              key={`${item.id}-suggest-${tag}`}
-                              type="button"
-                              onClick={() => updateDraftItemTags(item.id, tags => [...tags, tag])}
-                              className="rounded border border-zinc-800 bg-black px-2 py-0.5 text-[10px] font-mono text-zinc-400 transition-colors hover:border-[#00ff00]/60 hover:text-[#00ff00]"
-                            >
-                              #{tag}
-                            </button>
-                          ))}
-                        </div>
-                      )}
                     </div>
                     <div className="personal-upload-modal-remove-slot shrink-0 self-stretch flex items-center justify-center border-l border-zinc-800 px-3">
                       <span className="personal-upload-file-size whitespace-nowrap text-[10.5px] font-mono text-zinc-500">
@@ -7918,6 +8113,7 @@ export default function AssetLibrary({
                       <button
                         type="button"
                         onClick={() => removeDraftItem(item.id, item.fileName)}
+                        disabled={Boolean(personalUploadQueuedBatchId)}
                         className="shrink-0 inline-flex items-center gap-1 rounded border border-zinc-800 bg-black px-2 py-1 text-[10px] font-mono text-zinc-500 transition-colors hover:border-red-500/60 hover:text-red-300"
                         title="移除此素材"
                       >
@@ -8041,6 +8237,46 @@ export default function AssetLibrary({
                   {getFolderPathLabel(folderInfoFolder.id)}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {folderCoverEditor && (
+        <div
+          className="delete-folder-modal fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          onClick={() => setFolderCoverEditor(null)}
+        >
+          <div
+            className="delete-folder-modal-panel w-full max-w-[460px] overflow-hidden rounded-xl border border-[#27272a] bg-[#0c0c0e] p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-900 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                  <Camera size={14} className="text-[#00ff00]" />
+                  修改文件夹封面
+                </h3>
+                <p className="mt-1 text-[10px] text-zinc-500 font-mono">支持 JPG、PNG、JPEG；大小 ≤5 MB；分辨率 ≤720P</p>
+              </div>
+              <button type="button" title="关闭" onClick={() => setFolderCoverEditor(null)} className="delete-folder-modal-close flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-500 hover:border-zinc-600 hover:text-white"><X size={13} /></button>
+            </div>
+            <button
+              type="button"
+              onClick={() => folderCoverInputRef.current?.click()}
+              className="mt-4 flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg border border-dashed border-zinc-700 bg-black transition-colors hover:border-[#00ff00]/60"
+            >
+              {folderCoverEditor.previewUrl ? (
+                <img src={folderCoverEditor.previewUrl} alt="封面预览" className="h-full w-full object-contain bg-black" />
+              ) : (
+                <span className="flex flex-col items-center gap-2 text-xs text-zinc-500"><Camera size={24} />点击选择封面图片</span>
+              )}
+            </button>
+            {folderCoverEditor.fileName && !folderCoverEditor.error && <p className="mt-2 truncate text-[10px] font-mono text-zinc-500">已选择：{folderCoverEditor.fileName}</p>}
+            {folderCoverEditor.error && <p className="mt-2 text-[11px] font-mono text-red-400">{folderCoverEditor.error}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setFolderCoverEditor(null)} className="rounded border border-zinc-800 bg-black px-4 py-1.5 text-xs font-mono text-zinc-400 hover:border-zinc-600 hover:text-white">取消</button>
+              <button type="button" disabled={!folderCoverEditor.previewUrl || !!folderCoverEditor.error} onClick={confirmFolderCover} className="rounded bg-[#00ff00] px-4 py-1.5 text-xs font-semibold text-black transition-colors hover:bg-[#00dd00] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500">确认</button>
             </div>
           </div>
         </div>
@@ -8296,7 +8532,7 @@ export default function AssetLibrary({
                       selectedAssetTask ? (
                         <div className="asset-detail-figma-progress flex min-w-0 flex-1 flex-col justify-center rounded-lg border border-zinc-800 px-3 py-2">
                           <div className="flex items-center justify-between gap-3 text-[11px]">
-                            <span>{selectedAssetTask.status === 'queued' ? '等待下载' : '下载中'}</span>
+                            <span>下载中</span>
                             <span>{selectedAssetTask.status === 'queued' ? '--' : `${selectedAssetTask.progress}%`}</span>
                           </div>
                           <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-zinc-800">
@@ -8313,7 +8549,7 @@ export default function AssetLibrary({
                           className="asset-detail-figma-download flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-4 text-xs font-semibold"
                         >
                           <Download size={14} />
-                          <span>{downloadedAssetIds.has(selectedAsset.id) ? '打开本地目录' : '下载'}</span>
+                          <span>下载</span>
                         </button>
                       )
                     ) : (
@@ -8497,14 +8733,19 @@ export default function AssetLibrary({
                       <div className="w-full bg-[#121214] border border-dashed border-zinc-800 p-3.5 rounded text-center font-mono">
                         {selectedAssetTask.status === 'queued' ? (
                           <div className="flex flex-col gap-1 items-center">
-                            <span className="text-xs text-amber-400 font-bold animate-pulse">等候下载空闲槽中</span>
-                            <span className="text-[9.5px] text-zinc-500 leading-tight">由于网络和并发限制，至多同时执行 3 个素材下载包。</span>
+                            <span className="text-xs text-amber-400 font-bold animate-pulse">下载中</span>
+                            <span className="text-[9.5px] text-zinc-500 leading-tight">等待可用并发槽位，获得槽位后自动开始传输。</span>
                             <button
                               onClick={() => cancelActiveDownload(selectedAsset.id)}
                               className="mt-2 text-red-500 hover:text-red-400 text-[10px] underline cursor-pointer"
                             >
                               移出缓冲区
                             </button>
+                          </div>
+                        ) : selectedAssetTask.status === 'packing' ? (
+                          <div className="flex flex-col gap-1 items-center">
+                            <span className="text-xs text-violet-300 font-bold animate-pulse">打包中</span>
+                            <span className="text-[9.5px] text-zinc-500 leading-tight">服务端正在生成 ZIP 文件。</span>
                           </div>
                         ) : (
                           <div className="flex flex-col gap-1.5">
@@ -8531,10 +8772,7 @@ export default function AssetLibrary({
                         }`}
                       >
                         <Download size={13} />
-                        {downloadedAssetIds.has(selectedAsset.id)
-                          ? '已下载 · 在资源管理器中打开文件夹'
-                          : `下载到本地缓存 (${selectedAsset.sizeMB} MB)`
-                        }
+                        {`下载到本地缓存 (${selectedAsset.sizeMB} MB)`}
                       </button>
                     )}
                   </div>

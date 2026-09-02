@@ -37,7 +37,12 @@ interface SidebarProps {
   onOpenNotification: (id: string) => void;
   transferCenterOpen: boolean;
   onToggleTransferCenter: () => void;
-  transferBadge: { count: number; tone: 'pending' | 'failed' | 'active' | 'idle' };
+  transferBadge: {
+    count: number;
+    tone: 'failed' | 'active' | 'idle';
+    progressLabel?: string;
+    speedLabel?: string;
+  };
 }
 
 export default function Sidebar({
@@ -181,7 +186,10 @@ export default function Sidebar({
       {/* Bottom: DCC monitor + theme selector + profile */}
       <div className={`app-sidebar-footer ${isCollapsed ? 'p-2' : 'p-4'} border-t border-[#27272a] bg-[#0c0c0e] font-mono`}>
         <div className={`app-sidebar-footer-item ${isCollapsed ? '' : 'mb-3'}`}>
-          <Tooltip content="传输中心" placement="right">
+          <Tooltip
+            content={`传输中心${transferBadge.progressLabel ? ` · ${transferBadge.progressLabel}` : ''}${transferBadge.speedLabel ? ` · ${transferBadge.speedLabel}` : ''}`}
+            placement="right"
+          >
             <button
               type="button"
               onClick={onToggleTransferCenter}
@@ -191,7 +199,11 @@ export default function Sidebar({
                 <ArrowUpDown size={20} strokeWidth={2} />
                 {transferBadge.count > 0 && <span className={`app-sidebar-transfer-badge is-${transferBadge.tone}`}>{transferBadge.count > 99 ? '99+' : transferBadge.count}</span>}
               </span>
-              <span className="app-sidebar-control-label text-[9px] font-sans">传输</span>
+              <span className="app-sidebar-control-label app-sidebar-transfer-label text-[9px] font-sans">
+                {transferBadge.progressLabel
+                  ? `${transferBadge.progressLabel}${transferBadge.speedLabel ? ` · ${transferBadge.speedLabel.replace(' MB/s', '')}` : ''}`
+                  : '传输'}
+              </span>
             </button>
           </Tooltip>
         </div>
